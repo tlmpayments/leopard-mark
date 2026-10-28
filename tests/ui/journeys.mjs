@@ -585,6 +585,30 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await ctx.close();
 }
 
+// ---------------- 11. Setup page: state is shown, actions need the token ----------------
+{
+  const j = journey("11 Setup — /setup shows migration/Owner state and refuses actions without the setup token");
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => problems.push(`[setup] pageerror ${e.message}`));
+  page.on("response", (r) => {
+    if (r.status() >= 500) problems.push(`[setup] ${r.status()} ${r.url()}`);
+  });
+  j.step("state card");
+  await page.goto(`${BASE}/setup`);
+  await expectText(page, /all \d+ applied/, "every migration reported as applied on the demo database");
+  await expectText(page, /owner@demo.local|provisioned/, "existing Owner shown; no second Owner can be created");
+  await expectNoText(page, /Provision the first Owner/, "first-Owner form hidden once an Owner exists");
+  await shot(page, "j11-01-setup");
+  j.step("wrong token is refused");
+  await page.fill("#migrate-token", "not-the-token");
+  await page.getByRole("button", { name: /Re-check|Apply/ }).click();
+  await page.waitForSelector("[data-flash=error]", { timeout: 15000 });
+  await expectText(page, /Setup token not accepted/, "action refused without the configured token");
+  j.end();
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nTIMINGS (automated browser, fictional data — not a staff session):");
 for (const t of timings) console.log(`  ${t.name}: ${t.steps} steps, ${t.seconds}s ${t.note}`);

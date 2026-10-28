@@ -57,7 +57,9 @@ PIN until an Owner/Admin sets one. The hardening revision added **`0002_hardenin
 * a **preflight block** that aborts the migration with `fv-ops migration 0002_hardening preflight: <check>` if
   existing rows violate an invariant — nothing is changed in that case.
 
-Upgrade procedure for a populated database (also in OPERATOR_GUIDE → Upgrading):
+Upgrade procedure for a populated database (also in OPERATOR_GUIDE → Upgrading). From the browser:
+`/setup` lists pending migrations and applies them with the setup token (the same preflight protects the
+data — a refusal shows the diagnostic and changes nothing). From a terminal:
 
 ```bash
 # 1. snapshot: Neon branch or point-in-time restore point
@@ -108,9 +110,12 @@ migrations and redeploy.
 
 ## 6. Employee sign-in (email + PIN) and disablement — commissioning steps and remaining evidence
 
-1. `DATABASE_URL=… OWNER_EMAIL=… OWNER_NAME=… OWNER_PIN=<6–12 digits> npm run bootstrap` from a trusted
-   machine (migrates, seeds the decision register unselected and the capability gates unproven, provisions
-   the Owner with a **temporary** PIN). Without `OWNER_PIN` a random PIN is printed once to that terminal.
+1. First run — **from the browser, no terminal needed**: open `https://<domain>/setup`. The page shows the
+   database state. Enter the setup token (the deployment's `CRON_SECRET`) and click *Apply migrations*
+   (also seeds the decision register unselected and the capability gates unproven), then enter the Owner's
+   email, name and a temporary PIN and click *Provision the first Owner*. The page refuses a second Owner
+   and never shows secrets; every action is audited (`setup.migrate`, `employee.bootstrap_owner`). Terminal
+   equivalent: `DATABASE_URL=… OWNER_EMAIL=… OWNER_NAME=… OWNER_PIN=… npm run bootstrap`.
 2. Open `https://<domain>/sign-in`, sign in as the Owner, and choose your own PIN when prompted (the
    temporary one allows nothing else).
 3. Provision every employee (role + market scope) under **Employees & access**, giving each a temporary PIN
@@ -186,9 +191,18 @@ runs a server, so the advisory does not apply to the deployed application; the f
 breaking downgrade of drizzle-kit and was not applied. Re-check with `npm audit` before each release; no
 indiscriminate upgrades were made in this revision.
 
-## 12. Continuous integration
+## 12. Updating production after go-live
+
+Vercel's Git integration deploys every push to the production branch automatically. The routine is: Claude
+(or anyone) pushes a commit → Vercel builds and deploys (2–4 minutes; a failed build leaves the previous
+deployment live) → if the commit added a migration, open `/setup` and apply it with the setup token (the
+app keeps serving the old schema until then; new columns are nullable so the code deployed first does not
+break). Rollback of code: Vercel → Deployments → *Promote to Production* on an earlier deployment. Rollback
+of data: Neon branch / point-in-time restore (§4).
+
+## 13. Continuous integration
 
 `.github/workflows/ci.yml` runs without any secret: typecheck, lint, the PGlite suite, the real-Postgres
-races/upgrade suite against a service container, the migration preflight on the populated baseline, the
-production build, then the nine browser journeys against a fresh local demo (screenshots uploaded as a
-workflow artifact). Fixture sign-in is enabled only inside that local demo job, never on a deployment.
+races/upgrade/setup suites against a service container, the migration preflight on the populated baseline,
+the production build, the go-live path on that build against an empty database (`/setup` → first Owner →
+sign-in), then the browser journeys against a fresh local demo (screenshots uploaded as a workflow artifact). Fixture sign-in is enabled only inside that local demo job, never on a deployment.

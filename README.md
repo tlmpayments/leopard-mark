@@ -69,7 +69,9 @@ npm run seed:dev                 # same representative demo data into your Postg
 npm run dev                      # http://localhost:3000 → email + PIN sign-in (demo PIN 135790 for seeded people) plus the dev fixture list
 ```
 
-Production bootstrap (no demo data):
+Production first run — in the browser: deploy, then open `https://<domain>/setup`, enter the setup token
+(the deployment's `CRON_SECRET`), apply migrations, provision the first Owner with a temporary PIN, sign in.
+Terminal equivalents:
 
 ```bash
 OWNER_EMAIL=owner@company.com OWNER_NAME="Owner" OWNER_PIN=48215736 npm run bootstrap   # migrate + register + gates + first Owner with a temporary PIN
@@ -81,7 +83,8 @@ PIN_EMAIL=owner@company.com PIN=48215736 npm run set-pin                        
 ```bash
 npm run check                                     # typecheck + lint + 94 PGlite scenario tests + production build
 TEST_DATABASE_URL=postgres://… npm run test:pg    # 10 real-Postgres tests: races (AC07/08/10/11/12/22/23/28) + populated-database upgrade (AC37)
-npm run demo && npm run test:ui                   # 10 role browser journeys with screenshots + timings (tests/ui/README.md)
+npm run demo && npm run test:ui                   # 11 role browser journeys with screenshots + timings (tests/ui/README.md)
+npm run test:ui:golive                            # go-live path on a production build against an empty Postgres (/setup → Owner → sign-in)
 DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a populated database before applying migration 0002
 ```
 `test:pg` creates and drops throwaway `fv_test_*` databases — never point it at a shared server. CI
@@ -98,6 +101,7 @@ DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a popul
 | `npm test` | 94 business-scenario tests (AT01–AT13, AT61/AT62, AT79/AT80, REV-01–18 regressions, environment guards, PIN sign-in, presentation/timezone/error masking) on PGlite |
 | `npm run test:pg` | real-Postgres concurrency + upgrade tests (`TEST_DATABASE_URL`) |
 | `npm run test:ui` | role browser journeys against the running demo (`SHOTS_DIR` for screenshots) |
+| `npm run test:ui:golive` | `/setup` → migrations → first Owner → sign-in on a production build (`BASE_URL`, `SETUP_TOKEN`) |
 | `npm run db:generate` | generate a new SQL migration after editing `src/lib/db/schema/*` |
 | `npm run db:migrate` | apply migrations to `DATABASE_URL` (forward-only; 0002 runs a preflight and aborts with a diagnostic on invalid data) |
 | `npm run db:preflight` | read-only: list rows a populated database must repair before 0002 |
@@ -112,6 +116,7 @@ src/app/                 routes (mobile-first pages + server actions)
   locations/  orders/  samples/            Sales & Admin operational flows
   admin/ (command center, exceptions, employees, markets/stock, catalog/prices, intake)
   owner/decisions/                          decision register (D/SD/T/IG) — Owner selects production policy
+  setup/                                    browser first-run: apply migrations + provision the first Owner (setup token = CRON_SECRET)
   integrations/                             build-versus-activate status, capability gates, jobs, notices
   field/ delivery/ finance/ kegs/ customer/ reports/   later-phase placeholders (clearly labelled)
   api/auth/*  api/webhooks/stripe  api/internal/jobs/run

@@ -20,7 +20,7 @@ export function pgAvailable(): boolean {
   return Boolean(PG_URL);
 }
 
-export async function createPgTestDb(): Promise<{ db: Db; pool: Pool; close: () => Promise<void>; url: string }> {
+export async function createPgTestDb(opts: { migrate?: boolean } = {}): Promise<{ db: Db; pool: Pool; close: () => Promise<void>; url: string }> {
   if (!PG_URL) throw new Error("TEST_DATABASE_URL is not set");
   const name = `fv_test_${randomBytes(4).toString("hex")}`;
   const admin = new Client({ connectionString: PG_URL });
@@ -31,7 +31,7 @@ export async function createPgTestDb(): Promise<{ db: Db; pool: Pool; close: () 
   url.pathname = `/${name}`;
   const pool = new Pool({ connectionString: url.toString(), max: 10 });
   const db = drizzle(pool, { schema }) as unknown as Db;
-  await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
+  if (opts.migrate !== false) await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   return {
     db,
     pool,

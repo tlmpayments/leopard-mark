@@ -283,3 +283,20 @@ Limits stated plainly: a PIN is weaker than Workspace SSO (no second factor; no 
 per-account lockout). Mitigations in place: hashed storage, lockout held in the database, HTTPS-only cookie,
 temporary PINs that cannot be used for anything but choosing a real one, immediate session end on reset,
 disable and offboarding. Google sign-in can be added later without any data change.
+
+## Addendum (2026-10-28) — browser-driven first run (`/setup`)
+
+To go live without a terminal: `/setup` applies pending migrations (then seeds the decision register
+unselected and the capability gates unproven) and provisions the first Owner with a temporary PIN. Every
+action needs the setup token (the deployment's `CRON_SECRET`, compared in constant time; a wrong token is
+refused after a delay with no detail); a second Owner is refused; secrets are never shown; actions are
+audited. The migrations are bundled into that route's serverless function (`outputFileTracingIncludes`).
+Terminal scripts (`db:migrate`, `bootstrap`, `set-pin`) remain.
+
+Evidence: `tests/postgres/setup.test.ts` (empty real Postgres → status → migrate twice → 66 decisions, gates →
+token checks → first Owner with must-change PIN signs in → second Owner refused → audit without PIN values);
+`tests/ui/production-setup.mjs` run on the **production build** against an empty database (wrong token
+refused, 4 migrations applied, Owner provisioned, temporary-PIN sign-in → forced change → Owner home →
+Employees & access; no demo banner/fixture sign-in on the production build) — `PROBLEMS: none`; journey 11
+on the demo. CI now runs the go-live path on every push. Totals: 94 PGlite tests, 11 real-Postgres tests,
+11 journeys + the go-live script, all green.

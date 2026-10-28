@@ -8,7 +8,7 @@ usability session (see `docs/STAFF_SESSION_SCRIPT.md` for that).
 
 ```bash
 npm run demo                         # shell 1: zero-setup demo (embedded database, fictional data)
-npm run test:ui                      # shell 2: journeys 1–10; exits 1 on any failed assertion, page error or 5xx
+npm run test:ui                      # shell 2: journeys 1–11; exits 1 on any failed assertion, page error or 5xx
 SHOTS_DIR=/tmp/shots npm run test:ui # choose where screenshots + timings.json land (default tests/ui/shots/, git-ignored)
 ```
 
@@ -30,4 +30,18 @@ second run needs `npm run demo:reset` first.
 | 7 | Owner/Admin — disable mid-session, offboard, reuse the email | open session refused on next request; retired identity; new person with only the assigned grant |
 | 8 | Driver/Service — honest empty state, no leak | accounts/orders/search refused; product search works; menu lists only permitted destinations |
 | 9 | Mobile — Owner frequent tasks and every destination | bottom bar + More menu; skip link and visible focus; searchable account picker distinguishes same-name accounts; sign-out |
+| 11 | Setup page | state card shows migrations/Owner; an action without the setup token is refused |
 | 10 | Sign-in — email + PIN | wrong PIN refused generically with the email kept; correct PIN signs in with internal authority only; Admin-set temporary PIN → old PIN refused → forced *Choose your PIN* → weak PIN refused → normal use |
+
+## Go-live path on a production build (`tests/ui/production-setup.mjs`)
+
+Runs the exact first-run sequence of a fresh deployment against an **empty** real Postgres: `/setup` →
+wrong token refused → migrations applied → first Owner provisioned with a temporary PIN → sign-in → forced
+*Choose your PIN* → Owner home → Employees & access; then checks that the production build shows no demo
+banner and no fixture sign-in. CI runs it on every push; locally:
+
+```bash
+createdb fv_golive && npm run build
+DATABASE_URL=postgres://…/fv_golive FV_ENV=production SESSION_SECRET=<16+ chars> CRON_SECRET=<16+ chars> PORT=3100 npm run start
+BASE_URL=http://localhost:3100 SETUP_TOKEN=<the CRON_SECRET> npm run test:ui:golive
+```

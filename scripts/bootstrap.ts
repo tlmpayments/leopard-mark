@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { generatePin } from "../src/lib/auth/pin";
+import { generatePin, validatePinPolicy } from "../src/lib/auth/pin";
 import { SYSTEM_ACTOR } from "../src/lib/authz/actor";
 import * as schema from "../src/lib/db/schema";
 import { currentCredential, setEmployeePin } from "../src/lib/domain/employees/credentials";
@@ -28,11 +28,12 @@ async function main() {
   if (email) {
     const [existing] = await db.select().from(schema.employeeIdentity).where(and(eq(schema.employeeIdentity.email, email), eq(schema.employeeIdentity.current, true))).limit(1);
     if (!existing) {
+      const pin = process.env.OWNER_PIN?.trim() || generatePin(8);
+      validatePinPolicy(pin); // before any write, so a weak OWNER_PIN leaves nothing half-provisioned
       const [emp] = await db.insert(schema.employee).values({ displayName: process.env.OWNER_NAME ?? "Owner" }).returning();
       await db.insert(schema.employeeIdentity).values({ employeeId: emp.id, email });
       await db.insert(schema.roleGrant).values({ employeeId: emp.id, role: "owner", marketId: null });
       await db.insert(schema.auditEvent).values({ actorKind: "system", action: "employee.bootstrap_owner", subjectType: "employee", subjectId: emp.id, current: { email } });
-      const pin = process.env.OWNER_PIN?.trim() || generatePin(8);
       await setEmployeePin(db, SYSTEM_ACTOR, emp.id, pin, { reason: "temporary PIN from bootstrap", mustChange: true });
       console.log(`Provisioned Owner ${email}.`);
       if (process.env.OWNER_PIN?.trim()) console.log("Temporary PIN: the OWNER_PIN you supplied (must be changed at first sign-in).");

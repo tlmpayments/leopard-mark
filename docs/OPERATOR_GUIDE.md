@@ -145,7 +145,10 @@ and a late completion from the old worker is ignored. Attempts are bounded; the 
 case. Jobs whose provider is unavailable park in **waiting** and are resumed by a successful connection
 check. Standing-order generation runs on the same tick and stays inert while D13 is unselected.
 
-## Upgrading a populated database (this revision adds migration `0002_hardening`)
+## Upgrading a populated database
+Browser route: open `/setup`, read the state card (pending migrations are listed), enter the setup token
+(the deployment's `CRON_SECRET`) and apply. The same preflight as below runs inside the migration: a refusal
+shows the diagnostic and nothing changes. Terminal route:
 1. Take a Neon branch or point-in-time snapshot of the database first.
 2. `DATABASE_URL=… npm run db:preflight` — read-only; lists any row that would violate the new invariants
    (duplicate current identities, duplicate current license/payment rows, an intake converted twice, negative
@@ -170,7 +173,8 @@ npm run demo                 # zero-setup demo: embedded database, fictional dat
 npm run demo:reset           # wipe .fv-demo/ so the next start reseeds
 npm test                     # 94 scenario tests on PGlite (real Postgres SQL in-process; no server)
 TEST_DATABASE_URL=postgres://… npm run test:pg   # 10 real-Postgres tests: races + populated-database upgrade (disposable database!)
-npm run test:ui              # 10 role browser journeys against the running demo (screenshots + timings)
+npm run test:ui              # 11 role browser journeys against the running demo (screenshots + timings)
+npm run test:ui:golive       # go-live path on a production build against an empty Postgres (see tests/ui/production-setup.mjs)
 npm run check                # typecheck + lint + tests + production build
 npm run db:migrate && npm run seed:dev && DEV_AUTH_BYPASS=true npm run dev   # real local Postgres with fixture sign-in
 ```

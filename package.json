@@ -22,7 +22,8 @@
     "db:preflight": "tsx scripts/db-preflight.ts",
     "test:pg": "vitest run tests/postgres",
     "test:ui": "node tests/ui/journeys.mjs",
-    "set-pin": "tsx scripts/set-pin.ts"
+    "set-pin": "tsx scripts/set-pin.ts",
+    "test:ui:golive": "node tests/ui/production-setup.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

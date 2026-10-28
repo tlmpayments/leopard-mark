@@ -65,6 +65,19 @@ jobs:
           npm run db:preflight
       - name: Production build
         run: npm run build
+      - name: Go-live path on the production build (empty database → /setup → first Owner → sign-in)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/golive
+          FV_ENV: production
+          SESSION_SECRET: ci-session-secret-not-a-real-value
+          CRON_SECRET: ci-setup-token-not-a-real-value
+          PORT: "3100"
+        run: |
+          psql postgres://postgres:postgres@127.0.0.1:5432/postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE golive'
+          npx playwright install --with-deps chromium
+          npm run start > golive.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3100/setup && break; sleep 1; done
+          BASE_URL=http://localhost:3100 SETUP_TOKEN="$CRON_SECRET" npm run test:ui:golive
 
   journeys:
     name: role browser journeys (local demo)
