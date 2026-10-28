@@ -19,6 +19,8 @@ import { seedGates } from "@/lib/integrations/gates";
 import { runDueJobs } from "@/lib/jobs/queue";
 import { seedDecisionRegister } from "@/lib/policy/policy";
 import "@/lib/integrations/stripe/adapter"; // registers job handlers
+import { hashPin } from "@/lib/auth/pin";
+import { DEMO_PIN } from "./constants";
 
 /**
  * Representative DEMO data (development only). Everything goes through the
@@ -60,9 +62,12 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
   await seedDecisionRegister(db);
   await seedGates(db);
 
+  // Every seeded person signs in with the same demo PIN (already chosen, so no forced change) — local demo only.
+  const demoPinHash = await hashPin(DEMO_PIN);
   async function person(name: string, email: string, role: Role, marketId: string | null, by?: Actor): Promise<Actor> {
     const [emp] = await db.insert(schema.employee).values({ displayName: name }).returning();
     await db.insert(schema.employeeIdentity).values({ employeeId: emp.id, email });
+    await db.insert(schema.employeeCredential).values({ employeeId: emp.id, pinHash: demoPinHash, mustChange: false, setByEmployeeId: by?.employeeId ?? null });
     if (by) await grantRole(db, by, emp.id, role, marketId);
     else await db.insert(schema.roleGrant).values({ employeeId: emp.id, role, marketId });
     return (await loadActor(db, emp.id))!;

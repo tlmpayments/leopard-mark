@@ -22,6 +22,13 @@
       "when": 1789653686192,
       "tag": "0002_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793220840208,
+      "tag": "0003_pin_signin",
+      "breakpoints": true
     }
   ]
 }

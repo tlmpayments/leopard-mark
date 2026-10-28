@@ -84,16 +84,31 @@ lists what is pending; the account/order pages show the same notices in place. A
   recorded as sent until a recipient exists.
 Recording "sent" is staff evidence, not provider confirmation, and the page says so.
 
+## Sign-in PINs (Owner/Admin → Employees & access; everyone → Change PIN)
+* People sign in with their **company email + PIN**. A new person gets a **temporary PIN** from an Owner/Admin
+  (at provisioning, or *Set PIN* under Manage) — tell it to them directly; it is never shown again. Their
+  first sign-in goes straight to *Choose your PIN*; nothing else works until they have chosen one.
+* **Forgot PIN**: Owner/Admin → *Reset PIN* (a reason is recorded; every session of that person ends). An
+  Admin can reset PINs only for non-Owners inside its markets; an Owner for anyone; nobody their own.
+* **Lockout**: five wrong attempts lock the PIN for 15 minutes (doubling on further failures); the person
+  row shows *PIN locked until …*. A reset clears it.
+* **Own PIN**: *Change PIN* in the sidebar / More menu; needs the current PIN; other sessions are signed out.
+* Only an Owner locked out with no other Owner needs the command line: `PIN_EMAIL=… PIN=… npm run set-pin`
+  against the production `DATABASE_URL` from a trusted machine.
+* What is and is not stored: only an scrypt hash of the PIN and the failed-attempt counter. PINs never appear
+  in audit notes, logs, URLs or flash messages. Sign-ins and refusals are audited (`auth.sign_in`,
+  `auth.refused`), as are sets/resets/changes (`credential.*`).
+
 ## Employees: disable, offboard, reuse an email (Owner/Admin → Employees & access)
 * **Disable** stops all business use on the person's very next request (no re-login needed); the identity
-  and grants stay for history. Also suspend the Google Workspace account separately.
-* **Offboard** (disables first if still enabled) retires the current identity (email and Google subject), revokes every grant
+  and grants stay for history. Also suspend the Google Workspace account separately if they had one.
+* **Offboard** (disables first if still enabled) retires the current identity (email and any Google subject), ends the sign-in PIN, revokes every grant
   with a reason, and frees the email. It is irreversible in the sense that the old employee stays retired —
   history is never rewritten.
 * **Provision a new person** with that email afterwards: a new employee record with only the grants you
   assign now; nothing is inherited. If the same human returns, provision them again the same way.
-* **Rename** (Google-side address change) keeps the same employee and subject; the old identity row is
-  ended and any session bound to it stops.
+* **Rename** (company address change) keeps the same employee, PIN and any Google subject; the old identity
+  row is ended and any session bound to it stops.
 * Authority rules are enforced in the service, not the page: Owner grants are Owner-only, nobody can change
   their own grants, and a market-scoped Admin manages only their market.
 
@@ -114,7 +129,9 @@ Withdraw a single selection with a reason; the previous effective selection appl
 | provider reference stays `pending` | job not yet run | *Run due jobs now*; read the evidence on the account page |
 | job **failed** after bounded attempts | terminal | an owned `provider_handoff_failed` case names the cause; fix it and request again — the failed job never blocks a fresh request |
 | Webhook returns 400 | signature or `STRIPE_WEBHOOK_SECRET` problem | fix the secret; Stripe retries; duplicates are recorded once |
-| Google sign-in refused with a reason | not provisioned / disabled / retired address | provision or enable; refusals are audited |
+| "Email or PIN not recognised" | unknown email, no PIN set, or wrong PIN (deliberately the same message) | check the person row: *no PIN* → set one; otherwise reset the PIN; refusals are audited with the real cause |
+| "Too many attempts" | PIN locked after five failures | wait, or reset the PIN |
+| Google sign-in refused with a reason (only when Google is configured) | not provisioned / disabled / retired address | provision or enable; refusals are audited |
 | Nobody can sign in after a secret rotation | `SESSION_SECRET` changed | expected: everyone signs in again |
 | Configuration banner "needs attention" | an unknown `FV_ENV` or contradictory deployment flags | fix the environment variables; the process refuses to guess |
 
@@ -144,16 +161,16 @@ check. Standing-order generation runs on the same tick and stays inert while D13
 Rollback is by restoring the snapshot, never by deleting rows.
 
 ## First Owner and provisioning
-`OWNER_EMAIL=… npm run bootstrap` provisions the Owner by email. On first Google sign-in the account binds.
-The Owner then provisions Admin/Accounting/Sales/Driver people with market scope.
+`OWNER_EMAIL=… OWNER_PIN=… npm run bootstrap` provisions the Owner with a temporary PIN (chosen at first
+sign-in). The Owner then provisions Admin/Accounting/Sales/Driver people with market scope and a temporary PIN each.
 
 ## Local development and tests
 ```bash
-npm run demo                 # zero-setup demo: embedded database, fictional data, auto demo Owner (Switch user for other roles)
+npm run demo                 # zero-setup demo: embedded database, fictional data, auto demo Owner (Switch user, or email + demo PIN 135790)
 npm run demo:reset           # wipe .fv-demo/ so the next start reseeds
-npm test                     # 87 scenario tests on PGlite (real Postgres SQL in-process; no server)
+npm test                     # 94 scenario tests on PGlite (real Postgres SQL in-process; no server)
 TEST_DATABASE_URL=postgres://… npm run test:pg   # 10 real-Postgres tests: races + populated-database upgrade (disposable database!)
-npm run test:ui              # 9 role browser journeys against the running demo (screenshots + timings)
+npm run test:ui              # 10 role browser journeys against the running demo (screenshots + timings)
 npm run check                # typecheck + lint + tests + production build
 npm run db:migrate && npm run seed:dev && DEV_AUTH_BYPASS=true npm run dev   # real local Postgres with fixture sign-in
 ```

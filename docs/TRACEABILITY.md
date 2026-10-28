@@ -32,6 +32,15 @@ browser journey against the fresh demo; **not run** = needs an external prerequi
 | REV-17 | Offboarding retires the current identity (`ended_reason/ended_by`), revokes grants, and frees the email for a NEW person with only intentional grants; rename/subject binding are transactional; sessions bound to an ended identity stop | `src/lib/domain/employees/service.ts` `offboardEmployee`, `recordEmailRename`, `resolveGoogleSignIn`, `loadActorForSession` | 0002 `employee_identity.ended_*`, `employee_identity_current_employee_uq`, `employee_identity_subject_uq` (current only) | rev-authority › REV-17 / AC18 (3, incl. AC38); at61-at62 (2); journey 7 | AC18, AC38 | AT61, AT62 (partial — real Google sign-in not run) |
 | REV-18 | Notices are a workflow: subject link, recipient, content/version, outcome with evidence and responsible person, missing-recipient and failure cases, re-issue as a new version, dedupe of pending intents, withdrawal when the cause goes | `src/lib/domain/notices/service.ts`; `src/app/admin/notices/*`; `src/components/notice-actions.tsx` | 0002 `notice.*` columns, `notice_pending_dedupe_uq` | rev-provider-queue-notices › REV-18 / AC27 (2); journey 5 | AC27 | AT04, AT74 (partial) |
 
+### Post-delivery change (2026-10-28): email + PIN sign-in
+
+| Change | Rule | Source | Migration | Tests |
+|---|---|---|---|---|
+| Sign-in method | company email + PIN proves the person; grants authorize; Google optional | `src/lib/auth/pin.ts`, `src/lib/domain/employees/credentials.ts`, `src/app/api/auth/pin/route.ts`, `src/app/sign-in/page.tsx` | 0003 `employee_credential` | pin-signin (7); journey 10 |
+| Temporary PIN | must be changed before any business use; set by Owner (anyone) / Admin (non-Owners in its markets); never own | `credentials.ts` `setEmployeePin`, `src/lib/auth/current.ts` `requireActor`, `src/app/account/pin/*` | — | pin-signin › temporary PINs, authority; journey 10 |
+| Session binding | reset/change/offboarding ends sessions on the next request | `src/lib/auth/session.ts` (`cid`), `employees/service.ts` `loadActorForSession`, `offboardEmployee` | — | pin-signin › session binding, offboarding |
+| Lockout and refusals | 5 failures → 15 min, doubling to 24 h; generic message; audit with cause | `credentials.ts` `signInWithPin`, `pin.ts` `lockoutMs` | — | pin-signin › lockout, disabled |
+
 ## 2. Architecture work (§4)
 
 | § | Rule | Source | Tests |

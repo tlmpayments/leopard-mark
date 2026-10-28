@@ -24,7 +24,8 @@ behaviour, unresolved policy, unproven provider capability, incomplete acceptanc
 
 Next.js 16 (App Router, server components + server actions, Turbopack) · TypeScript · Tailwind CSS 4 ·
 PostgreSQL (Neon in production) via Drizzle ORM with SQL migrations · a Postgres-backed job queue drained by
-Vercel Cron · Google OpenID Connect for employee identity (arctic + jose; no second identity provider) ·
+Vercel Cron · employee sign-in with company email + PIN (scrypt-hashed, lockout, forced change of temporary
+PINs; signed session cookie via jose) with Google OpenID Connect as an optional second method (arctic) ·
 Stripe SDK · Vitest with PGlite (real Postgres SQL in-process) for business-scenario tests, a disposable real
 Postgres for concurrency and upgrade tests, Playwright (pinned) for role browser journeys.
 
@@ -47,7 +48,7 @@ data (markets, warehouses, catalog with **sample** prices, seven accounts in var
 shortage and a below-minimum one, a hold, a closure, a standing arrangement, samples, an email intake, a
 pending billing-email change and a Stripe association request). You are auto-signed in as the **demo Owner**;
 use *Switch demo user* to see the portal as Admin, Accounting, Sales or Driver — internal grants and market
-scope still apply. A prominent **DEVELOPMENT DEMO MODE** banner is always shown.
+scope still apply — or try the real sign-in form with any seeded email and the demo PIN `135790`. A prominent **DEVELOPMENT DEMO MODE** banner is always shown.
 
 What it is not: nothing simulates a provider. Stripe, Google, OptimoRoute, Gmail, Slack, QBO all show their real
 IMPLEMENTED / NOT CONNECTED or NOT IMPLEMENTED state and every capability gate stays unproven. Demo mode is
@@ -65,21 +66,22 @@ cp .env.example .env            # fill DATABASE_URL, SESSION_SECRET; set DEV_AUT
 npm install
 npm run db:migrate               # apply drizzle/ migrations
 npm run seed:dev                 # same representative demo data into your Postgres (refuses in production)
-npm run dev                      # http://localhost:3000 → sign-in page lists dev fixture employees
+npm run dev                      # http://localhost:3000 → email + PIN sign-in (demo PIN 135790 for seeded people) plus the dev fixture list
 ```
 
 Production bootstrap (no demo data):
 
 ```bash
-OWNER_EMAIL=owner@company.com OWNER_NAME="Owner" npm run bootstrap   # migrate + decision register + gates + first Owner
+OWNER_EMAIL=owner@company.com OWNER_NAME="Owner" OWNER_PIN=48215736 npm run bootstrap   # migrate + register + gates + first Owner with a temporary PIN
+PIN_EMAIL=owner@company.com PIN=48215736 npm run set-pin                                 # break-glass: temporary PIN for anyone (must change at next sign-in)
 ```
 
 ## Tests and checks
 
 ```bash
-npm run check                                     # typecheck + lint + 87 PGlite scenario tests + production build
+npm run check                                     # typecheck + lint + 94 PGlite scenario tests + production build
 TEST_DATABASE_URL=postgres://… npm run test:pg    # 10 real-Postgres tests: races (AC07/08/10/11/12/22/23/28) + populated-database upgrade (AC37)
-npm run demo && npm run test:ui                   # 9 role browser journeys with screenshots + timings (tests/ui/README.md)
+npm run demo && npm run test:ui                   # 10 role browser journeys with screenshots + timings (tests/ui/README.md)
 DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a populated database before applying migration 0002
 ```
 `test:pg` creates and drops throwaway `fv_test_*` databases — never point it at a shared server. CI
@@ -93,13 +95,14 @@ DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a popul
 | `npm run demo:hosts` | one-time sudo helper mapping `fv-ops.test` → 127.0.0.1 so the demo serves `http://fv-ops.test` |
 | `npm run demo:reset` | delete `.fv-demo/` (embedded demo database) |
 | `npm run check` | typecheck + lint + tests + production build |
-| `npm test` | 87 business-scenario tests (AT01–AT13, AT61/AT62, AT79/AT80, REV-01–18 regressions, environment guards, presentation/timezone/error masking) on PGlite |
+| `npm test` | 94 business-scenario tests (AT01–AT13, AT61/AT62, AT79/AT80, REV-01–18 regressions, environment guards, PIN sign-in, presentation/timezone/error masking) on PGlite |
 | `npm run test:pg` | real-Postgres concurrency + upgrade tests (`TEST_DATABASE_URL`) |
 | `npm run test:ui` | role browser journeys against the running demo (`SHOTS_DIR` for screenshots) |
 | `npm run db:generate` | generate a new SQL migration after editing `src/lib/db/schema/*` |
 | `npm run db:migrate` | apply migrations to `DATABASE_URL` (forward-only; 0002 runs a preflight and aborts with a diagnostic on invalid data) |
 | `npm run db:preflight` | read-only: list rows a populated database must repair before 0002 |
-| `npm run bootstrap` | production-safe: migrate, seed decision register (all unselected) and gates (all unproven), provision first Owner |
+| `npm run bootstrap` | production-safe: migrate, seed decision register (all unselected) and gates (all unproven), provision first Owner with a temporary PIN (`OWNER_PIN`, or a random one printed once) |
+| `npm run set-pin` | break-glass temporary PIN for one person (`PIN_EMAIL`, `PIN`); ends their sessions; they choose their own at next sign-in |
 | `npm run seed:dev` | development demo data; refuses on any deployment, `FV_ENV=production` or an explicit non-development `FV_ENV` |
 
 ## Repository map
@@ -114,13 +117,13 @@ src/app/                 routes (mobile-first pages + server actions)
   api/auth/*  api/webhooks/stripe  api/internal/jobs/run
 src/lib/
   db/schema/            Drizzle schema: platform, market, customer, order, later (phase 2–4 skeleton)
-  auth/  authz/         Google identity; five roles, action catalog, market scope
+  auth/  authz/         session cookie, PIN policy/hashing (pin.ts), optional Google identity; five roles, action catalog, market scope
   audit/  exceptions/  jobs/  policy/       audit events, one-incident exceptions, fenced queue, decision register + typed selections + policy lookup
-  domain/               markets, catalog, customers, orders, allocation, samples, standing, readiness, holds, payment, intake, notices, timeline, search, commandcenter, employees
+  domain/               markets, catalog, customers, orders, allocation, samples, standing, readiness, holds, payment, intake, notices, timeline, search, commandcenter, employees (+ credentials)
   integrations/         registry (five facts per provider), gates (§49), stripe/adapter (account-bound), boundaries (OptimoRoute/Gmail/Slack/Google Address/QBO)
   errors.ts  env.ts  format.ts  actions/helpers.ts   business vs technical errors; environment classification; presentation helpers; safe action plumbing
-drizzle/                SQL migrations (0000 baseline, 0001, 0002_hardening with preflight)
-scripts/                demo launcher (+ hosts helper), migrate, bootstrap, seed-dev, db-preflight
+drizzle/                SQL migrations (0000 baseline, 0001, 0002_hardening with preflight, 0003_pin_signin)
+scripts/                demo launcher (+ hosts helper), migrate, bootstrap, set-pin, seed-dev, db-preflight
 src/lib/demo/           demo seed + demo Owner lookup (development only); src/lib/db/demo.ts embedded PGlite
 tests/scenarios/        PGlite scenario tests (AT*, REV-*, UX/AC presentation)
 tests/postgres/         real-Postgres races + upgrade of the populated baseline (tests/support/fixtures/baseline-884684c.sql)
@@ -131,7 +134,8 @@ docs/                   HARDENING_REPORT, TRACEABILITY, IMPLEMENTATION_STATUS, O
 
 ## Non-negotiables honoured in code (brief, Implementation non-negotiables)
 
-Google authenticates, internal authorizes (five roles; disable stops existing sessions on the next request) ·
+Sign-in (company email + PIN, or Google when configured) only identifies the person; internal grants authorize
+(five roles; disable stops existing sessions on the next request) ·
 each licensed location is separate (no pooling by parent/AP) · orders are captured during holds and readiness
 gaps · no invented D01/minimum-basis/pricing/override/overdue/dispute policy — every such branch reads the
 decision register and stays inactive while unselected · internal owns demand, allocation, eligibility, custody

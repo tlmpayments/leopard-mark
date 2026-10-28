@@ -13,10 +13,10 @@ State of this revision: **no box below is ticked.** Every item needs the company
 Where the same flow has been proven automatically with fictional data, that is noted — it is not a substitute.
 
 ## A. Employee access (phase 1) — before any live use
-- [ ] Google OAuth client created; redirect URI registered; `GOOGLE_ALLOWED_HD` set to the Workspace domain
-- [ ] First Owner bootstrapped (`npm run bootstrap`) and signed in with Google
-- [ ] Every employee provisioned with the correct role and market scope (Admin → Employees & access)
-- [ ] AT61 demonstrated with a real Workspace rename, then offboarding and provisioning a new person on the freed address; gate `ACCESS_STABLE_IDENTITY` recorded with evidence (automated equivalent: `rev-authority` tests, journey 7)
+- [ ] First Owner bootstrapped (`OWNER_EMAIL`, `OWNER_PIN` → `npm run bootstrap`), signed in with email + PIN and chose their own PIN
+- [ ] Every employee provisioned with the correct role, market scope and a temporary PIN handed over in person (Admin → Employees & access); each has signed in once and chosen their own PIN (no "temporary PIN" badge left)
+- [ ] (Optional) Google OAuth client created; redirect URI registered; `GOOGLE_ALLOWED_HD` set — only if "Continue with Google" is wanted
+- [ ] AT61 demonstrated with a real address rename, then offboarding and provisioning a new person on the freed address (their own PIN, nothing inherited); gate `ACCESS_STABLE_IDENTITY` recorded with evidence (automated equivalent: `rev-authority` and `pin-signin` tests, journeys 7 and 10)
 - [ ] AT62 demonstrated with an already-signed-in employee (disable → their next request refused without re-login); gate `ACCESS_EFFECTIVE_DISABLE` recorded (automated equivalent: AC38 test, journey 7)
 - [ ] `FV_ENV=production`, no `DEV_AUTH_BYPASS` / `FV_DEMO` / `TEST_DATABASE_URL` on Vercel, `SESSION_SECRET` and `CRON_SECRET` rotated to production values; Integrations page shows no configuration problem
 

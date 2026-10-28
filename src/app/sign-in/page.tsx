@@ -1,49 +1,71 @@
 import { redirect } from "next/navigation";
-import { Button, Card, Notice } from "@/components/ui";
+import { Button, Card, Field, Input, Notice } from "@/components/ui";
 import { currentActor } from "@/lib/auth/current";
 import { googleConfigured } from "@/lib/auth/google";
 import { getDb } from "@/lib/db/client";
+import { DEMO_PIN } from "@/lib/demo/constants";
 import { listEmployees } from "@/lib/domain/employees/service";
 import { demoModeEnabled, devAuthBypassEnabled } from "@/lib/env";
 
-export default async function SignInPage({ searchParams }: { searchParams: Promise<{ reason?: string; switch?: string }> }) {
-  const { reason, switch: switching } = await searchParams;
+/**
+ * Sign-in: company email + PIN. Authorization stays internal (employee record,
+ * current identity, grants) and is re-read on every request. Google sign-in is
+ * optional and offered only when its credentials are configured.
+ */
+export default async function SignInPage({ searchParams }: { searchParams: Promise<{ reason?: string; switch?: string; email?: string }> }) {
+  const { reason, switch: switching, email } = await searchParams;
   const demo = demoModeEnabled();
   const actor = await currentActor();
-  if (actor && !(demo && switching === "1")) redirect("/");
+  // Demo mode auto-signs the local user in as the demo Owner; the page still shows when they ask to switch or a sign-in was just refused.
+  if (actor && !(demo && (switching === "1" || (reason && reason !== "session")))) redirect("/");
   const dev = devAuthBypassEnabled();
   const employees = dev ? await listEmployees(await getDb()) : [];
+  const refused = reason && reason !== "session" ? decodeURIComponent(reason).replace(/_/g, " ") : null;
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4 py-10">
       <h1 className="text-2xl font-semibold">Leopard Mark Ops</h1>
-      <p className="mt-1 text-sm text-muted">Familiar Ventures self-distribution operating system. Employees sign in with their company Google account; authorization is internal.</p>
+      <p className="mt-1 text-sm text-muted">Familiar Ventures self-distribution operating system. Sign in with your company email and PIN; what you may do is decided by your internal role and market grants.</p>
       {demo ? (
         <div className="mt-4">
           <Notice tone="warn" title="DEVELOPMENT DEMO MODE.">
-            You are automatically signed in as the demo Owner. Pick another seeded person below to see the portal as that role; internal grants and market scope still apply. Google sign-in is not used in demo mode.
+            You are automatically signed in as the demo Owner. Try the real sign-in with any seeded email and the demo PIN <strong>{DEMO_PIN}</strong>, or pick a seeded person below to switch without a PIN; internal grants and market scope still apply either way.
           </Notice>
         </div>
       ) : null}
-      {reason && reason !== "session" ? (
+      {reason === "session" ? (
         <div className="mt-4">
-          <Notice tone="danger" title="Sign-in refused.">{decodeURIComponent(reason).replace(/_/g, " ")}</Notice>
+          <Notice tone="info">Please sign in to continue.</Notice>
+        </div>
+      ) : refused ? (
+        <div className="mt-4">
+          <Notice tone="danger" title="Sign-in refused.">{refused}</Notice>
         </div>
       ) : null}
       <div className="mt-6">
-        <Card>
-          {demo ? (
-            <p className="text-sm text-muted">Google OAuth is not exercised in demo mode (the production implementation is unchanged). Configure GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and a DATABASE_URL to use it.</p>
-          ) : googleConfigured() ? (
-            <Button href="/api/auth/google/start">Continue with Google</Button>
-          ) : (
-            <Notice tone="warn" title="Google sign-in is IMPLEMENTED / NOT CONNECTED.">Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (see docs/COMMISSIONING.md).</Notice>
-          )}
+        <Card title="Sign in">
+          <form action="/api/auth/pin" method="post" className="space-y-3">
+            <Field label="Company email" htmlFor="signin-email">
+              <Input id="signin-email" name="email" type="email" autoComplete="username" required defaultValue={email ?? ""} inputMode="email" />
+            </Field>
+            <Field label="PIN" htmlFor="signin-pin">
+              <Input id="signin-pin" name="pin" type="password" autoComplete="current-password" inputMode="numeric" required pattern="[0-9]{6,12}" />
+            </Field>
+            <Button>Sign in</Button>
+          </form>
+          <p className="mt-3 text-xs text-muted">Forgot your PIN? An Owner or Admin sets a temporary one under Employees &amp; access; you choose your own at the next sign-in. Five wrong attempts lock the PIN for 15 minutes.</p>
+          {googleConfigured() && !demo ? (
+            <div className="mt-4 border-t border-line pt-3">
+              <Button href="/api/auth/google/start" variant="secondary">
+                Continue with Google instead
+              </Button>
+            </div>
+          ) : null}
         </Card>
       </div>
       {dev ? (
         <div className="mt-6">
           <Card title={demo ? "Switch demo user" : "Dev fixture sign-in (non-production only)"}>
-            <p className="mb-3 text-xs text-muted">Signs in as a seeded employee without Google. Enabled state and grants still apply. Never available in production.</p>
+            <p className="mb-3 text-xs text-muted">Signs in as a seeded employee without a PIN. Enabled state and grants still apply. Never available on a deployment.</p>
             <form action="/api/auth/dev" method="post" className="space-y-2">
               {employees.map((e) => (
                 <button key={e.id} name="employeeId" value={e.id} className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2 text-left text-sm hover:bg-background">
@@ -54,7 +76,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
                   <span className="text-xs text-muted">{e.grants.map((g) => g.role).join(", ") || "no grants"}</span>
                 </button>
               ))}
-              {employees.length === 0 ? <p className="text-sm text-muted">No employees yet — run <code>npm run seed</code>.</p> : null}
+              {employees.length === 0 ? <p className="text-sm text-muted">No employees yet — run <code>npm run seed:dev</code>.</p> : null}
             </form>
           </Card>
         </div>

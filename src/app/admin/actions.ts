@@ -1,5 +1,7 @@
 "use server";
 
+import { setEmployeePin } from "@/lib/domain/employees/credentials";
+import { BusinessError } from "@/lib/errors";
 import { num, opt, runAction, str } from "@/lib/actions/helpers";
 import type { Role } from "@/lib/authz/actor";
 import { adminReleaseReservation, adminRequeueReservation, recordStockMovement, recordTransferDeparture, recordTransferReceipt, type StockMovementKind } from "@/lib/domain/allocation/service";
@@ -52,8 +54,21 @@ export async function noteExceptionAction(form: FormData) {
 export async function provisionEmployeeAction(form: FormData) {
   return runAction("/admin/employees", async ({ db, actor }) => {
     const role = str(form, "role") as Role;
-    await provisionEmployee(db, actor, { displayName: str(form, "displayName"), email: str(form, "email"), grants: role ? [{ role, marketId: opt(form, "marketId") }] : [] });
-    return "Employee provisioned; Google binds on first sign-in";
+    const pin = str(form, "pin");
+    const r = await provisionEmployee(db, actor, { displayName: str(form, "displayName"), email: str(form, "email"), grants: role ? [{ role, marketId: opt(form, "marketId") }] : [] });
+    if (pin) {
+      await setEmployeePin(db, actor, r.employee.id, pin, { reason: "temporary PIN at provisioning", mustChange: true });
+      return "Employee provisioned with a temporary PIN; they choose their own at first sign-in";
+    }
+    return "Employee provisioned; set a temporary PIN under Manage so they can sign in";
+  });
+}
+export async function setPinAction(form: FormData) {
+  return runAction("/admin/employees", async ({ db, actor }) => {
+    const pin = str(form, "pin");
+    if (pin !== str(form, "pinAgain")) throw new BusinessError("The two entries of the temporary PIN differ.", { field: "pinAgain" });
+    await setEmployeePin(db, actor, str(form, "employeeId"), pin, { reason: str(form, "reason") || "temporary PIN set from the access page", mustChange: true });
+    return "Temporary PIN set; every existing session for that person was signed out and they must choose their own PIN at the next sign-in";
   });
 }
 export async function grantRoleAction(form: FormData) {

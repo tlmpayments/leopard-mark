@@ -4,15 +4,20 @@ Reported per the brief §51/§58 and the hardening prompt §8: **implemented sup
 behaviour**, **unresolved policy**, **unproven provider capability**, **incomplete acceptance** and
 **deferred/future scope** are listed separately. Nothing below claims a provider integration complete
 because a request was sent, and no production data is populated with guessed policy or fictitious history.
-Revision: branch `hardening/phase1` on top of baseline `884684c`; migration `0002_hardening` added.
+Revision: branch `hardening/phase1` on top of baseline `884684c`; migrations `0002_hardening` and `0003_pin_signin` added.
 The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is in `TRACEABILITY.md`.
 
 ## 1. Implemented support (built and tested in this repository)
 
 ### Employee access (Phase 1)
-* Google OIDC sign-in (PKCE) as the identity assertion; internal `employee` + `employee_identity` +
-  `role_grant` supply authority. No auto-provisioning; provisioning by company email; first sign-in binds the
-  Google subject (transactional); email rename keeps the employee and ends the old identity row.
+* Sign-in with **company email + PIN** (migration `0003_pin_signin`): scrypt-hashed PINs with a 6–12 digit
+  policy, temporary PINs set by an Owner/Admin that must be changed at first sign-in, own-PIN change with
+  the current PIN, lockout after five failures (15 min, doubling, stored in the database), generic refusals,
+  sessions bound to the credential (a reset/change ends them), audit of sign-ins/refusals/resets without the
+  PIN value, break-glass `npm run set-pin`. Google OIDC sign-in (PKCE) remains available as an **optional**
+  second method when its client is configured. Internal `employee` + `employee_identity` + `role_grant`
+  supply authority either way. No auto-provisioning; provisioning by company email; email rename keeps the
+  employee and ends the old identity row.
 * Exactly five roles with an action catalog (`src/lib/authz/actions.ts`) and market scope on grants. Grant
   authority is enforced **in the service**: Owner grants are Owner-only, nobody edits their own grants, a
   market-scoped Admin manages only inside its markets, provisioning applies the same rule per grant (REV-01).
@@ -112,7 +117,7 @@ The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is 
 ### Provider adapters (build-versus-activate)
 | Provider | Built | Credentials | Connection verified | Capability demonstrated | Authorized live | Production-ready |
 |---|---|---|---|---|---|---|
-| Google Identity | Yes | No (FV to supply) | No | No — `ACCESS_*` gates need real accounts | IG03 unselected | **No** |
+| Google Identity (optional) | Yes | No — not needed: sign-in is email + PIN | No | `ACCESS_*` gates apply to email + PIN sign-in too; need real staff | IG03 unselected | not required for live use |
 | Stripe | Yes (customer association, hosted setup session, webhook receipt; account/mode-bound references; waiting jobs) | No | No | No — `STRIPE_CUSTOMER_ASSOCIATION`, `STRIPE_HOSTED_SETUP` unproven | SD01–SD10, D01, D05, D06 unselected | **No** |
 | OptimoRoute | Boundary only | No | not applicable | No (`OR_*`) | IG01, D19–D21 unselected | **No** — phase 2 |
 | Gmail | Boundary only (manual process supported in-app) | No | not applicable | No (`NOTICE_SINGLE_SENDER`) | D32/IG04 unselected | **No** |
@@ -157,8 +162,8 @@ All 35 D, 10 SD, 10 T and 11 IG records are unselected. Branches this revision a
 
 Every capability gate is `unproven` (Integrations page). No connection check has been recorded for any
 provider because no company credential was available to this revision. In particular: Stripe
-location-specific customer association and hosted ACH setup in the company account; Google identity
-stability/effective disable with real Workspace accounts; all OptimoRoute field gates; single-sender notice
+location-specific customer association and hosted ACH setup in the company account; identity
+stability/effective disable with real staff accounts (email + PIN); all OptimoRoute field gates; single-sender notice
 fit; Google content rights; QBO model; Slack no-mutation. A person records demonstrations with evidence.
 
 ## 5. Incomplete acceptance (what the tests do not establish)
@@ -167,7 +172,7 @@ fit; Google content rights; QBO model; Slack no-mutation. A person records demon
 |---|---|---|
 | AT09 standing handling | archived + active lines, incomplete policy, held/skip, generation failure (`rev-policy-payer-standing`, `at05-at09`) | price-change treatment at generation time follows D12 and is refused/owned rather than decided; pause/resume UI is minimal; no real cadence has run over calendar time |
 | AT13 reassignment of existing commitments | override vs reassign, insufficient stock, loaded work (`rev-stock-orders` §4.6) | route commitment itself is phase 2; "loaded" is a recorded fact, not a delivery workflow |
-| AT61/AT62 identity lifecycle | fixture-based rename / offboard / reuse / disable-mid-session tests and journey 7 | the same flows with real Google Workspace accounts and the `ACCESS_*` gates |
+| AT61/AT62 identity lifecycle | PIN sign-in tests, fixture-based rename / offboard / reuse / disable-mid-session tests, journeys 7 and 10 | the same flows with real staff accounts and the `ACCESS_*` gates recorded |
 | AT74 billing-contact/notice consequences | request/approve/replay (`AC28`), past recipients untouched | future-notice recipient handling is exercised only for the two notice purposes that exist (order received, setup invitation); invoice notices are phase 3 |
 | AT79/AT80 Owner authority and visibility | REV-01/REV-11 tests, role matrix, journeys 7–8 | field (driver) visibility is proven as *exclusion* only — the assigned-execution view is phase 2 |
 | Provider setup completion, finance, POD, delivery, keg credits, cleaning, formal accounting, production migration | boundary tests only | not built; screens say so |
@@ -190,6 +195,7 @@ state "none yet" truthfully. No Connect, Stripe Tax, Subscriptions, new vendors,
 | AT10–AT13 | tests/scenarios/at10-at13 | reservation/cancellation, shortage, samples, warehouse reassignment/transfers |
 | AT61/AT62/AT80 | tests/scenarios/at61-at62 | fixture identity lifecycle, five-role matrix |
 | REV-01/11/17 · AC01–03, AC18, AC34, AC38 | tests/scenarios/rev-authority | authority, scope, driver exclusion, offboarding, pagination/scope |
+| Email + PIN sign-in | tests/scenarios/pin-signin | policy/hashing, outcomes, lockout, disablement, temporary PIN, own change, PIN authority, session binding, offboarding |
 | REV-02 · AC04/AC05 | tests/scenarios/rev-environment, demo-mode | every flag combination; seed safety |
 | REV-03/04/05/09/10, §4.6 · AC06–AC12, AC25, AC26 | tests/scenarios/rev-stock-orders | allocation coherence, movement semantics, stale transitions, submission keys, reassignment, transfers |
 | REV-06/07/08/16 · AC13–AC17, AC24, AC28 | tests/scenarios/rev-policy-payer-standing | policy timelines/typing, D02 applicability, payer authority, standing, billing-email decisions |
@@ -197,10 +203,10 @@ state "none yet" truthfully. No Connect, Stripe Tax, Subscriptions, new vendors,
 | UX-04/UX-10 · AC31, AC35, AC36 | tests/scenarios/ux-presentation | status mapping, timezone/DST, error masking |
 | Review fixes (revision 1) | tests/scenarios/review-fixes | override scope, policy scope, jobs, amendment reassessment, market scope, identity integrity |
 | **Real Postgres** · AC07/08/10/11/12/22/23/28, AC37 | tests/postgres/races, tests/postgres/upgrade | `TEST_DATABASE_URL`; populated baseline `884684c` upgraded and preflight refusal |
-| Journeys 1–9 · AC03, AC09, AC11–14, AC17, AC18, AC27, AC30, AC32–34, AC38 | tests/ui/journeys.mjs | `npm run test:ui`; screenshots + timings |
+| Journeys 1–10 · AC03, AC09, AC11–14, AC17, AC18, AC27, AC30, AC32–34, AC38; PIN sign-in | tests/ui/journeys.mjs | `npm run test:ui`; screenshots + timings |
 | AT14–AT60, AT63–AT73, AT75–AT78, AT81–AT84 | not yet | phases 2–4 |
 
-87 PGlite tests (`npm test`), 10 real-Postgres tests (`npm run test:pg`), 9 browser journeys (`npm run test:ui`)
+94 PGlite tests (`npm test`), 10 real-Postgres tests (`npm run test:pg`), 10 browser journeys (`npm run test:ui`)
 were green on the delivered revision; results and commands are recorded in `HARDENING_REPORT.md`.
 
 ## 8. Independent review history

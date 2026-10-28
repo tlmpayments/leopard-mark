@@ -20,8 +20,9 @@ lists every problem (`configurationProblems()`). Required for a production deplo
 
 ```
 FV_ENV=production  APP_BASE_URL=https://<domain>  DATABASE_URL=…  SESSION_SECRET=…  CRON_SECRET=…
-GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  [GOOGLE_ALLOWED_HD=<workspace domain>]
+[GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  GOOGLE_ALLOWED_HD=<workspace domain>]   # optional: adds "Continue with Google"
 ```
+Employees sign in with their **company email + PIN**; no identity provider is required for live use.
 Do **not** set `DEV_AUTH_BYPASS`, `FV_DEMO` or a `TEST_DATABASE_URL` on any Vercel environment. Preview
 deployments use `FV_ENV=development` or `test` with their own database; they still refuse fixture access.
 
@@ -29,11 +30,11 @@ deployments use `FV_ENV=development` or `test` with their own database; they sti
 
 | Environment | Database | Sign-in | Provider keys |
 |---|---|---|---|
-| local demo (`npm run demo`) | embedded PGlite under `.fv-demo/` (git-ignored); `DATABASE_URL` is ignored by the launcher | auto demo Owner + *Switch user* | none — providers show their real not-connected state |
-| local dev against Postgres | your own `DATABASE_URL` | Google, or fixture list with `DEV_AUTH_BYPASS=true` (local only) | test keys only |
+| local demo (`npm run demo`) | embedded PGlite under `.fv-demo/` (git-ignored); `DATABASE_URL` is ignored by the launcher | auto demo Owner + *Switch user*; email + demo PIN `135790` for the real form | none — providers show their real not-connected state |
+| local dev against Postgres | your own `DATABASE_URL` | email + PIN (dev seed sets the demo PIN), or fixture list with `DEV_AUTH_BYPASS=true` (local only) | test keys only |
 | automated tests | PGlite in-process; `TEST_DATABASE_URL` creates and drops `fv_test_*` databases on a **throwaway** server | n/a | none (placeholder strings never leave the process) |
-| Vercel preview | separate Neon branch/database | Google only | Stripe **test** key at most |
-| Vercel production | production Neon database | Google only | keys added only per `ACTIVATION_CHECKLIST.md` |
+| Vercel preview | separate Neon branch/database | email + PIN (Google if configured) | Stripe **test** key at most |
+| Vercel production | production Neon database | email + PIN (Google if configured) | keys added only per `ACTIVATION_CHECKLIST.md` |
 
 The dev seed (`npm run seed:dev`) checks its target **before any write**: it refuses on a deployment, on
 `FV_ENV=production`, and on any explicit non-development `FV_ENV`. Stripe keys carry their mode in the prefix;
@@ -43,7 +44,9 @@ the Integrations page shows the mode and the verified account id, and provider r
 ## 3. Forward migrations, upgrade verification, recovery
 
 Migrations are forward-only SQL files in `drizzle/` applied with `npm run db:migrate` (recorded once in
-`drizzle.__drizzle_migrations`; re-running is a no-op). This revision adds **`0002_hardening`**:
+`drizzle.__drizzle_migrations`; re-running is a no-op). **`0003_pin_signin`** adds the `employee_credential`
+table (PIN hashes, lockout state, history) — purely additive, no preflight needed; upgraded employees have no
+PIN until an Owner/Admin sets one. The hardening revision added **`0002_hardening`**:
 
 * new columns (decision withdrawal, identity retirement, job claim/waiting, notice workflow, provider
   account binding, payer assignment, submission payload hash, occurrence detail);
@@ -103,18 +106,31 @@ migrations and redeploy.
   passes. *Run due jobs now* (Admin/Accounting) drains immediately.
 * Standing-order generation runs on the same tick and is inert while D13 is unselected.
 
-## 6. Google sign-in and disablement — commissioning steps and remaining evidence
+## 6. Employee sign-in (email + PIN) and disablement — commissioning steps and remaining evidence
 
-1. Create the OAuth web client; register `https://<domain>/api/auth/google/callback`; set
-   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_HD`.
-2. `DATABASE_URL=… OWNER_EMAIL=… npm run bootstrap` (migrates, seeds the decision register unselected and the
-   capability gates unproven, provisions the Owner by email). Sign in as the Owner with Google.
-3. Provision every employee (role + market scope) under Employees & access.
-4. Evidence still to record on the Integrations page with real accounts: `ACCESS_STABLE_IDENTITY` (rename an
-   employee's Workspace address, sign in again, then reuse the old address for a new person after offboarding)
-   and `ACCESS_EFFECTIVE_DISABLE` (disable an employee who is signed in and watch their next request be
-   refused). The same flows are proven automatically with the dev fixture (`tests/scenarios/rev-authority.test.ts`,
-   `at61-at62-access.test.ts`, browser journey 7) — **not yet with real Google accounts**.
+1. `DATABASE_URL=… OWNER_EMAIL=… OWNER_NAME=… OWNER_PIN=<6–12 digits> npm run bootstrap` from a trusted
+   machine (migrates, seeds the decision register unselected and the capability gates unproven, provisions
+   the Owner with a **temporary** PIN). Without `OWNER_PIN` a random PIN is printed once to that terminal.
+2. Open `https://<domain>/sign-in`, sign in as the Owner, and choose your own PIN when prompted (the
+   temporary one allows nothing else).
+3. Provision every employee (role + market scope) under **Employees & access**, giving each a temporary PIN
+   in person; they choose their own at first sign-in. The page shows who has no PIN, a temporary PIN, or a
+   lockout.
+4. Lost PIN: an Owner/Admin sets a new temporary PIN from the same page (*Reset PIN*; ends that person's
+   sessions). If the only Owner is locked out: `PIN_EMAIL=… PIN=… npm run set-pin` from a trusted machine.
+5. What the PIN scheme guarantees and what it does not: PINs are stored only as scrypt hashes; five wrong
+   attempts lock the PIN for 15 minutes, doubling on further failures (the state is in the database, so it
+   holds across Vercel instances); refusals never reveal whether an email exists; a reset or change ends all
+   sessions for that person; the cookie is HTTPS-only. A PIN is still weaker than Workspace SSO — there is
+   no second factor and no per-IP throttle beyond the account lockout — so keep PINs private, keep employee
+   lists current, and disable leavers promptly. **Google sign-in can be added later** by setting
+   `GOOGLE_CLIENT_ID/SECRET` (+ `GOOGLE_ALLOWED_HD`); the button then appears next to the PIN form and the
+   same employee records apply.
+6. Evidence still to record on the Integrations page with real people: `ACCESS_STABLE_IDENTITY` (rename an
+   employee's address, sign in again, then reuse the old address for a new person after offboarding) and
+   `ACCESS_EFFECTIVE_DISABLE` (disable an employee who is signed in and watch their next request be refused).
+   The same flows are proven automatically (`tests/scenarios/pin-signin.test.ts`, `rev-authority.test.ts`,
+   `at61-at62-access.test.ts`, browser journeys 7 and 10) — **not yet with real staff accounts**.
 
 ## 7. Stripe — test account, payer, setup capability checks and remaining evidence
 
@@ -153,8 +169,9 @@ are covered by tests with placeholder values that never leave the process.
 1. **Stripe**: remove `STRIPE_SECRET_KEY` and redeploy. The adapter reports credentials absent; queued work
    parks in *waiting* and resumes after the next successful check. No business record is deleted. Webhooks are
    refused (400) without `STRIPE_WEBHOOK_SECRET`.
-2. **Google sign-in**: removing the client credentials blocks new sign-ins; existing sessions continue until
-   the cookie expires or the employee is disabled. To force everyone out, rotate `SESSION_SECRET`.
+2. **Sign-in**: to force everyone out, rotate `SESSION_SECRET`; to stop one person, disable them (next request
+   refused) or reset their PIN (their sessions end). Removing optional Google credentials only removes the
+   Google button.
 3. **Jobs**: remove the cron entry (or rotate `CRON_SECRET`) to stop automatic processing; Admin can still run
    due jobs manually.
 4. **Database**: restore a Neon branch/point-in-time snapshot; never delete rows.

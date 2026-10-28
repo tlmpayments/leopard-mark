@@ -49,9 +49,18 @@ export async function loadActor(db: DbOrTx, employeeId: string, kind: "employee"
  * identity. A retired/reassigned identity therefore ends every session that
  * used it, without waiting for the cookie to expire (REV-17, AC18).
  */
-export async function loadActorForSession(db: DbOrTx, employeeId: string, identityId: string, kind: "employee" | "dev_fixture"): Promise<Actor | null> {
+export async function loadActorForSession(db: DbOrTx, employeeId: string, identityId: string, kind: "employee" | "dev_fixture", credentialId?: string): Promise<Actor | null> {
   const [identity] = await db.select().from(schema.employeeIdentity).where(eq(schema.employeeIdentity.id, identityId)).limit(1);
   if (!identity || !identity.current || identity.employeeId !== employeeId) return null;
+  // A PIN session is bound to the credential it was proven with: a reset or change ends it on the next request.
+  if (credentialId) {
+    const [cred] = await db
+      .select({ id: schema.employeeCredential.id })
+      .from(schema.employeeCredential)
+      .where(and(eq(schema.employeeCredential.id, credentialId), eq(schema.employeeCredential.employeeId, employeeId), eq(schema.employeeCredential.current, true)))
+      .limit(1);
+    if (!cred) return null;
+  }
   return loadActor(db, employeeId, kind);
 }
 
@@ -399,6 +408,11 @@ export async function offboardEmployee(db: DbOrTx, actor: Actor, employeeId: str
         .set({ current: false, endedAt: new Date(), endedReason: "retired", endedByEmployeeId: actor.employeeId })
         .where(eq(schema.employeeIdentity.id, identity.id));
     }
+    // The sign-in credential ends with the identity (history kept); a new person on this email gets their own.
+    await tx
+      .update(schema.employeeCredential)
+      .set({ current: false, endedAt: new Date(), endedReason: "offboarded", endedByEmployeeId: actor.employeeId })
+      .where(and(eq(schema.employeeCredential.employeeId, employeeId), eq(schema.employeeCredential.current, true)));
     await recordAudit(tx, actor, {
       action: "employee.offboard",
       subjectType: "employee",
@@ -415,9 +429,26 @@ export async function listEmployees(db: DbOrTx) {
   const emps = await db.select().from(schema.employee).orderBy(schema.employee.displayName);
   const identities = await db.select().from(schema.employeeIdentity);
   const grants = await db.select().from(schema.roleGrant).where(isNull(schema.roleGrant.revokedAt));
-  return emps.map((e) => ({
-    ...e,
-    identities: identities.filter((i) => i.employeeId === e.id),
-    grants: grants.filter((g) => g.employeeId === e.id),
-  }));
+  // Credential STATE only — never the hash.
+  const credentials = await db
+    .select({
+      employeeId: schema.employeeCredential.employeeId,
+      setAt: schema.employeeCredential.setAt,
+      mustChange: schema.employeeCredential.mustChange,
+      lockedUntil: schema.employeeCredential.lockedUntil,
+      lastUsedAt: schema.employeeCredential.lastUsedAt,
+      failedAttempts: schema.employeeCredential.failedAttempts,
+    })
+    .from(schema.employeeCredential)
+    .where(eq(schema.employeeCredential.current, true));
+  const now = Date.now();
+  return emps.map((e) => {
+    const c = credentials.find((x) => x.employeeId === e.id);
+    return {
+      ...e,
+      identities: identities.filter((i) => i.employeeId === e.id),
+      grants: grants.filter((g) => g.employeeId === e.id),
+      credential: c ? { ...c, locked: Boolean(c.lockedUntil && c.lockedUntil.getTime() > now) } : null,
+    };
+  });
 }

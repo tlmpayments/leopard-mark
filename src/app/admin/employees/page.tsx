@@ -6,7 +6,7 @@ import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import { listEmployees } from "@/lib/domain/employees/service";
 import { listMarkets } from "@/lib/domain/markets/service";
-import { grantRoleAction, offboardAction, provisionEmployeeAction, renameEmailAction, revokeGrantAction, setEnabledAction } from "../actions";
+import { grantRoleAction, offboardAction, provisionEmployeeAction, renameEmailAction, revokeGrantAction, setEnabledAction, setPinAction } from "../actions";
 
 /**
  * Employees & access (REV-01/REV-17). The service enforces authority; the
@@ -25,10 +25,10 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Se
   const markets = globalAdmin ? allMarkets : allMarkets.filter((m) => adminMarkets.includes(m.id));
   const grantableRoles = ROLES.filter((r) => r !== "owner" || isOwner);
   return (
-    <Page title="Employees & access" subtitle="Google authenticates; internal grants authorize. Exactly five roles. Disabling stops existing sessions on their next request.">
+    <Page title="Employees & access" subtitle="Company email + PIN signs people in; internal grants authorize. Exactly five roles. Disabling stops existing sessions on their next request.">
       <Flash {...flash} />
       <Notice tone="info">
-        Provision by company email. The first Google sign-in binds the account; a re-used address later belongs to a NEW person and inherits nothing — offboard the previous employee first (identity retired, grants revoked, history kept). Owner authority is granted only by an Owner; an Admin acts only inside its own markets and never on its own grants.
+        Provision by company email and give the person a temporary PIN (tell it to them directly — it is never shown again here); they choose their own PIN at first sign-in. A re-used address later belongs to a NEW person and inherits nothing — offboard the previous employee first (identity retired, PIN ended, grants revoked, history kept). Owner authority is granted only by an Owner; an Admin acts only inside its own markets and never on its own grants or PIN.
       </Notice>
       {manage ? (
         <Card title="Provision employee">
@@ -58,6 +58,9 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Se
                 ))}
               </Select>
             </Field>
+            <Field label="Temporary PIN (6–12 digits; optional)" hint="They must change it at first sign-in.">
+              <Input name="pin" type="password" inputMode="numeric" pattern="[0-9]{6,12}" autoComplete="off" />
+            </Field>
             <div className="sm:col-span-4">
               <Button small>Provision</Button>
             </div>
@@ -78,7 +81,22 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Se
                   <div>
                     <span className="font-medium">{e.displayName}</span>
                     <span className="ml-2 text-xs text-muted">{current?.email ?? "no current identity (retired)"}</span>{" "}
-                    {current ? current.googleSubject ? <Badge tone="good">Google bound</Badge> : <Badge tone="warn">awaiting first sign-in</Badge> : <Badge>identity retired</Badge>}
+                    {current ? (
+                      e.credential ? (
+                        e.credential.locked ? (
+                          <Badge tone="danger">PIN locked until {fmtDate(e.credential.lockedUntil)}</Badge>
+                        ) : e.credential.mustChange ? (
+                          <Badge tone="warn">temporary PIN — must change at sign-in</Badge>
+                        ) : (
+                          <Badge tone="good">PIN set{e.credential.lastUsedAt ? ` · last sign-in ${fmtDate(e.credential.lastUsedAt)}` : ""}</Badge>
+                        )
+                      ) : (
+                        <Badge tone="warn">no PIN — cannot sign in</Badge>
+                      )
+                    ) : (
+                      <Badge>identity retired</Badge>
+                    )}{" "}
+                    {current?.googleSubject ? <Badge tone="info">Google bound</Badge> : null}
                   </div>
                   <StatusBadge value={e.enabled ? "active" : "inactive"} title={e.enabled ? "Enabled" : "Disabled"} />
                 </div>
@@ -133,9 +151,18 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Se
                         <Button small variant={e.enabled ? "danger" : "secondary"}>{e.enabled ? "Disable" : "Enable"}</Button>
                       </form>
                       {current ? (
+                        <form action={setPinAction} className="flex flex-wrap gap-1">
+                          <input type="hidden" name="employeeId" value={e.id} />
+                          <Input name="pin" type="password" inputMode="numeric" pattern="[0-9]{6,12}" autoComplete="off" required placeholder="Temporary PIN" aria-label="Temporary PIN" className="max-w-[9rem]" />
+                          <Input name="pinAgain" type="password" inputMode="numeric" pattern="[0-9]{6,12}" autoComplete="off" required placeholder="Again" aria-label="Temporary PIN again" className="max-w-[6rem]" />
+                          <Input name="reason" placeholder="Reason (e.g. forgot PIN)" aria-label="Reason" className="max-w-[12rem]" />
+                          <Button small variant="secondary">{e.credential ? "Reset PIN" : "Set PIN"}</Button>
+                        </form>
+                      ) : null}
+                      {current ? (
                         <form action={renameEmailAction} className="flex gap-1">
                           <input type="hidden" name="employeeId" value={e.id} />
-                          <Input name="email" type="email" placeholder="New Google email (same person)" aria-label="New email" />
+                          <Input name="email" type="email" placeholder="New company email (same person)" aria-label="New email" />
                           <Button small variant="secondary">Rename</Button>
                         </form>
                       ) : null}

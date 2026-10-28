@@ -516,6 +516,75 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await ctx.close();
 }
 
+// ---------------- 10. Sign-in with email + PIN: refusal, success, temporary PIN → forced change ----------------
+{
+  const j = journey("10 Sign-in — email + PIN refused/accepted; temporary PIN must be changed before any business use");
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  page.on("pageerror", (e) => problems.push(`[pin] pageerror ${e.message}`));
+  page.on("response", (r) => {
+    if (r.status() >= 500) problems.push(`[pin] ${r.status()} ${r.url()}`);
+  });
+  j.step("wrong PIN is refused without saying which part was wrong; the email is kept");
+  await page.goto(`${BASE}/sign-in?switch=1`);
+  await page.fill("#signin-email", "accounting@demo.local");
+  await page.fill("#signin-pin", "907315");
+  await Promise.all([page.waitForURL(/sign-in\?reason=/), page.getByRole("button", { name: "Sign in" }).click()]);
+  await expectText(page, /Email or PIN not recognised/, "generic refusal");
+  if ((await page.inputValue("#signin-email")) === "accounting@demo.local") ok("email kept after refusal");
+  else fail("email lost after refusal");
+  await shot(page, "j10-01-sign-in-refused");
+  j.step("correct PIN signs in as that person with their internal grants");
+  await page.fill("#signin-pin", "135790");
+  await Promise.all([page.waitForURL(`${BASE}/`), page.getByRole("button", { name: "Sign in" }).click()]);
+  await expectText(page, /Al Accounting/, "signed in as Al Accounting");
+  await page.goto(`${BASE}/admin/catalog`);
+  await expectText(page, /Not permitted/, "Accounting is refused an Admin-only destination after PIN sign-in (authority stays internal)");
+  await page.goto(`${BASE}/menu`);
+  await page.getByRole("button", { name: /Sign out/ }).click();
+  await page.waitForURL(/sign-in|\/$/);
+  j.step("Admin sets a temporary PIN for Sam; Sam must choose a PIN before anything else; the old PIN no longer works");
+  const admin = await session("Ada Admin");
+  await admin.page.goto(`${BASE}/admin/employees`);
+  const row = admin.page.locator("li").filter({ hasText: "sales-nc@demo.local" }).first();
+  await row.locator("summary", { hasText: "Manage" }).click();
+  const pinForm = row.locator('form:has(input[name="pinAgain"])').first();
+  await pinForm.locator('input[name="pin"]').fill("482157");
+  await pinForm.locator('input[name="pinAgain"]').fill("482157");
+  await pinForm.locator('input[name="reason"]').fill("forgot PIN (journey)");
+  await act(admin.page, () => pinForm.getByRole("button", { name: /Reset PIN|Set PIN/ }).click());
+  await expectText(admin.page, /Temporary PIN set/, "temporary PIN recorded by Admin");
+  await expectText(admin.page, /temporary PIN — must change at sign-in/i, "employee shows the must-change state");
+  await admin.ctx.close();
+  await page.goto(`${BASE}/sign-in?switch=1`);
+  await page.fill("#signin-email", "sales-nc@demo.local");
+  await page.fill("#signin-pin", "135790");
+  await Promise.all([page.waitForURL(/sign-in\?reason=/), page.getByRole("button", { name: "Sign in" }).click()]);
+  ok("old PIN refused after the reset");
+  await page.fill("#signin-pin", "482157");
+  await Promise.all([page.waitForURL(/account\/pin/), page.getByRole("button", { name: "Sign in" }).click()]);
+  await expectText(page, /Choose your PIN/, "forced to the choose-PIN page");
+  await page.goto(`${BASE}/orders`);
+  await page.waitForURL(/account\/pin/);
+  ok("business pages redirect back until the PIN is chosen");
+  await shot(page, "j10-02-choose-pin");
+  await page.fill('input[name="currentPin"]', "482157");
+  await page.fill('input[name="newPin"]', "123456");
+  await page.fill('input[name="confirmPin"]', "123456");
+  await page.getByRole("button", { name: /Save PIN/ }).click();
+  await page.waitForSelector("[data-flash=error]");
+  await expectText(page, /straight run/, "weak PIN refused with the rule");
+  await page.fill('input[name="currentPin"]', "482157");
+  await page.fill('input[name="newPin"]', "907315");
+  await page.fill('input[name="confirmPin"]', "907315");
+  await Promise.all([page.waitForURL(/\/\?ok=/), page.getByRole("button", { name: /Save PIN/ }).click()]);
+  await expectText(page, /PIN changed/, "own PIN chosen; signed in");
+  await page.goto(`${BASE}/locations`);
+  await expectText(page, /Golden Gate Grill/, "Sam now uses the system normally");
+  j.end();
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nTIMINGS (automated browser, fictional data — not a staff session):");
 for (const t of timings) console.log(`  ${t.name}: ${t.steps} steps, ${t.seconds}s ${t.note}`);

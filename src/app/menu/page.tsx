@@ -30,6 +30,9 @@ export default async function MenuPage() {
             Switch demo user
           </Link>
         ) : null}
+        <Link href="/account/pin" className="mb-2 block min-h-12 rounded-lg border border-line px-3 py-2 text-sm">
+          Change PIN
+        </Link>
         <form action="/api/auth/sign-out" method="post">
           <button className="min-h-12 w-full rounded-lg border border-line px-3 py-2 text-left text-sm">{demo ? "Sign out (back to demo Owner)" : "Sign out"}</button>
         </form>

@@ -15,8 +15,8 @@ type GateSeed = Omit<typeof schema.capabilityGate.$inferInsert, "status" | "evid
  */
 export const GATES: GateSeed[] = [
   // Employee access (phase 1)
-  { id: "ACCESS_STABLE_IDENTITY", provider: "google_identity", name: "Stable identity survives Google rename; reused email is a new person", classification: "scoped_acceptance", requiredDemonstration: "AT61: rename keeps history/grants; re-used address inherits nothing.", permittedControl: null, phase: 1 },
-  { id: "ACCESS_EFFECTIVE_DISABLE", provider: "google_identity", name: "Effective disablement stops an existing session without re-login", classification: "scoped_acceptance", requiredDemonstration: "AT62: disable an already-signed-in employee; next action is refused; stale Google signals cannot restore.", permittedControl: null, phase: 1 },
+  { id: "ACCESS_STABLE_IDENTITY", provider: "google_identity", name: "Stable identity survives an email rename; reused email is a new person", classification: "scoped_acceptance", requiredDemonstration: "AT61: rename keeps history/grants; re-used address inherits nothing (email + PIN sign-in; also with Google when configured).", permittedControl: null, phase: 1 },
+  { id: "ACCESS_EFFECTIVE_DISABLE", provider: "google_identity", name: "Effective disablement stops an existing session without re-login", classification: "scoped_acceptance", requiredDemonstration: "AT62: disable an already-signed-in employee; next action is refused; a stale sign-in or grant signal cannot restore.", permittedControl: null, phase: 1 },
   // Stripe (phase 1 association, phase 3 finance)
   { id: "STRIPE_CUSTOMER_ASSOCIATION", provider: "stripe", name: "Location-specific Stripe customer association", classification: "scoped_acceptance", requiredDemonstration: "One Stripe customer per licensed location in the company account; no pooling by parent/AP.", permittedControl: null, phase: 1 },
   { id: "STRIPE_HOSTED_SETUP", provider: "stripe", name: "Hosted ACH setup/mandate (no raw bank details internally)", classification: "scoped_acceptance", requiredDemonstration: "Hosted setup completes; only masked reference/status evidence retained.", permittedControl: null, phase: 3 },

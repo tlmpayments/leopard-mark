@@ -257,3 +257,29 @@ Revision identification: branch `hardening/phase1`, commits `9530ba7` (services 
 baseline `884684c`. The clean export (`fv-ops-hardening.zip`) contains source,
 configuration example, migrations, lockfile, tests, CI workflow and docs — no `node_modules`, `.next`,
 `.fv-demo`, `.env`, screenshots or git history.
+
+## Addendum (2026-10-28) — sign-in changed to company email + PIN
+
+At the Owner's direction, Google Workspace sign-in is no longer required: employees sign in with their
+**company email and a PIN**. Google OIDC remains in the code as an optional second method that appears only
+when its client is configured. The authorization model is untouched — the employee record, its current
+identity row and its grants still decide every action on every request.
+
+What was added (migration `0003_pin_signin`, additive): `employee_credential` (scrypt hash, must-change flag,
+failed attempts, lockout, history); `src/lib/auth/pin.ts` (policy 6–12 digits, no repeated digit / straight
+run / repeated pair; scrypt; constant-time compare); `src/lib/domain/employees/credentials.ts` (set/reset by
+Owner or Admin within authority, own change with the current PIN, sign-in resolution with lockout after five
+failures doubling to 24 h, generic refusals, audit without PIN values); session bound to the credential (reset
+or change ends every session); forced *Choose your PIN* page for temporary PINs; Employees & access shows PIN
+state and offers *Set/Reset PIN*; bootstrap takes `OWNER_PIN`; `npm run set-pin` is the break-glass reset.
+
+Evidence: `tests/scenarios/pin-signin.test.ts` (7 tests), upgrade test extended (0003 creates no credentials
+by itself), browser journey 10 (wrong PIN refused with the email kept; correct PIN signs in with internal
+authority only; Admin-set temporary PIN → old PIN refused → forced change → weak PIN refused → normal use).
+Totals after the change: 94 PGlite tests, 10 real-Postgres tests, 10 journeys, all green; lint, typecheck and
+build green.
+
+Limits stated plainly: a PIN is weaker than Workspace SSO (no second factor; no per-IP throttle beyond the
+per-account lockout). Mitigations in place: hashed storage, lockout held in the database, HTTPS-only cookie,
+temporary PINs that cannot be used for anything but choosing a real one, immediate session end on reset,
+disable and offboarding. Google sign-in can be added later without any data change.

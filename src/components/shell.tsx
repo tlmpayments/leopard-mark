@@ -66,6 +66,9 @@ export function Shell({ actor, children }: { actor: Actor | null; children: Reac
                 Switch demo user
               </Link>
             ) : null}
+            <Link href="/account/pin" className="rounded-lg px-2 py-2 text-sm text-muted hover:bg-background">
+              Change PIN
+            </Link>
             <form action="/api/auth/sign-out" method="post" className="mt-2">
               <button className="min-h-11 w-full rounded-lg px-2 py-2 text-left text-sm text-muted hover:bg-background">{demo ? "Sign out (back to demo Owner)" : "Sign out"}</button>
             </form>

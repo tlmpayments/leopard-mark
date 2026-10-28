@@ -4,7 +4,7 @@
 # no provider credential is ever present. A green run means: types, lint,
 # unit + scenario tests (PGlite), real-Postgres race and upgrade tests,
 # production build, migration preflight against the populated baseline,
-# and the nine role browser journeys against a fresh local demo.
+# and the ten role browser journeys against a fresh local demo.
 name: ci
 
 on:

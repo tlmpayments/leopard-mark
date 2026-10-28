@@ -38,12 +38,12 @@ export interface ProviderDefinition {
 export const PROVIDERS: ProviderDefinition[] = [
   {
     provider: "google_identity",
-    name: "Google Identity (employee sign-in)",
-    owns: "Authenticated account identity assertion",
-    internalKeeps: "Stable employee identity, role/market grants, enablement, offboarding",
+    name: "Google Identity (optional second sign-in method)",
+    owns: "Authenticated Google account assertion — optional; the normal sign-in is company email + PIN, which needs no provider",
+    internalKeeps: "Stable employee identity, sign-in credential (PIN hash), role/market grants, enablement, offboarding",
     phase: 1,
     built: "adapter",
-    requiredEnv: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SESSION_SECRET"],
+    requiredEnv: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
     optionalEnv: ["GOOGLE_ALLOWED_HD"],
     callbackPath: "/api/auth/google/callback",
     scopes: ["openid", "email", "profile"],

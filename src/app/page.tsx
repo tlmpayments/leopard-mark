@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Badge, Button, Card, Page, StateLine, StatusBadge, fmtDate } from "@/components/ui";
+import { Badge, Button, Card, Flash, Page, StateLine, StatusBadge, fmtDate } from "@/components/ui";
 import { queueScope } from "@/components/work-queue";
+import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireActor } from "@/lib/auth/current";
 import { ROLE_LABEL, actorRoles } from "@/lib/authz/actor";
 import { can } from "@/lib/authz/authorize";
@@ -10,8 +11,9 @@ import { listNotices } from "@/lib/domain/notices/service";
 import { listOrders } from "@/lib/domain/orders/service";
 import { listOpenExceptions } from "@/lib/exceptions/service";
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: SearchParams }) {
   const actor = await requireActor();
+  const flash = await flashFrom(searchParams);
   const roles = actorRoles(actor);
   const d = await getDb();
   const isField = roles.length === 1 && roles[0] === "driver_service";
@@ -35,6 +37,7 @@ export default async function Home() {
         </>
       }
     >
+      <Flash {...flash} />
       {isField ? (
         <Card title="Today">
           <StateLine kind="provider_unavailable">Nothing is assigned to you. Route assignment and field capture are not built in this revision (phase 2).</StateLine>

@@ -73,9 +73,11 @@ run("AC37 — upgrade from the previous revision", () => {
     const [legacyPending] = (await pool.query("select id from provider_reference where status = 'pending' limit 1")).rows;
     await pool.query("update provider_reference set status = 'established', provider_id = 'cus_legacy_test' where id = $1", [legacyPending.id]);
     await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(3);
+    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(4);
     expect((await pool.query("select count(*)::int as n from customer_order")).rows[0].n).toBe(before.orders);
     expect((await pool.query("select count(*)::int as n from audit_event")).rows[0].n).toBe(before.audit);
+    // 0003 adds the sign-in credential table; upgraded employees have no PIN until one is set (nothing is invented).
+    expect((await pool.query("select count(*)::int as n from employee_credential")).rows[0].n).toBe(0);
     // Constraints and indexes exist.
     const cons = (await pool.query("select conname from pg_constraint where conname in ('stock_position_qty_chk','order_line_qty_chk','reservation_qty_chk','sample_qty_chk','job_status_chk')")).rows.map((r) => r.conname);
     expect(cons.sort()).toEqual(["job_status_chk", "order_line_qty_chk", "reservation_qty_chk", "sample_qty_chk", "stock_position_qty_chk"]);
@@ -92,7 +94,7 @@ run("AC37 — upgrade from the previous revision", () => {
     expect((await pool.query("select data_type from information_schema.columns where table_name='job' and column_name='status'")).rows[0].data_type).toBe("text");
     // Re-running the migrator is a no-op (idempotent journal).
     await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(3);
+    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(4);
     // Upgraded data works with the current services: the seeded NC Sales rep places an order at a seeded account.
     const [salesIdentity] = await db.select().from(schema.employeeIdentity).where(eq(schema.employeeIdentity.email, "sales-nc@demo.local"));
     const sales = (await loadActor(db, salesIdentity.employeeId))!;

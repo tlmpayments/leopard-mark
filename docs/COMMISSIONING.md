@@ -22,7 +22,17 @@ Provider references (e.g. a Stripe customer id) are stored with the provider **a
 created in. A key for a different account or mode never reuses them; work that needs an unavailable provider
 **waits** and resumes after a verified connection.
 
-## Google Workspace / Google Identity — required now (phase 1)
+## Employee sign-in — company email + PIN (phase 1, no provider needed)
+
+| Item | Who supplies | Where it goes |
+|---|---|---|
+| First Owner email and temporary PIN | Owner | `OWNER_EMAIL`, `OWNER_PIN` on the one-time `npm run bootstrap` command |
+| Every employee's company email, role, market scope and a temporary PIN handed over in person | Owner/Admin in the app | Admin → Employees & access (the PIN is never shown again) |
+| Lost-PIN handling | Owner/Admin (*Reset PIN*); `npm run set-pin` from a trusted machine for the only Owner | — |
+| Offboarding | Owner/Admin: disable, then offboard (PIN ended, identity retired, grants revoked) | — |
+| Test people for the access gates | Admin | gates `ACCESS_STABLE_IDENTITY`, `ACCESS_EFFECTIVE_DISABLE` — proven automatically (journeys 7 and 10), **not yet with real staff** |
+
+## Google Workspace / Google Identity — OPTIONAL second sign-in method
 
 | Item | Who supplies | Where it goes |
 |---|---|---|
@@ -31,7 +41,7 @@ created in. A key for a different account or mode never reuses them; work that n
 | Allowed Workspace domain | Owner | `GOOGLE_ALLOWED_HD` (e.g. `theleopardmark.com`) |
 | Authorized redirect URI | Workspace admin registers | `https://<domain>/api/auth/google/callback` |
 | Scopes | fixed | `openid email profile` |
-| Authorized employee identity setup | Owner/Admin provisions by email in the app | Admin → Employees & access |
+| Authorized employee identity setup | Owner/Admin provisions by email in the app (same records as PIN sign-in; the first Google sign-in binds the account) | Admin → Employees & access |
 | Account lifecycle/offboarding | Owner/Admin disable in app **and** suspend in Workspace (related, distinct) | — |
 | Test users for access and revocation acceptance (rename, offboard + reuse of the address, disable while signed in) | Admin | gates `ACCESS_STABLE_IDENTITY`, `ACCESS_EFFECTIVE_DISABLE` — proven with the local fixture and browser journey 7, **not yet with real Google accounts** |
 

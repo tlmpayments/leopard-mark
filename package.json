@@ -21,7 +21,8 @@
     "demo:hosts": "node scripts/demo-hosts.mjs",
     "db:preflight": "tsx scripts/db-preflight.ts",
     "test:pg": "vitest run tests/postgres",
-    "test:ui": "node tests/ui/journeys.mjs"
+    "test:ui": "node tests/ui/journeys.mjs",
+    "set-pin": "tsx scripts/set-pin.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

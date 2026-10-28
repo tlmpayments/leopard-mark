@@ -148,10 +148,10 @@ export const employee = pgTable("employee", {
 });
 
 /**
- * Google authentication assertion association. One employee may have several
- * identity rows over time (email rename). A Google `sub` is the stable
- * external key; an email re-used by a different person gets a new row with a
- * different `sub` and a different employee (AT61).
+ * Sign-in identity: the company email the person signs in with (email + PIN),
+ * optionally bound to a Google `sub` when Google sign-in is configured. One
+ * employee may have several identity rows over time (email rename); an email
+ * re-used by a different person gets a new row and a different employee (AT61).
  */
 export const employeeIdentity = pgTable(
   "employee_identity",
@@ -184,6 +184,44 @@ export const employeeIdentity = pgTable(
       .on(t.employeeId)
       .where(sql.raw(`current = true`)),
     index("employee_identity_email_idx").on(t.email),
+  ],
+);
+
+/**
+ * Sign-in credential: a PIN chosen by the person (or a temporary one set by
+ * an Owner/Admin that must be changed at first sign-in). Only a scrypt hash
+ * is stored. One CURRENT credential per employee; a reset ends the old row
+ * (history kept) and every session issued against it stops. Failed attempts
+ * and lockouts live here so the same rule applies on every instance.
+ */
+export const employeeCredential = pgTable(
+  "employee_credential",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employee.id),
+    pinHash: text("pin_hash").notNull(),
+    current: boolean("current").notNull().default(true),
+    /** True when an Owner/Admin set a temporary PIN: the person must choose their own before any business use. */
+    mustChange: boolean("must_change").notNull().default(true),
+    setAt: timestamp("set_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    setByEmployeeId: uuid("set_by_employee_id"),
+    failedAttempts: integer("failed_attempts").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    /** Why the credential ended: changed | reset | offboarded (REV-17 style history). */
+    endedReason: text("ended_reason"),
+    endedByEmployeeId: uuid("ended_by_employee_id"),
+  },
+  (t) => [
+    uniqueIndex("employee_credential_current_uq")
+      .on(t.employeeId)
+      .where(sql.raw(`current = true`)),
+    index("employee_credential_employee_idx").on(t.employeeId),
   ],
 );
 

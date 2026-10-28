@@ -23,7 +23,7 @@ export const currentActor = cache(async (): Promise<Actor | null> => {
   const session = await readSession();
   // The session names an employee AND the identity row it signed in with; both must still be
   // current (enabled employee, identity not retired/reassigned) on every request (AT61/AT62, REV-17).
-  if (session) return loadActorForSession(await getDb(), session.employeeId, session.identityId, session.kind);
+  if (session) return loadActorForSession(await getDb(), session.employeeId, session.identityId, session.kind, session.credentialId);
   if (demoModeEnabled()) {
     const { demoOwnerEmployeeId } = await import("@/lib/demo/owner");
     const ownerId = await demoOwnerEmployeeId(await getDb());
@@ -38,6 +38,8 @@ export const currentActor = cache(async (): Promise<Actor | null> => {
 export async function requireActor(): Promise<Actor> {
   const actor = await currentActor();
   if (!actor) redirect("/sign-in?reason=session");
+  // A temporary PIN (set by an Owner/Admin) allows exactly one thing: choosing your own PIN.
+  if ((await readSession())?.mustChangePin) redirect("/account/pin?first=1");
   return actor;
 }
 
