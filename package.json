@@ -1,0 +1,58 @@
+{
+  "name": "fv-ops",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "bootstrap": "tsx scripts/bootstrap.ts",
+    "seed:dev": "tsx scripts/seed-dev.ts",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "demo": "node scripts/demo.mjs",
+    "demo:reset": "node scripts/demo.mjs --reset",
+    "preview:local": "node scripts/demo.mjs",
+    "demo:hosts": "node scripts/demo-hosts.mjs",
+    "db:preflight": "tsx scripts/db-preflight.ts",
+    "test:pg": "vitest run tests/postgres",
+    "test:ui": "node tests/ui/journeys.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "arctic": "^3.7.0",
+    "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.12",
+    "next": "16.3.5",
+    "pg": "^8.23.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
+    "stripe": "^22.6.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22.20.3",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "playwright": "1.56.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.13",
+    "typescript": "^5",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
