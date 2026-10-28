@@ -1,0 +1,116 @@
+# Continuous integration for fv-ops (§6.4). Every job runs without secrets:
+# the Postgres service is a throwaway database created for the run, the
+# demo/journey job uses the embedded demo database with fictional data, and
+# no provider credential is ever present. A green run means: types, lint,
+# unit + scenario tests (PGlite), real-Postgres race and upgrade tests,
+# production build, migration preflight against the populated baseline,
+# and the ten role browser journeys against a fresh local demo.
+name: ci
+
+on:
+  push:
+    branches: [main, "hardening/**", "release/**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  # Never a real deployment: FV_ENV is deliberately unset so nothing can be mistaken for prod/uat.
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    name: typecheck · lint · tests · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit and scenario tests (embedded Postgres)
+        run: npm test
+      - name: Real-Postgres races and upgrade of the populated baseline
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: npm run test:pg
+      - name: Migration preflight against the populated prior revision
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/preflight_baseline
+        run: |
+          psql postgres://postgres:postgres@127.0.0.1:5432/postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE preflight_baseline'
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/support/fixtures/baseline-884684c.sql
+          npm run db:preflight
+      - name: Production build
+        run: npm run build
+      - name: Go-live path on the production build (empty database → /setup → first Owner → sign-in)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/golive
+          FV_ENV: production
+          SESSION_SECRET: ci-session-secret-not-a-real-value
+          CRON_SECRET: ci-setup-token-not-a-real-value
+          PORT: "3100"
+        run: |
+          psql postgres://postgres:postgres@127.0.0.1:5432/postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE golive'
+          npx playwright install --with-deps chromium
+          npm run start > golive.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://localhost:3100/setup && break; sleep 1; done
+          BASE_URL=http://localhost:3100 SETUP_TOKEN="$CRON_SECRET" npm run test:ui:golive
+
+  journeys:
+    name: role browser journeys (local demo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install the pinned Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Start the zero-setup demo (embedded database, fictional data)
+        run: |
+          npm run demo > demo.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:3000/sign-in; then echo "demo up after ${i}s"; break; fi
+            sleep 1
+          done
+          curl -sf -o /dev/null http://localhost:3000/sign-in || { echo "demo did not start"; tail -50 demo.log; exit 1; }
+      - name: Run journeys 1–9 (screenshots + timings)
+        env:
+          SHOTS_DIR: journey-evidence
+        run: npm run test:ui
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-evidence
+          path: |
+            journey-evidence/
+            demo.log
+          retention-days: 14
