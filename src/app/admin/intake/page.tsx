@@ -59,7 +59,7 @@ export default async function IntakePage({ searchParams }: { searchParams: Searc
               </Field>
               <div className="grid gap-2 sm:grid-cols-2">
                 {skus.filter((s) => !s.archivedAt).map((s) => (
-                  <label key={s.id} className="flex items-center justify-between gap-2 rounded-lg border border-line px-2 py-1 text-sm">
+                  <label key={s.id} className="flex items-center justify-between gap-2 border-b border-rule-soft py-1 text-sm">
                     <span>
                       {s.brand} {s.name}
                     </span>

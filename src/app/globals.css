@@ -1,49 +1,111 @@
 @import "tailwindcss";
 
+/*
+ * The Leopard Mark, internal screens. One colour (Leopard Navy #243167) on the brand ground (#E8E9E7) with
+ * black and white ink; the greys are black at an opacity, never a hue. No dark mode: the screens are a
+ * ledger, and a ledger has one paper.
+ */
 :root {
-  --background: #f7f7f5;
-  --foreground: #1a1a1a;
-  --card: #ffffff;
-  --muted: #6b6b66;
-  --line: #e4e4df;
-  --accent: #1f5f4a;
-  --accent-soft: #e6f1ec;
-  --warn: #9a5b00;
-  --warn-soft: #fff3df;
-  --danger: #a12e2e;
-  --danger-soft: #fbe9e9;
-  --info: #2b4c7e;
-  --info-soft: #e8eef8;
+  --navy: #243167;
+  --ground: #e8e9e7;
+  --paper: #ffffff;
+  --ink: #000000;
+  --ink-2: rgba(0, 0, 0, 0.62); /* secondary text */
+  --ink-3: rgba(0, 0, 0, 0.42); /* captions, labels */
+  --rule: rgba(0, 0, 0, 0.16); /* hairlines */
+  --rule-soft: rgba(0, 0, 0, 0.08); /* row separators */
+  --hover: rgba(36, 49, 103, 0.06); /* navy at a whisper, for row hover */
+  --navy-soft: rgba(36, 49, 103, 0.12); /* navy wash for the current nav item and focus rings */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-muted: var(--muted);
-  --color-line: var(--line);
-  --color-accent: var(--accent);
-  --color-accent-soft: var(--accent-soft);
-  --color-warn: var(--warn);
-  --color-warn-soft: var(--warn-soft);
-  --color-danger: var(--danger);
-  --color-danger-soft: var(--danger-soft);
-  --color-info: var(--info);
-  --color-info-soft: var(--info-soft);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --color-navy: var(--navy);
+  --color-ground: var(--ground);
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-soft: var(--rule-soft);
+  --color-hover: var(--hover);
+  --color-navy-soft: var(--navy-soft);
+  /* Compatibility names used across the existing pages; all resolve to the one palette. */
+  --color-background: var(--ground);
+  --color-foreground: var(--ink);
+  --color-card: var(--ground);
+  --color-muted: var(--ink-2);
+  --color-line: var(--rule);
+  --color-accent: var(--navy);
+  --color-accent-soft: var(--navy-soft);
+  --color-warn: var(--ink);
+  --color-warn-soft: var(--ground);
+  --color-danger: var(--ink);
+  --color-danger-soft: var(--ground);
+  --color-info: var(--ink-2);
+  --color-info-soft: var(--ground);
+  --font-sans: var(--font-rubik), Arial, Helvetica, sans-serif;
+  --font-display: var(--font-merriweather), Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 html,
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--ground);
+  color: var(--ink);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
   -webkit-text-size-adjust: 100%;
+  color-scheme: light only;
 }
 
+/* Display type: Merriweather, letterspaced, lining tabular figures. */
+.font-display {
+  font-family: var(--font-display);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* Every table sets figures in tabular numerals so columns of quantities and money line up. */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Form controls: one style everywhere; 16px on small screens so iOS does not zoom on focus. */
 input,
 select,
 textarea {
-  font-size: 16px; /* prevents iOS zoom on focus */
+  font-size: 16px;
+}
+@media (min-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 14px;
+  }
+}
+input[type="date"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Native select: the arrow is the browser's; keep the box flat. */
+select {
+  appearance: auto;
+}
+
+/* Focus is a navy ring, never a glow. */
+:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 1px;
+}
+
+/* Hairline rules instead of boxes. */
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* Copyable numbers select as one piece on click. */
+.select-all {
+  user-select: all;
 }

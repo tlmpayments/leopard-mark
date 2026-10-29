@@ -50,26 +50,26 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <Badge>phase {s.phase}</Badge>
           </div>
           <div className="mb-2 grid gap-2 text-xs sm:grid-cols-5">
-            <div className="rounded-lg border border-line p-2">
+            <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">1 · Built</div>
               <div>{s.built === "adapter" ? "adapter" : s.built === "boundary_only" ? "boundary only" : "not implemented"}</div>
             </div>
-            <div className="rounded-lg border border-line p-2">
+            <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">2 · Credentials</div>
               <div>{s.credentialsPresent ? "present (names only; values never shown)" : `missing: ${s.missingEnv.join(", ")}`}</div>
             </div>
-            <div className="rounded-lg border border-line p-2">
+            <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">3 · Connection</div>
               <div>
                 <StatusBadge value={s.connection === "ok" ? "ok" : s.connection === "no_check" ? "no_check" : s.connection === "not_applicable" ? "not_applicable_yet" : s.connection} title={CONNECTION_LABEL[s.connection]} /> <span className="text-muted">{s.connectionDetail}</span>
                 {s.recorded?.lastCheckedAt ? <span className="block text-muted">last check {fmtDate(s.recorded.lastCheckedAt)}{s.environment ? ` · ${s.environment} mode` : ""}{s.accountId ? ` · account ${s.accountId}` : ""}</span> : null}
               </div>
             </div>
-            <div className="rounded-lg border border-line p-2">
+            <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">4 · Capability</div>
               <div>{s.capability === "not_applicable" ? "n/a" : s.capability.replace(/_/g, " ")}</div>
             </div>
-            <div className="rounded-lg border border-line p-2">
+            <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">5 · Activation</div>
               <div>{s.activation.replace(/_/g, " ")}</div>
             </div>

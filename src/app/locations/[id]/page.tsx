@@ -267,7 +267,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
       <Card title="Delivery readiness — detail">
         <ul className="space-y-2">
           {readiness.conditions.map((c) => (
-            <li key={c.code} className="flex flex-col gap-1 rounded-lg border border-line p-2 sm:flex-row sm:items-start sm:justify-between">
+            <li key={c.code} className="flex flex-col gap-1 border-t border-rule pt-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <span className="text-sm font-medium">{c.label}</span>
                 <p className="text-sm">{c.plain}</p>
@@ -307,7 +307,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
         )}
         {orders.length >= 20 ? (
           <Link href={`/orders?locationId=${id}`} className="mt-2 block text-sm text-accent hover:underline">
-            All orders for this account →
+            All orders for this account
           </Link>
         ) : null}
       </Card>
@@ -387,7 +387,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
           {detail.pendingBillingRequests.length ? (
             <div className="mt-2 space-y-2">
               {detail.pendingBillingRequests.map((r) => (
-                <div key={r.id} className="rounded-lg bg-warn-soft p-2 text-sm">
+                <div key={r.id} className=" bg-warn-soft p-2 text-sm">
                   Billing-email change to <strong>{r.requestedEmail}</strong> awaiting Admin approval.
                   {isAdmin ? (
                     <form action={decideBillingEmailAction} className="mt-2 flex flex-wrap items-end gap-2">
@@ -475,7 +475,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
               <li key={n.id} className="py-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span>
-                    <strong>{NOTICE_PURPOSE_LABEL[n.purpose] ?? n.purpose}</strong> v{n.version} → {n.recipientEmail ?? <span className="text-danger">no recipient email</span>}
+                    <strong>{NOTICE_PURPOSE_LABEL[n.purpose] ?? n.purpose}</strong> v{n.version} to {n.recipientEmail ?? <span className="text-danger">no recipient email</span>}
                   </span>
                   <StatusBadge value={n.state} />
                 </div>
@@ -577,7 +577,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
               </div>
               {!payerAuth.ok ? <p className="mt-1 text-xs text-warn">Assign payer authority first — setup cannot be requested for an unassigned payer.</p> : null}
               {setupUrlLive ? (
-                <div className="mt-2 rounded-lg bg-info-soft p-2 text-xs">
+                <div className="mt-2 bg-info-soft p-2 text-xs">
                   <strong>Hosted setup link for the authorized payer</strong> (bearer link — send only through the approved single-sender process; expires per Stripe):
                   <div className="mt-1 break-all font-mono">{setupUrlLive}</div>
                 </div>
@@ -629,7 +629,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
         {detail.holds.length === 0 ? <p className="text-sm text-muted">No active holds.</p> : null}
         <ul className="space-y-2">
           {detail.holds.map((h) => (
-            <li key={h.id} className="rounded-lg border border-line p-2 text-sm">
+            <li key={h.id} className="border-t border-rule pt-2 text-sm">
               <div className="flex items-center justify-between">
                 <span>
                   <Badge tone="danger">{h.kind.replace("_", " ")}</Badge> {h.cause}
@@ -650,7 +650,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
         {detail.overrides.length ? (
           <ul className="mt-2 space-y-1">
             {detail.overrides.map((o) => (
-              <li key={o.id} className="flex items-center justify-between rounded-lg bg-info-soft p-2 text-sm">
+              <li key={o.id} className="flex items-center justify-between bg-info-soft p-2 text-sm">
                 <span>
                   Override ({o.scope}): {o.reason} — by {o.grantedByRole}
                 </span>
@@ -720,7 +720,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
         {standing.length === 0 ? <p className="text-sm text-muted">None.</p> : null}
         <ul className="space-y-2">
           {standing.map(({ arrangement, lines, occurrences }) => (
-            <li key={arrangement.id} className="rounded-lg border border-line p-2 text-sm">
+            <li key={arrangement.id} className="border-t border-rule pt-2 text-sm">
               <div className="flex items-center justify-between">
                 <span>
                   {lines.map((l) => `${l.sku.name} × ${l.l.qty}`).join(", ")} {arrangement.requestedCadence ? <span className="text-muted">· asked: {arrangement.requestedCadence}</span> : null}
@@ -761,7 +761,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
                 {catalog
                   .filter((c) => c.orderable)
                   .map((c) => (
-                    <label key={c.sku.id} className="flex items-center justify-between gap-2 rounded-lg border border-line px-2 py-1">
+                    <label key={c.sku.id} className="flex items-center justify-between gap-2 border-b border-rule-soft py-1">
                       <span className="text-sm">{c.sku.name}</span>
                       <Input name={`qty:${c.sku.id}`} type="number" min={0} inputMode="numeric" className="w-20" placeholder="0" />
                     </label>

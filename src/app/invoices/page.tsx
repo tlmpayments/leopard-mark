@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Badge, Button, Card, Flash, Input, Page, Select, StatusBadge, Table, fmtDay } from "@/components/ui";
+import { Button, FilterBar, Flash, Input, Num, Page, Select, StatusBadge, Struck, Table, fmtDay } from "@/components/ui";
+import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
@@ -40,9 +41,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Sea
   };
 
   return (
-    <Page title="Invoices" subtitle="fv-ops owns the INV and NC sequences (7.1, 7.3). A draft is created when a shipment is confirmed and issued when it is delivered, dated the actual date (7.4). Sending and collection stay manual (7.5).">
+    <Page title="Invoices" subtitle="INV and NC sequences are owned here (7.1, 7.3): a draft opens when a shipment is confirmed and is issued at delivery, dated the actual date (7.4). Sending and collection stay manual (7.5).">
       <Flash {...flash} />
-      <form className="grid gap-2 sm:grid-cols-5" role="search">
+      <FilterBar>
         <Select name="status" defaultValue={status ?? ""} aria-label="Status">
           <option value="">Any status</option>
           {STATUSES.map((s) => (
@@ -56,21 +57,26 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Sea
           <option value="INV">INV (charged)</option>
           <option value="NC">NC (samples, no charge)</option>
         </Select>
-        <Input name="q" defaultValue={q ?? ""} placeholder="Invoice number" aria-label="Invoice number" />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Include Sales tab history
+        <Input name="q" defaultValue={q ?? ""} placeholder="Invoice number" aria-label="Invoice number" className="w-44" />
+        <label className="flex items-center gap-1.5 text-[13px] text-ink-2">
+          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Sales tab history
         </label>
         {location ? <input type="hidden" name="location" value={location} /> : null}
-        <Button variant="secondary">Filter</Button>
-      </form>
-      <Card>
+        <Button variant="secondary" small>
+          Filter
+        </Button>
+      </FilterBar>
+      <div>
         <Table
           caption="Invoices"
           head={["Number", "Account", "Invoice date", "Due", "Total", "Status"]}
+          widths={[LIST_WIDTHS.number, undefined, LIST_WIDTHS.date, LIST_WIDTHS.date, LIST_WIDTHS.money, LIST_WIDTHS.status]}
+          align={["left", "left", "left", "left", "right", "left"]}
+          empty="No invoices match this filter."
           rows={shown.map(({ inv, location: loc }) => [
-            <Link key="n" href={`/invoices/${inv.id}`} className="font-medium hover:underline">
-              {inv.number ?? `${inv.series} draft`}
-              {inv.legacy ? <Badge> legacy</Badge> : null}
+            <Link key="n" href={`/invoices/${inv.id}`} className="whitespace-nowrap font-medium text-navy hover:underline">
+              <Struck when={inv.status === "void"}>{inv.number ?? `${inv.series} draft`}</Struck>
+              {inv.legacy ? <span className="ml-1.5 text-[11px] text-ink-3">legacy</span> : null}
             </Link>,
             loc ? (
               <Link key="l" href={`/locations/${loc.id}`} className="hover:underline">
@@ -79,22 +85,22 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Sea
             ) : (
               "—"
             ),
-            fmtDay(inv.invoiceDate),
-            fmtDay(inv.dueDate),
-            formatCents(inv.totalCents),
-            <span key="s" className="flex items-center gap-1">
+            <span key="d1" className="whitespace-nowrap">{fmtDay(inv.invoiceDate)}</span>,
+            <span key="d2" className="whitespace-nowrap">{fmtDay(inv.dueDate)}</span>,
+            <Num key="t">{formatCents(inv.totalCents)}</Num>,
+            <span key="s" className="flex items-center gap-2">
               <StatusBadge value={inv.status} />
-              {inv.legacyStatus ? <span className="text-xs text-muted">{inv.legacyStatus}</span> : null}
+              {inv.legacyStatus ? <span className="text-[11px] text-ink-3">{inv.legacyStatus}</span> : null}
             </span>,
           ])}
         />
         {(page > 1 || hasMore) && (
           <nav className="mt-3 flex justify-between text-sm" aria-label="Pagination">
-            {page > 1 ? <Link href={link(page - 1)} className="text-accent hover:underline">Previous</Link> : <span />}
-            {hasMore ? <Link href={link(page + 1)} className="text-accent hover:underline">Next</Link> : <span />}
+            {page > 1 ? <Link href={link(page - 1)} className="text-navy hover:underline">Previous</Link> : <span />}
+            {hasMore ? <Link href={link(page + 1)} className="text-navy hover:underline">Next</Link> : <span />}
           </nav>
         )}
-      </Card>
+      </div>
     </Page>
   );
 }

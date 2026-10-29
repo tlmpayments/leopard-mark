@@ -80,7 +80,7 @@ export default async function DecisionPage({ params, searchParams }: { params: P
                   <StatusBadge value="unselected" />
                 )}
               </span>
-              {c.scheduled.length ? <span className="text-xs text-warn">then: {c.scheduled.map((s) => `${fmtDate(s.effectiveFrom)} → ${s.scope}`).join("; ")}</span> : null}
+              {c.scheduled.length ? <span className="text-xs text-warn">then: {c.scheduled.map((s) => `${fmtDate(s.effectiveFrom)} to ${s.scope}`).join("; ")}</span> : null}
             </li>
           ))}
           {matrix.cells.length === 0 ? <li className="py-2 text-sm text-muted">No markets yet.</li> : null}

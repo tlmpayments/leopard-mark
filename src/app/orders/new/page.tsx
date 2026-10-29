@@ -15,7 +15,7 @@ import { AccountPicker } from "./account-picker";
 import { OrderForm, type OrderFormCatalogItem } from "./order-form";
 
 /**
- * Sales order flow (O13): account → SKU → quantity → optional date/notes → submit.
+ * Sales order flow (O13): account, then SKU, quantity, optional date and notes, then submit.
  * Prices are fixed per market; stock counts are internal and never shown to customers.
  */
 export default async function NewOrderPage({ searchParams }: { searchParams: SearchParams }) {

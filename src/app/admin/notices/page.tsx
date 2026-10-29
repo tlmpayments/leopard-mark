@@ -24,7 +24,7 @@ export default async function NoticesPage({ searchParams }: { searchParams: Sear
   const subjects = await Promise.all(rows.map((r) => noticeSubjectLabel(d, r.n)));
   const canRecord = can(actor, "notice.record_outcome");
   const tab = (key: string, label: string) => (
-    <Link key={key} href={`/admin/notices?view=${key}`} aria-current={view === key ? "page" : undefined} className={`rounded-full px-3 py-1 text-sm ${view === key ? "bg-accent text-white" : "bg-line/60"}`}>
+    <Link key={key} href={`/admin/notices?view=${key}`} aria-current={view === key ? "page" : undefined} className={` px-3 py-1 text-sm ${view === key ? "bg-accent text-white" : "bg-line/60"}`}>
       {label}
     </Link>
   );
@@ -61,7 +61,7 @@ export default async function NoticesPage({ searchParams }: { searchParams: Sear
                 </div>
                 <details className="mt-1 text-sm">
                   <summary className="cursor-pointer text-accent">Content to send</summary>
-                  <div className="mt-1 rounded-lg bg-background p-2 text-sm">
+                  <div className="mt-1 bg-background p-2 text-sm">
                     {content.subject ? (
                       <p>
                         <strong>Subject:</strong> {content.subject}

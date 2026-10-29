@@ -262,10 +262,10 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <ul className="divide-y divide-line text-sm">
             {o.changes.map((c) => (
               <li key={c.id} className="py-1.5">
-                <span className="text-xs text-muted">{fmtDate(c.at, tz)}</span> · {c.kind.replace(/_/g, " ")} {c.priorQty != null ? `${c.priorQty} → ${c.currentQty ?? "?"}` : ""}{" "}
+                <span className="text-xs text-muted">{fmtDate(c.at, tz)}</span> · {c.kind.replace(/_/g, " ")} {c.priorQty != null ? `${c.priorQty} to ${c.currentQty ?? "?"}` : ""}{" "}
                 {c.proposedPriceCents != null && c.priorPriceCents !== c.proposedPriceCents ? (
                   <Badge tone="warn">
-                    price {formatCents(c.priorPriceCents)} → {formatCents(c.proposedPriceCents)}
+                    price {formatCents(c.priorPriceCents)} to {formatCents(c.proposedPriceCents)}
                   </Badge>
                 ) : null}{" "}
                 <StatusBadge value={c.policyStatus ?? "applied"} /> {c.reason ? <span className="text-muted">— {c.reason}</span> : null}
@@ -283,7 +283,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
               <li key={n.id} className="py-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span>
-                    <strong>{NOTICE_PURPOSE_LABEL[n.purpose] ?? n.purpose}</strong> v{n.version} → {n.recipientEmail ?? <span className="text-danger">no recipient email</span>}
+                    <strong>{NOTICE_PURPOSE_LABEL[n.purpose] ?? n.purpose}</strong> v{n.version} to {n.recipientEmail ?? <span className="text-danger">no recipient email</span>}
                   </span>
                   <StatusBadge value={n.state} />
                 </div>

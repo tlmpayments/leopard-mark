@@ -42,7 +42,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
       <Flash {...flash} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {tiles.map(([label, n, href]) => (
-          <Link key={label} href={href} className="rounded-xl border border-line bg-card p-3 hover:bg-background">
+          <Link key={label} href={href} className="border border-rule bg-card p-3 hover:bg-background">
             <div className="text-2xl font-semibold">{n}</div>
             <div className="text-xs text-muted">{label}</div>
           </Link>
@@ -79,7 +79,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
       <Card title="Not yet built (later phases)">
         <ul className="grid gap-1 text-sm sm:grid-cols-2">
           {cc.notBuilt.map((n) => (
-            <li key={n.label} className="flex items-center justify-between rounded-lg border border-dashed border-line px-2 py-1">
+            <li key={n.label} className="flex items-center justify-between border-t border-rule px-2 py-1">
               <span>{n.label}</span>
               <Badge>phase {n.phase}</Badge>
             </li>

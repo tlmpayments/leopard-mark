@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Badge, Button, Card, Flash, Notice, Page, Select, Table, fmtDay } from "@/components/ui";
+import { Button, Card, FilterBar, Flash, Notice, Num, Page, Select, Table, fmtDay } from "@/components/ui";
+import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -26,8 +27,8 @@ export default async function KegsPage({ searchParams }: { searchParams: SearchP
   return (
     <Page title="Keg balances" subtitle="Per account by size, counts only (8.4): balance = kegs out minus kegs in. Deliveries and empties collected at the stop post automatically; opening balances and adjustments are entered here.">
       <Flash {...flash} />
-      <form className="flex flex-wrap items-center gap-2" role="search">
-        <Select name="market" defaultValue={marketId ?? ""} aria-label="Market" className="max-w-xs">
+      <FilterBar>
+        <Select name="market" defaultValue={marketId ?? ""} aria-label="Market">
           <option value="">All markets</option>
           {markets.map((m) => (
             <option key={m.id} value={m.id}>
@@ -35,42 +36,45 @@ export default async function KegsPage({ searchParams }: { searchParams: SearchP
             </option>
           ))}
         </Select>
-        <Select name="open" defaultValue={onlyOpen ? "1" : "0"} aria-label="Which accounts" className="max-w-xs">
+        <Select name="open" defaultValue={onlyOpen ? "1" : "0"} aria-label="Which accounts">
           <option value="1">Only open balances</option>
           <option value="0">Every account with keg events</option>
         </Select>
-        <Button variant="secondary">Filter</Button>
-      </form>
-      <Card title={`Balances (${balances.length} account${balances.length === 1 ? "" : "s"}; ${totals.half} × 1/2 bbl and ${totals.sixtel} × 1/6 bbl out)`}>
-        <Table
-          caption="Keg balances by account"
-          head={["Account", "Market", "Kind", "1/2 out", "1/2 in", "1/2 balance", "1/6 out", "1/6 in", "1/6 balance", "Last event"]}
-          rows={balances.map((b) => [
-            <Link key="a" href={`/kegs/${b.locationId}`} className="font-medium hover:underline">
-              {b.tradeName}
-            </Link>,
-            marketCode.get(b.marketId) ?? "",
-            b.kind,
-            String(b.halfOut),
-            String(b.halfIn),
-            <strong key="hb" className={b.halfBalance < 0 ? "text-warn" : ""}>{b.halfBalance}</strong>,
-            String(b.sixtelOut),
-            String(b.sixtelIn),
-            <strong key="sb" className={b.sixtelBalance < 0 ? "text-warn" : ""}>{b.sixtelBalance}</strong>,
-            fmtDay(b.lastEventOn),
-          ])}
-        />
-        <p className="mt-2 text-xs text-muted">Distributors remit keg deposits to MicroStar; retail accounts carry the $35 per-keg deposit on the invoice (3.10). The monthly MicroStar outbound report is under Reports.</p>
-      </Card>
+        <Button variant="secondary" small>
+          Filter
+        </Button>
+        <span className="ml-auto text-xs text-ink-3">
+          {balances.length} account{balances.length === 1 ? "" : "s"}, {totals.half} × 1/2 bbl and {totals.sixtel} × 1/6 bbl out
+        </span>
+      </FilterBar>
+      <Table
+        caption="Keg balances by account"
+        head={["Account", "Market", "Kind", "1/2 out", "1/2 in", "1/2 balance", "1/6 out", "1/6 in", "1/6 balance", "Last event"]}
+        widths={[LIST_WIDTHS.number, "6rem", LIST_WIDTHS.type, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.date]}
+        align={["left", "left", "left", "right", "right", "right", "right", "right", "right", "left"]}
+        empty="No keg balances yet; opening counts are entered below."
+        rows={balances.map((b) => [
+          <Link key="a" href={`/kegs/${b.locationId}`} className="font-medium text-navy hover:underline">
+            {b.tradeName}
+          </Link>,
+          marketCode.get(b.marketId) ?? "",
+          b.kind,
+          <Num key="ho">{String(b.halfOut)}</Num>,
+          <Num key="hi">{String(b.halfIn)}</Num>,
+          <Num key="hb" className="font-semibold">{String(b.halfBalance)}</Num>,
+          <Num key="so">{String(b.sixtelOut)}</Num>,
+          <Num key="si">{String(b.sixtelIn)}</Num>,
+          <Num key="sb" className="font-semibold">{String(b.sixtelBalance)}</Num>,
+          <span key="d" className="whitespace-nowrap">{fmtDay(b.lastEventOn)}</span>,
+        ])}
+      />
+      <p className="text-xs text-ink-3">Distributors remit keg deposits to MicroStar; retail accounts carry the $35 per-keg deposit on the invoice (3.10). The monthly MicroStar outbound report is under Reports. Counts only, no serial numbers.</p>
       {canRecord ? (
         <Card title="Record an opening balance or adjustment">
           <KegEventForm locations={locations.map((l) => ({ id: l.loc.id, label: `${l.loc.tradeName} (${l.market.code})` }))} returnTo="/kegs" today={todayIso()} />
           <Notice tone="info">Balances start at zero at cut-over (8.5); enter each account&apos;s opening count from the keg sheet. Adjustments above a quantity need approval (8.7): record the approver in the note.</Notice>
         </Card>
       ) : null}
-      <p className="text-xs text-muted">
-        Per-account history: open an account above. <Badge>Counts only, no serial numbers.</Badge>
-      </p>
     </Page>
   );
 }

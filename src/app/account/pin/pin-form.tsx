@@ -10,7 +10,7 @@ export function PinForm({ action, first }: { action: (prev: FormState, form: For
   return (
     <form action={formAction} className="space-y-4">
       {state.error ? (
-        <div data-flash="error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+        <div data-flash="error" role="alert" className=" bg-danger-soft px-3 py-2 text-sm text-danger">
           {state.error}
         </div>
       ) : null}
