@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Agent worktrees and local tooling never lint with the app.
+    ".claude/**",
+    "tools/**",
   ]),
 ]);
 

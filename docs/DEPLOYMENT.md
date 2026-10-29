@@ -26,6 +26,12 @@ Employees sign in with their **company email + PIN**; no identity provider is re
 Do **not** set `DEV_AUTH_BYPASS`, `FV_DEMO` or a `TEST_DATABASE_URL` on any Vercel environment. Preview
 deployments use `FV_ENV=development` or `test` with their own database; they still refuse fixture access.
 
+**Request body size**: `next.config.ts` sets `experimental.serverActions.bodySizeLimit` to `8mb` so the
+in-app workbook import can receive the TLM Master File export through a server action (the export is a few
+hundred KB today). No other route accepts an upload. The PDF routes stream stored bytes and need no setting.
+`@react-pdf/renderer` and `exceljs` run in the Node.js runtime on Vercel (the document routes declare
+`runtime = "nodejs"`); nothing runs at the edge.
+
 ## 2. Isolated test / demo / live data and credentials
 
 | Environment | Database | Sign-in | Provider keys |
@@ -44,9 +50,22 @@ the Integrations page shows the mode and the verified account id, and provider r
 ## 3. Forward migrations, upgrade verification, recovery
 
 Migrations are forward-only SQL files in `drizzle/` applied with `npm run db:migrate` (recorded once in
-`drizzle.__drizzle_migrations`; re-running is a no-op). **`0003_pin_signin`** adds the `employee_credential`
-table (PIN hashes, lockout state, history) — purely additive, no preflight needed; upgraded employees have no
-PIN until an Owner/Admin sets one. The hardening revision added **`0002_hardening`**:
+`drizzle.__drizzle_migrations`; re-running is a no-op). **`0004_shipments`** (the fifth migration, October 28)
+carries the shipments module: twelve new enums, 24 new tables (`shipment`, `shipment_line`,
+`shipment_allocation`, `shipment_document` with the PDF as `bytea`, `shipment_order`, `shipment_keg_pickup`,
+`shipment_receipt` and lines, `bol_counter`, `brew_batch`, `lot`, `lot_sku_qty`, `invoice`, `invoice_line`,
+`invoice_shipment`, `doc_counter`, `price_override`, `sku_alias`, `pos_item`, `company_settings`, `keg_event`,
+`count_session`, `count_line`, `import_run`), new nullable or defaulted columns on `market` (terms, deposits,
+COD, region list), `warehouse` (origin code, lot facility code, kind, address fields, hours, dock / liftgate /
+appointment, shipping contact; `market_id` becomes nullable), `customer_location` (kind, served-by, legacy id,
+deposit mode, terms override, fulfilment, pallet rule, receiving requirements, region), `sku` (UPCs, pallet
+fraction, recipe variant, shelf life) and `stock_movement` (lot and shipment references), plus the
+`shipment_out` and `count` movement kinds. It is **additive with no preflight block**; it is applied through
+`/setup` with the setup token exactly like the earlier migrations, after the same snapshot. The apply step also
+seeds the single `company_settings` row, the INV and NC counters (last numbers 375 and 1 for 2026) and the four
+POS items when they are missing (`seedShipmentDefaults`, idempotent). **`0003_pin_signin`** adds the
+`employee_credential` table (PIN hashes, lockout state, history) — purely additive, no preflight needed;
+upgraded employees have no PIN until an Owner/Admin sets one. The hardening revision added **`0002_hardening`**:
 
 * new columns (decision withdrawal, identity retirement, job claim/waiting, notice workflow, provider
   account binding, payer assignment, submission payload hash, occurrence detail);
@@ -153,11 +172,15 @@ are covered by tests with placeholder values that never leave the process.
 
 ## 8. Activation boundaries (no live finance)
 
-* No live Stripe key until phase 3 acceptance (SD01–SD10/IG09). No invoices, debits, credits or collections
-  exist in this revision; the hosted setup session is the only payer-facing Stripe object, in test mode.
-* No customer notice is sent by the application (D32/IG04 unselected) — the manual single-sender process
-  records outcomes. No Gmail/Slack/OptimoRoute/Google Address/QBO credentials are needed or read for any
-  business effect; setting them changes nothing but the "credentials present" fact.
+* No live Stripe key until phase 3 acceptance (SD01–SD10/IG09). The shipments revision adds **invoice
+  documents** (INV / NC numbers, PDFs, a manual *Mark paid* status) but **no debits, credits or collections**:
+  nothing charges a bank account or card, nothing talks to Stripe about an invoice, and the Stripe adapter is
+  unchanged (customer association and hosted setup session only, no Connect, no Stripe Tax, no Subscriptions).
+  Sending and collection of invoices stay manual (owner question 7.5 open).
+* No customer notice, invoice or document is **emailed** by the application (D32/IG04 unselected; owner
+  decision 9.7) — the manual single-sender process records outcomes, and invoice PDFs are downloaded and sent by a
+  person. No Gmail/Slack/OptimoRoute/Google Address/QBO credentials are needed or read for any business effect;
+  setting them changes nothing but the "credentials present" fact.
 * Production-decision selections are Owner-only; test selections never apply under `FV_ENV=production`.
 
 ## 9. Webhook / OAuth callbacks to register
@@ -183,13 +206,21 @@ are covered by tests with placeholder values that never leave the process.
 
 ## 11. Dependency / security check (actual result, scope)
 
-`npm audit --omit=dev` on the committed lockfile: **0 vulnerabilities** in production dependencies.
-`npm audit` (including dev tooling): 4 moderate advisories, all one chain — `drizzle-kit` →
-`@esbuild-kit/esm-loader` → `esbuild ≤0.24.2` (GHSA-67mh-4wv8-2f99, esbuild's *development server* accepting
-cross-origin requests). `drizzle-kit` is used only by `npm run db:generate` on a developer machine and never
-runs a server, so the advisory does not apply to the deployed application; the fix npm proposes is a
-breaking downgrade of drizzle-kit and was not applied. Re-check with `npm audit` before each release; no
-indiscriminate upgrades were made in this revision.
+At the hardening revision, `npm audit --omit=dev` on the committed lockfile reported **0 vulnerabilities** in
+production dependencies, and `npm audit` (including dev tooling) 4 moderate advisories, all one chain —
+`drizzle-kit` → `@esbuild-kit/esm-loader` → `esbuild ≤0.24.2` (GHSA-67mh-4wv8-2f99, esbuild's *development
+server* accepting cross-origin requests). `drizzle-kit` is used only by `npm run db:generate` on a developer
+machine and never runs a server, so that advisory does not apply to the deployed application.
+
+Re-run on **October 28, 2026** against the same lockfile with the shipments dependencies added
+(`@react-pdf/renderer`, `exceljs`): `npm audit --omit=dev` now reports **6 advisories in production
+dependencies** (1 critical, 3 high, 2 moderate) because the advisory database has moved on since the last
+check: `next` 16.0.0 to 16.4.0 (several advisories; npm's fix is `next@16.4.3`, outside the pinned range),
+`sharp` below 0.35.5, `source-map-js` 1.0.0 to 1.2.1, `zod` below 4.6.6, and `uuid` below 11.1.1 reached through
+`exceljs`. **No dependency was upgraded to address these in the shipments revision**; the maintainer should
+review them, upgrade `next` deliberately with the production build and the full test suite, and record the
+result here before the next release. Re-check with `npm audit` before each release; no indiscriminate upgrades
+were made.
 
 ## 12. Updating production after go-live
 
@@ -206,3 +237,35 @@ of data: Neon branch / point-in-time restore (§4).
 races/upgrade/setup suites against a service container, the migration preflight on the populated baseline,
 the production build, the go-live path on that build against an empty database (`/setup` → first Owner →
 sign-in), then the browser journeys against a fresh local demo (screenshots uploaded as a workflow artifact). Fixture sign-in is enabled only inside that local demo job, never on a deployment.
+
+## 14. Production follow-through for the shipments revision (October 28)
+
+Production (Vercel project `leopard-mark-ops`, Neon) already holds the reference data loaded from the workbook
+by the Python prototype on October 28 (markets, origins, SKUs, prices, accounts; report in
+`tools/import/dry-run-report-2026-10-28.md`). The in-app import uses the same deterministic ids, so it updates
+those rows rather than duplicating them. After this revision deploys:
+
+1. **Snapshot** the Neon database (branch or restore point), as before every migration.
+2. **Apply migration `0004_shipments`** from `/setup` with the setup token (section 3). The state card lists it
+   as pending before and applied after; the same step seeds company settings, the INV / NC counters and the POS
+   items. The app keeps serving the previous schema until this is done; the shipments pages need it.
+3. **Run the in-app import**: an Admin or the Owner uploads the current `.xlsx` export under *Import from
+   workbook* and reads the dry run; the **Owner applies** it. Expected effects on the production data: origin
+   codes, kinds and lot facility codes set on the existing origins; the Prost and Real Ale origins created
+   without a market; served-by and active flags set on the San Francisco accounts inside the distributor's
+   territory; people created by name only (no emails, no PINs, no invitations); legacy shipments, invoices,
+   batches and lots written as history that never touches the ledger. A second dry run of the same file must
+   report zero creates and zero updates.
+4. **Verify origins and counters**: under *Markets & stock* every active origin that will ship shows its
+   three-letter code (EBB, BWD, PRO, RTB, ALE, JAB, RAL, EWD, WLA, RAD) and every brewery its two-digit lot
+   facility code; Radford shows 31 Plymouth St, Mansfield, MA 02048; Envision and SC Warehouses are inactive
+   with no code. Confirm one test shipment on a scratch date only if the Owner agrees, since the number it takes
+   is permanent; otherwise confirm the counters by reading the next INV / NC numbers on the first real issue
+   (INV26376, NC26002).
+5. **Company settings**: the Owner reviews the shipper block, office address, AR email, footers and NMFC status
+   (left *proposed* until signed off, 6.6) before the first documents print.
+6. **Opening counts** per origin with lot codes (one origin at a time, Richmond first, 10.4) and **opening keg
+   balances** per account (8.5) are entered by hand; the workbook's inventory figures are not imported (1.6).
+7. **Open items** that remain open after this step and must not be guessed in data entry: 4.5 (packaging that
+   spans two dates), 7.5 (sending and collection of invoices stay manual), the Envision / SC Warehouses part of
+   2.3, and section 11 beyond 11.1 (on hold, not built). No step above sends an email or touches Stripe.

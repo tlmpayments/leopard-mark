@@ -4,8 +4,10 @@ Reported per the brief §51/§58 and the hardening prompt §8: **implemented sup
 behaviour**, **unresolved policy**, **unproven provider capability**, **incomplete acceptance** and
 **deferred/future scope** are listed separately. Nothing below claims a provider integration complete
 because a request was sent, and no production data is populated with guessed policy or fictitious history.
-Revision: branch `hardening/phase1` on top of baseline `884684c`; migrations `0002_hardening` and `0003_pin_signin` added.
-The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is in `TRACEABILITY.md`.
+Revision: branch `hardening/phase1` on top of baseline `884684c`; migrations `0002_hardening` and `0003_pin_signin` added,
+then `0004_shipments` for the shipments module of October 28, 2026 (owner decisions in `SHIPMENTS_SPEC.md`).
+The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is in `TRACEABILITY.md`
+(section 5 for the shipments build).
 
 ## 1. Implemented support (built and tested in this repository)
 
@@ -109,10 +111,73 @@ The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is 
 * Dates in the market timezone with zone labels; date-only facts unshifted; technical errors masked with a
   logged reference (UX-10).
 
+### Shipments, lots, documents, invoices, kegs, counts, settings, import (Oct 28 revision)
+Built from the owner's answers of October 28, 2026 (`SHIPMENTS_SPEC.md`, question numbers in brackets) and
+tested in `tests/scenarios/shipments.test.ts`, `documents.test.ts`, `import.test.ts` and browser journey 12.
+* **Origins** (2.2, 2.3, 2.11): the `warehouse` record carries a unique three-letter origin code, a two-digit
+  lot facility code for breweries, a kind (brewery, warehouse, cold storage), structured address, hours, dock /
+  liftgate / appointment flags and a shipping contact; the market is optional (Prost, Real Ale). Edited by
+  Admin in the origins editor; the confirmed code list lives in `src/lib/domain/origins/service.ts`.
+* **Accounts** (2.4 to 2.6, 2.10, 3.9, 3.10, 7.4): kind, served-by distributor (a direct shipment to a served
+  account needs an override reason), legacy ACC- id, fulfilment (delivery or will-call), deposit mode and
+  per-keg override, terms override, pallet rule, receiving requirements, per-account price overrides with a
+  reason. Market billing rules: terms days, retail and distributor keg deposit, COD, region list.
+* **Catalog** (3.1 to 3.8): SKU details for documents (UPC case / retail / unit, weight, pallet fraction, recipe
+  variant, shelf life), legacy and dotted code aliases that resolve to the active SKU and are never selectable,
+  archived SKUs refused on shipment lines, POS items (no lot, no price, no ledger effect).
+* **Lots and batches** (4.1 to 4.4, 4.6 to 4.10): brew batches with status, reason and date; the one-page
+  packaging report computes the lot code (facility 2 digits + brand 3 letters + yymmdd + run) and stores
+  quantities per SKU; lots with unknown quantities are offered in the picker flagged "quantities unconfirmed",
+  the line must carry a reason, and one `lot_quantities_unconfirmed` case opens per lot until the host's
+  figures are confirmed; dotted legacy lots never appear in pickers; lot age is internal only.
+* **Shipments** (5.1 to 5.13): types D / T / S, will-call pickup as D with the pickup flag; draft, lines,
+  confirmation that assigns `ORIGIN-TYPE-YYMMDD-SEQ` from a per-origin, per-scheduled-date counter inside the
+  transaction, allocates stock (availability for orders subtracts active shipment allocations), captures prices
+  and stores the BOL and picking ticket; optional staged and out; delivery on the actual date set by the office
+  writes `shipment_out` (transfers: `transfer_out` and in transit at the destination), posts the keg event and
+  issues the invoice; void keeps the number as a gap, releases allocations and voids the draft invoice;
+  logistics edits after confirmation never renumber and regenerate the documents with a revision mark; transfers
+  are received at the destination with counts and a `receiving_discrepancy` case when they differ; the day
+  pull sheet aggregates an origin's confirmed shipments by SKU and lot; orders can be linked at creation; legacy
+  BOL documents are imported as delivered history that never touches the ledger.
+* **Documents** (6.1 to 6.10): server-side PDFs with `@react-pdf/renderer` from JSON snapshots stored at
+  confirmation and issue (`shipment_document`, PDF as `bytea`); distributor / freight BOL (PO, appointment,
+  carrier, seal and trailer, pallet count and build, case UPCs, lot per line, weights, freight class, NMFC once
+  approved, fixed keep-cold line, distributor footer), retail delivery receipt (window, receiving instructions,
+  lot per line, empty-keg pick-up by size, signatures, retail footer), picking ticket, day pull sheet, invoice,
+  pickup pack (BOL plus invoice in one PDF), batch print per origin and date; VOID and `R<n>` marks; shipper
+  block and footers from company settings; no arrow characters printed. Documents stored without PDF bytes are
+  rendered from their snapshot when opened.
+* **Invoices** (7.1 to 7.4, 7.6 to 7.10): INV and NC series from `doc_counter` (next INV26376 and NC26002); a
+  draft per shipment at confirmation, issued at delivery dated the actual date; pickups issued at confirmation
+  and re-dated at delivery without renumbering; "add to open invoice" for the same account within the week;
+  samples never share a charged invoice; terms from the account override else the market rule; retail keg
+  deposit line at the market rate unless floating or none; distributor invoices with no deposit, the wording
+  "FOB brewery or designated warehouse" and a MicroStar information line; mark paid (manual status); void keeps
+  the number as a gap; legacy Sales rows imported read-only with the Sheet's status text.
+* **Kegs** (8.4 to 8.7): balance per account by size, counts only; deliveries and empties collected post
+  automatically from the shipment; opening balances, adjustments and stand-alone pickups by hand with a note;
+  MicroStar monthly outbound report per distributor or per brewery, on screen and CSV.
+* **Stock counts** (8.1, 8.2, 1.6): count sheets per origin with lot codes; applying one sets on hand to the
+  counted total with `count` movements and keeps a zero-delta movement per lot line for later per-lot balances.
+* **Company settings** (6.1, 6.2, 6.6, 4.7, 7.9): one Owner-editable row for the shipper block, office address,
+  AR email, footers, fixed lines, NMFC and status, marking convention, remit-to; counters and POS items seeded
+  at `/setup`.
+* **Import** (9.x, 10.x): in-app upload of the TLM Master File export, dry run with a diff per entity, Owner
+  approval, apply in one transaction with deterministic ids (idempotent, never deletes, every row audited under
+  the run id); PINs, emails and inventory figures are never imported; no email is sent by any flow.
+* **Access** (9.3 to 9.6): `shipment.*`, `lot.*`, `invoice.*`, `keg.*`, `count.record`, `settings.manage`
+  (Owner only), `import.dry_run`, `import.apply` (Owner only), `report.export` in the action catalog; Admin
+  confirms, delivers, voids and receives; Accounting issues and voids invoices; Sales views in its market;
+  Driver / Service sees only assigned stops; every confirmation, delivery, void, count and import writes audit.
+* Migration `0004_shipments` (additive, no preflight) and `experimental.serverActions.bodySizeLimit = 8mb` for
+  the upload; dependencies `@react-pdf/renderer` and `exceljs`.
+
 ### Development demo mode (local inspection only)
 * `npm run demo`: embedded PGlite under `.fv-demo/` with the production migrations, seeded through the real
   domain services, auto-signed in as the demo Owner, DEVELOPMENT DEMO MODE banner, friendly local URL.
-  Impossible on a deployment (guards tested). Providers are never mocked as successful.
+  Impossible on a deployment (guards tested). Providers are never mocked as successful. The demo warehouses
+  carry no origin codes; journey 12 sets East Brother to `EBB` / lot facility `01` through the origins editor.
 
 ### Provider adapters (build-versus-activate)
 | Provider | Built | Credentials | Connection verified | Capability demonstrated | Authorized live | Production-ready |
@@ -137,6 +202,14 @@ exists · license verification required before applicable first delivery (all ma
 otherwise) · closure keeps all obligations · shortage/minimum/discrepancy/notice cases resolve when their
 cause goes · unsent notices withdrawn when their order is cancelled · audit on every material change.
 
+Shipments build (owner decisions of October 28, operating automatically): shipment number assigned once at
+confirmation from the origin + scheduled-date counter and never changed · lot required on every beer line ·
+stock allocated at confirmation and consumed at delivery on the actual date · invoice draft at confirmation,
+issued at delivery (pickups at confirmation, re-dated at delivery) · terms from the account override else the
+market rule (Net 30) · retail keg deposit at the market rate ($35), none for distributors, FOB wording and
+MicroStar line on distributor invoices · keg balance posted from every delivered shipment · void keeps every
+number as a gap · documents regenerated with a revision mark after any edit.
+
 ## 3. Unresolved policy (kept unselected; affected branches inactive)
 
 All 35 D, 10 SD, 10 T and 11 IG records are unselected. Branches this revision actively guards:
@@ -158,6 +231,19 @@ All 35 D, 10 SD, 10 T and 11 IG records are unselected. Branches this revision a
 | D32 / IG04 | Notices recorded for the manual process; no automated send |
 | D33 | Seller context per market must be Owner-confirmed |
 
+Owner question list of the shipments build (October 28): items still blank from the owner, left as plain
+fields or flagged exceptions rather than guessed.
+
+| Question | How the code behaves while open |
+|---|---|
+| 4.5 packaging that spans two dates | The packaging report takes one packaging date and one run character; a run that spans two dates is entered under the date the host reports, with the fact in the notes. No two-date rule exists in the lot code or the picker |
+| 7.5 sending and collection of invoices | Invoices are issued, numbered and rendered; nothing emails them and nothing records a payment with a provider. *Mark paid* is a manual status with a note. The AR sender address is a setting that prints only; no Stripe or QuickBooks path exists |
+| 2.3 Envision / SC Warehouses | Both origins are imported **inactive** with no origin code and no lot facility code; they cannot be chosen as an origin or confirmed until the Owner decides and an Admin activates them with a code. Radford is active as the MA warehouse |
+| 6.4 exact deposit / CRV wording | The distributor footer and the retail footer are settings seeded with placeholder wording and marked as such; they print as set until the owner's example arrives |
+| 6.6 NMFC | Stored as *proposed*; printed on distributor documents only once the Owner sets the status to *approved* |
+| 4.8 day counts to supply | `shelf_life_days` exists on the SKU, is not imported and is null until an Admin enters the owner's day counts on the catalog page; lot age is shown internally only and nothing about age or best-by prints |
+| Section 11 beyond 11.1 | On hold, not built; no table, route or action exists for it |
+
 ## 4. Unproven provider capability
 
 Every capability gate is `unproven` (Integrations page). No connection check has been recorded for any
@@ -175,16 +261,27 @@ fit; Google content rights; QBO model; Slack no-mutation. A person records demon
 | AT61/AT62 identity lifecycle | PIN sign-in tests, fixture-based rename / offboard / reuse / disable-mid-session tests, journeys 7 and 10 | the same flows with real staff accounts and the `ACCESS_*` gates recorded |
 | AT74 billing-contact/notice consequences | request/approve/replay (`AC28`), past recipients untouched | future-notice recipient handling is exercised only for the two notice purposes that exist (order received, setup invitation); invoice notices are phase 3 |
 | AT79/AT80 Owner authority and visibility | REV-01/REV-11 tests, role matrix, journeys 7–8 | field (driver) visibility is proven as *exclusion* only — the assigned-execution view is phase 2 |
-| Provider setup completion, finance, POD, delivery, keg credits, cleaning, formal accounting, production migration | boundary tests only | not built; screens say so |
-| Staff usability | nine automated journeys with fictional data (`tests/ui/journeys.mjs`) | a real staff session (`STAFF_SESSION_SCRIPT.md`) has **not** been run |
-| Backup/restore drill, Neon branch upgrade, Vercel cron visibility | upgrade of the populated baseline on a local Postgres 16 | the drill in `DEPLOYMENT.md` §4 needs the Neon project — **not run** |
+| Provider setup completion, finance (debits, credits, collections), POD, cleaning, formal accounting | boundary tests only | not built; screens say so |
+| Shipment documents (BOL, picking ticket, pull sheet, pickup pack, invoice, batch print) | `documents.test.ts`: every template renders to a PDF with the expected text (numbers, VOID, R1, PO / carrier / pallet / NMFC fields, deposit and FOB lines, page counts); route handlers serve stored bytes or re-render from the snapshot; journey 12 fetches the BOL, picking ticket, batch print and invoice PDFs | PDFs are checked for **structure and content, not visually signed off** by the office; **no real printer or carrier has validated** the freight BOL; the deposit / CRV wording (6.4) and NMFC (6.6) are placeholders awaiting the owner |
+| Shipment numbering under load | `shipments.test.ts` Acceptance 1 (sequential on PGlite) | the `bol_counter` upsert serialises concurrent confirmations by design, but no real-Postgres race test exists for it yet |
+| Pallet count (3.7, 5.9) | pallet count and build are fields on the shipment and print on the BOL | the count is **not computed from the SKU pallet fraction** yet; the office types it |
+| Order linkage (5.1) | `shipment_order` rows written at creation | orders can be linked **only when the draft is created**; no later link, no fulfilment status flows back to the order |
+| Workbook import (9.x, 10.x) | `import.test.ts` against a **synthetic** workbook built in `tests/support/workbook.ts` (dry run, Owner apply, idempotent second run, edited workbook, every decision field), plus **one dry run** of the Python prototype against the production data (`tools/import/dry-run-report-2026-10-28.md`) | the in-app import has **not yet been applied to production**; the real-export test runs only on the owner's machine (`TLM_WORKBOOK_PATH`) and is skipped in CI |
+| Keg balances (8.4, 8.5) | automatic posting from delivery, opening balances, MicroStar report (`shipments.test.ts` 8.x; journey 12) | opening balances for real accounts are not entered; no MicroStar serial tracking (counts only, by design) |
+| Staff usability | twelve automated journeys with fictional data (`tests/ui/journeys.mjs`) | a real staff session (`STAFF_SESSION_SCRIPT.md`) has **not** been run; the shipments screens have not been used by the office |
+| Backup/restore drill, Neon branch upgrade, Vercel cron visibility | upgrade of the populated baseline on a local Postgres 16 (`tests/postgres/upgrade.test.ts` applies every migration in `drizzle/`, 0004 included, under `TEST_DATABASE_URL`; skipped in the PGlite-only run) | the drill in `DEPLOYMENT.md` §4 needs the Neon project — **not run**; 0004 has not yet been applied to the production database |
 
 ## 6. Deferred / future scope
 
-Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Phase
-2–4 workflows and phase 6 metrics — not built; bounded skeleton tables (`delivery_visit`,
-`delivery_visit_line`, `invoice_obligation`, `keg_movement`, `cleaning_obligation`) exist so phase-1 views can
-state "none yet" truthfully. No Connect, Stripe Tax, Subscriptions, new vendors, WMS or generic ERP.
+Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
+phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution
+view beyond assigned stops, proof of delivery, line cleaning / service (10.7), credits and collections, host
+logins, raw materials (8.10), TTB removal records (8.9), QC holds (8.3), Texas (Reyes) and Rhode Island, the
+nightly push of an export workbook to Google Sheets (10.9), and section 11.2 to 11.7 (on hold). Phase 6
+metrics beyond the MicroStar report — not built. The bounded skeleton tables (`delivery_visit`,
+`delivery_visit_line`, `invoice_obligation`, `keg_movement`, `cleaning_obligation`) remain so the earlier
+views can state "none yet" truthfully; the live records are `shipment`, `invoice` and `keg_event`. No Connect,
+Stripe Tax, Subscriptions, new vendors, WMS or generic ERP.
 
 ## 7. Coverage map (brief §53/§58 + hardening §6)
 
@@ -202,12 +299,19 @@ state "none yet" truthfully. No Connect, Stripe Tax, Subscriptions, new vendors,
 | REV-12/13/14/15/18, §4.7/§4.8 · AC19–AC23, AC27, AC29, AC30 | tests/scenarios/rev-provider-queue-notices | provider facts, account binding, waiting work, fencing, intake, notices, follow-through |
 | UX-04/UX-10 · AC31, AC35, AC36 | tests/scenarios/ux-presentation | status mapping, timezone/DST, error masking |
 | Review fixes (revision 1) | tests/scenarios/review-fixes | override scope, policy scope, jobs, amendment reassessment, market scope, identity integrity |
-| **Real Postgres** · AC07/08/10/11/12/22/23/28, AC37 | tests/postgres/races, tests/postgres/upgrade | `TEST_DATABASE_URL`; populated baseline `884684c` upgraded and preflight refusal |
-| Journeys 1–10 · AC03, AC09, AC11–14, AC17, AC18, AC27, AC30, AC32–34, AC38; PIN sign-in | tests/ui/journeys.mjs | `npm run test:ui`; screenshots + timings |
-| AT14–AT60, AT63–AT73, AT75–AT78, AT81–AT84 | not yet | phases 2–4 |
+| Shipments acceptance 1–5, 8, 9 · owner questions 1.7, 2.2, 2.6, 3.4, 4.x, 5.x, 7.x, 8.x, 9.4–9.6 | tests/scenarios/shipments | lot codes and picker, numbering, confirmation guards, allocate / void / deliver, pickup invoicing and market scoping, transfers, invoices and counters, counts / kegs / MicroStar, access and audit (17 tests) |
+| Shipments acceptance 6 · owner questions 6.1–6.10 | tests/scenarios/documents | formatting rules (no arrows), every template to PDF, VOID and R1, pickup pack, pull sheet and batch print, route handlers (13 tests) |
+| Shipments acceptance 7 · owner questions 9.x, 10.x | tests/scenarios/import | synthetic workbook: parse, dry run, Owner apply, every decision field, idempotent second run, edited workbook, rejection (13 tests); the real-export test is gated by `TLM_WORKBOOK_PATH` |
+| **Real Postgres** · AC07/08/10/11/12/22/23/28, AC37, setup page | tests/postgres/races, tests/postgres/setup, tests/postgres/upgrade | `TEST_DATABASE_URL`; populated baseline `884684c` upgraded and preflight refusal (11 tests) |
+| Journeys 1–11 · AC03, AC09, AC11–14, AC17, AC18, AC27, AC30, AC32–34, AC38; PIN sign-in; setup page | tests/ui/journeys.mjs | `npm run test:ui`; screenshots + timings |
+| Journey 12 · shipments end to end | tests/ui/journeys.mjs | origin code and lot facility code, packaging report, draft with lines, confirmation assigns `EBB-D-YYMMDD-SEQ`, BOL / picking ticket / batch print PDFs, delivery issues the INV invoice and posts the keg pickup, invoice PDF, keg balance, Sales view-only, driver refused |
+| AT14–AT60, AT63–AT73, AT75–AT78, AT81–AT84 | not yet | the remaining phase 2–4 scenarios (route execution, POD, service, credits and collections) |
 
-94 PGlite tests (`npm test`), 10 real-Postgres tests (`npm run test:pg`), 10 browser journeys (`npm run test:ui`)
-were green on the delivered revision; results and commands are recorded in `HARDENING_REPORT.md`.
+At the hardening revision 94 PGlite tests, 10 real-Postgres tests and 10 browser journeys were green; results and
+commands are recorded in `HARDENING_REPORT.md`. On the shipments revision (October 28) `npm test` reports
+**137 passed and 12 skipped** (16 test files passed, the 3 real-Postgres files skipped; the skips are the 11 real-Postgres tests, which need
+`TEST_DATABASE_URL`, and the real-workbook import, which needs `TLM_WORKBOOK_PATH`); `npm run test:ui` runs
+**12 journeys**.
 
 ## 8. Independent review history
 

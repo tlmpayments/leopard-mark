@@ -80,7 +80,9 @@ export default async function NewLotPage({ searchParams }: { searchParams: Searc
         <Card title="Quantities packaged per SKU (blank = not in this run)">
           {skuBrands.map((brand) => (
             <div key={brand} className="mb-3">
-              <div className="mb-1 text-xs uppercase tracking-wide text-muted">{brand} · {BRAND_CODES.find((b) => b.code === brand)?.name ?? ""}</div>
+              <div className="mb-1 text-xs uppercase tracking-wide text-muted">
+                {brand} · {BRAND_CODES.find((b) => b.code === brand)?.name ?? activeSkus.find((s) => brandCodeForSku(s.code) === brand)?.brand ?? ""}
+              </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {activeSkus
                   .filter((s) => brandCodeForSku(s.code) === brand)

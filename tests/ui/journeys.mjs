@@ -609,6 +609,154 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await ctx.close();
 }
 
+// ---------------- 12. Shipments: origin code, packaging report, draft → confirm (number) → BOL PDF → deliver → invoice ----------------
+{
+  const j = journey("12 Shipments — origin code, packaging lot, draft with lines, confirm assigns the number, BOL PDF, delivery issues the invoice and posts kegs");
+  const { ctx, page } = await session("Ada Admin");
+  // The app dates documents in Pacific time (todayIso); the journey uses the same day so "today" defaults match.
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
+  j.step("Admin gives East Brother its origin code (EBB) and lot facility code (01) as a brewery");
+  await page.goto(`${BASE}/admin/markets`);
+  const eb = page.locator("details").filter({ has: page.locator("summary", { hasText: /East Brother/ }) }).first();
+  await eb.locator("summary").click();
+  await eb.locator('input[name="originCode"]').fill("EBB");
+  await eb.locator('input[name="lotFacilityCode"]').fill("01");
+  await eb.locator('select[name="kind"]').selectOption("brewery");
+  await act(page, () => eb.getByRole("button", { name: "Save origin" }).click());
+  await expectText(page, /Origin saved/, "origin saved with its code");
+  await page.goto(`${BASE}/admin/markets`);
+  await expectText(page, /EBB · East Brother/, "origin code persisted (re-read)");
+  await shot(page, "j12-01-origins");
+
+  j.step("packaging report records a Cantinesca lot at facility 01 (next free run digit for today)");
+  let lotUrl = "";
+  let lotCode = "";
+  for (const run of "123456789") {
+    await page.goto(`${BASE}/lots/new`);
+    await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /01 · East Brother/);
+    await page.selectOption('select[name="brandCode"]', "CNT");
+    await page.fill('input[name="packagingDate"]', today);
+    await page.fill('input[name="runCode"]', run);
+    await page.getByLabel("CAN-12C quantity").fill("20");
+    await page.getByLabel("CAN-HALF quantity").fill("6");
+    await page.fill('textarea[name="notes"]', "journey packaging sheet");
+    await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
+    if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
+      lotUrl = page.url().split("?")[0];
+      lotCode = (await page.locator("h1").innerText()).replace(/^Lot\s+/, "").trim();
+      break;
+    }
+    const f = await flash(page);
+    if (!/already exists/.test(f ?? "")) {
+      fail(`packaging report refused: ${f}`);
+      break;
+    }
+  }
+  if (lotUrl && /^01CNT\d{6}[0-9A-Z]$/.test(lotCode)) ok(`lot recorded with a computed code (${lotCode})`);
+  else fail(`lot not recorded or code malformed (${lotCode || "none"})`);
+  await expectText(page, /CAN-12C[\s\S]*20/, "quantities packaged shown on the lot");
+  await shot(page, "j12-02-lot");
+
+  j.step("new delivery draft from EBB to Dogpatch Bottle Shop");
+  await page.goto(`${BASE}/shipments/new?type=D`);
+  await selectByLabel(page.locator('select[name="originWarehouseId"]'), /EBB · East Brother/);
+  const originId = await page.locator('select[name="originWarehouseId"]').inputValue();
+  await selectByLabel(page.locator('select[name="destinationLocationId"]'), /Dogpatch Bottle Shop/);
+  await page.fill('input[name="scheduledDate"]', today);
+  await page.fill('input[name="poNumbers"]', `PO-${stamp}`);
+  await act(page, () => page.getByRole("button", { name: "Create draft" }).click());
+  await page.waitForURL(/\/shipments\/[0-9a-f-]{36}/);
+  const shipmentUrl = page.url().split("?")[0];
+  await expectText(page, /Draft created/, "draft created; number not yet assigned");
+  await expectText(page, /Shipment draft|draft/, "draft status visible");
+
+  j.step("lines: two SKUs from the new lot (CAN-SIX was archived in journey 2, so the half barrel); a blank row is ignored");
+  await selectByLabel(page.getByLabel("Row 1 SKU"), /CAN-12C/);
+  await selectByLabel(page.getByLabel("Row 1 lot", { exact: true }), new RegExp(lotCode || "01CNT"));
+  await page.getByLabel("Row 1 quantity").fill("5");
+  await selectByLabel(page.getByLabel("Row 2 SKU"), /CAN-HALF/);
+  await selectByLabel(page.getByLabel("Row 2 lot", { exact: true }), new RegExp(lotCode || "01CNT"));
+  await page.getByLabel("Row 2 quantity").fill("2");
+  await act(page, () => page.getByRole("button", { name: "Save lines" }).click());
+  await expectText(page, /Lines saved/, "lines saved on the draft");
+  await expectNoText(page, /no lot/, "every beer line carries a lot");
+
+  j.step("confirm assigns ORIGIN-TYPE-YYMMDD-SEQ, stores BOL + picking ticket and opens the invoice draft");
+  await act(page, () => page.getByRole("button", { name: /Confirm \(assign number\)/ }).click());
+  const bodyAfterConfirm = await page.locator("body").innerText();
+  const numberMatch = bodyAfterConfirm.match(/Confirmed as (EBB-D-\d{6}-\d{3})/);
+  if (numberMatch) ok(`number assigned: ${numberMatch[1]}`);
+  else fail("confirmation did not report an EBB-D-YYMMDD-SEQ number");
+  const shipmentNumber = numberMatch?.[1] ?? "";
+  await expectText(page, /Bill of lading/, "BOL stored");
+  await expectText(page, /Picking ticket/, "picking ticket stored");
+  await expectText(page, /INV draft/, "invoice draft created at confirmation (7.4)");
+  await expectText(page, /CAN-12C: 5/, "stock allocated at the origin");
+  await shot(page, "j12-03-confirmed");
+
+  j.step("BOL and picking ticket render as PDF for the signed-in user");
+  for (const kind of ["bol", "picking_ticket"]) {
+    const res = await page.request.get(`${shipmentUrl}/documents/${kind}`);
+    const body = await res.body();
+    if (res.status() === 200 && (res.headers()["content-type"] ?? "").includes("application/pdf") && body.subarray(0, 4).toString() === "%PDF") ok(`${kind} is a PDF (${body.length} bytes)`);
+    else fail(`${kind} did not render as PDF (status ${res.status()}, type ${res.headers()["content-type"]})`);
+  }
+  const pull = await page.request.get(`${BASE}/shipments/print?origin=${originId}&date=${today}&kind=all`);
+  if (pull.status() === 200 && (pull.headers()["content-type"] ?? "").includes("application/pdf")) ok("batch print (pull sheet + BOLs + picking tickets) renders for the origin and date");
+  else fail(`pull sheet did not render (status ${pull.status()})`);
+
+  j.step("deliver: office sets the actual date and the empties collected; invoice issued dated the actual date");
+  await page.fill('input[name="actualDate"]', today);
+  await page.fill('input[name="halfIn"]', "1");
+  await act(page, () => page.getByRole("button", { name: "Mark delivered" }).click());
+  await expectText(page, /Delivered .*invoice updated/, "delivery recorded with keg and invoice effects");
+  const bodyAfterDeliver = await page.locator("body").innerText();
+  const invMatch = bodyAfterDeliver.match(/\b(INV\d{5})\b/);
+  if (invMatch) ok(`invoice numbered ${invMatch[1]} (INV + yy + seq)`);
+  else fail("no INV number shown after delivery");
+  await expectText(page, /1 × 1\/2 bbl, 0 × 1\/6 bbl/, "empties collected recorded on the stop");
+  await expectNoText(page, /Confirm \(assign number\)|Mark delivered/, "no further state actions once delivered");
+  await shot(page, "j12-04-delivered");
+
+  j.step("persisted: invoice list, invoice PDF, keg balance, shipment list");
+  await page.goto(`${BASE}/invoices`);
+  if (invMatch) await expectText(page, new RegExp(invMatch[1]), "issued invoice listed");
+  await expectText(page, /Dogpatch Bottle Shop/, "invoice shows the account");
+  const invLink = invMatch ? page.getByRole("link", { name: invMatch[1] }).first() : null;
+  if (invLink) {
+    const href = await invLink.getAttribute("href");
+    const pdf = await page.request.get(`${BASE}${href}/pdf`);
+    const pdfBody = await pdf.body();
+    if (pdf.status() === 200 && pdfBody.subarray(0, 4).toString() === "%PDF") ok("invoice PDF renders");
+    else fail(`invoice PDF did not render (status ${pdf.status()})`);
+    await page.goto(`${BASE}${href}`);
+    await expectText(page, /issued/i, "invoice status issued");
+    await expectText(page, /Keg deposit|deposit/i, "retail invoice carries the keg deposit line (3.10)");
+    await shot(page, "j12-05-invoice");
+  }
+  await page.goto(`${BASE}/kegs`);
+  await expectText(page, /Dogpatch Bottle Shop/, "keg balance row exists for the account");
+  await page.goto(`${BASE}/shipments`);
+  if (shipmentNumber) await expectText(page, new RegExp(shipmentNumber), "shipment listed under its number");
+  await expectText(page, /delivered/, "delivered status in the list");
+  await shot(page, "j12-06-shipments-list");
+
+  j.step("Sales sees the shipment in its market but has no confirm/deliver controls; the driver is refused");
+  const sales = await session("Sam Sales");
+  await sales.page.goto(shipmentUrl);
+  if (shipmentNumber) await expectText(sales.page, new RegExp(shipmentNumber), "Sales (NC) can view the NC shipment");
+  await expectNoText(sales.page, /Void shipment|Regenerate \(next revision\)/, "Sales has no state-changing controls");
+  await sales.ctx.close();
+  const driver = await session("Dee Driver", true);
+  await driver.page.goto(shipmentUrl);
+  await driver.page.waitForURL(/forbidden|not-found|404|\/$/).catch(() => {});
+  await expectNoText(driver.page, /Dogpatch Bottle Shop/, "unassigned driver cannot open the shipment");
+  await driver.ctx.close();
+  j.end();
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nTIMINGS (automated browser, fictional data — not a staff session):");
 for (const t of timings) console.log(`  ${t.name}: ${t.steps} steps, ${t.seconds}s ${t.note}`);
