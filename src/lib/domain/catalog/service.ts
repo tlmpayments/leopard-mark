@@ -134,3 +134,86 @@ export function formatCents(cents: number | null | undefined): string {
   if (cents == null) return "—";
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
+
+// ---------------------------------------------------------------------------
+// SKU details, aliases and per-account price overrides (decisions 3.1, 3.3, 3.7, 3.9, 7.10)
+// ---------------------------------------------------------------------------
+
+export interface SkuDetailsPatch {
+  name?: string;
+  brand?: string;
+  sellingUnit?: string;
+  weightLb?: string | null;
+  upcCase?: string | null;
+  upcRetail?: string | null;
+  upcUnit?: string | null;
+  palletFraction?: string | null;
+  recipeVariant?: string | null;
+  shelfLifeDays?: number | null;
+}
+
+/** Codes are immutable once referenced (3.2); everything else on the SKU record can be maintained by Admin. */
+export async function updateSkuDetails(db: DbOrTx, actor: Actor, skuId: string, patch: SkuDetailsPatch) {
+  authorize(actor, "catalog.manage");
+  const [prior] = await db.select().from(schema.sku).where(eq(schema.sku.id, skuId));
+  if (!prior) throw new Error("SKU not found");
+  const set: Record<string, unknown> = {};
+  for (const k of Object.keys(patch) as Array<keyof SkuDetailsPatch>) if (patch[k] !== undefined) set[k] = patch[k];
+  const [row] = await db.update(schema.sku).set(set).where(eq(schema.sku.id, skuId)).returning();
+  await recordAudit(db, actor, { action: "sku.update", subjectType: "sku", subjectId: skuId, prior: Object.fromEntries(Object.keys(set).map((k) => [k, (prior as Record<string, unknown>)[k]])), current: set });
+  return row;
+}
+
+/** A legacy or dotted code that resolves to an active SKU; searchable, never selectable (3.3, 1.7). */
+export async function upsertSkuAlias(db: DbOrTx, actor: Actor, alias: string, skuId: string, note?: string) {
+  authorize(actor, "catalog.manage");
+  const code = alias.trim().toUpperCase();
+  const [row] = await db
+    .insert(schema.skuAlias)
+    .values({ alias: code, skuId, note: note ?? null })
+    .onConflictDoUpdate({ target: schema.skuAlias.alias, set: { skuId, note: note ?? null } })
+    .returning();
+  await recordAudit(db, actor, { action: "sku.alias", subjectType: "sku", subjectId: skuId, current: { alias: code, note } });
+  return row;
+}
+
+/** Resolve any code (active, legacy alias, dotted) to the SKU row, or null. */
+export async function resolveSku(db: DbOrTx, code: string) {
+  const c = code.trim().toUpperCase();
+  const [direct] = await db.select().from(schema.sku).where(eq(schema.sku.code, c));
+  if (direct) return direct;
+  const [alias] = await db.select().from(schema.skuAlias).where(eq(schema.skuAlias.alias, c));
+  if (!alias) return null;
+  const [s] = await db.select().from(schema.sku).where(eq(schema.sku.id, alias.skuId));
+  return s ?? null;
+}
+
+export async function listSkuAliases(db: DbOrTx) {
+  return db.select().from(schema.skuAlias).orderBy(schema.skuAlias.alias);
+}
+
+/** Per-account price exception with a reason; approval recorded by Owner/Admin (7.10). Closes any open override for the SKU. */
+export async function setPriceOverride(db: DbOrTx, actor: Actor, input: { locationId: string; skuId: string; priceCents: number; reason: string }) {
+  authorize(actor, "price.manage");
+  if (!Number.isInteger(input.priceCents) || input.priceCents < 0) throw new Error("Price must be a whole number of cents");
+  if (!input.reason.trim()) throw new Error("A reason is required for a price exception");
+  await db
+    .update(schema.priceOverride)
+    .set({ effectiveTo: new Date() })
+    .where(and(eq(schema.priceOverride.locationId, input.locationId), eq(schema.priceOverride.skuId, input.skuId), isNull(schema.priceOverride.effectiveTo)));
+  const [row] = await db
+    .insert(schema.priceOverride)
+    .values({ locationId: input.locationId, skuId: input.skuId, priceCents: input.priceCents, reason: input.reason.trim(), approvedByEmployeeId: actor.employeeId, createdByEmployeeId: actor.employeeId })
+    .returning();
+  await recordAudit(db, actor, { action: "price.override", subjectType: "customer_location", subjectId: input.locationId, current: { skuId: input.skuId, priceCents: input.priceCents }, reason: input.reason.trim() });
+  return row;
+}
+
+export async function listPriceOverrides(db: DbOrTx, locationId: string) {
+  return db
+    .select({ o: schema.priceOverride, sku: schema.sku })
+    .from(schema.priceOverride)
+    .innerJoin(schema.sku, eq(schema.sku.id, schema.priceOverride.skuId))
+    .where(and(eq(schema.priceOverride.locationId, locationId), isNull(schema.priceOverride.effectiveTo)))
+    .orderBy(schema.sku.code);
+}
