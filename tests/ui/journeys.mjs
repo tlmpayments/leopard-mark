@@ -634,7 +634,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   let lotCode = "";
   for (const run of "123456789") {
     await page.goto(`${BASE}/lots/new`);
-    await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /01 · East Brother/);
+    await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /01 East Brother/);
     await page.selectOption('select[name="brandCode"]', "CNT");
     await page.fill('input[name="packagingDate"]', today);
     await page.fill('input[name="runCode"]', run);
@@ -644,7 +644,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
     await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
     if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
       lotUrl = page.url().split("?")[0];
-      lotCode = (await page.locator("h1").innerText()).replace(/^Lot\s+/, "").trim();
+      lotCode = (await page.locator("h1 .select-all").innerText()).trim();
       break;
     }
     const f = await flash(page);
@@ -660,7 +660,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
 
   j.step("new delivery draft from EBB to Dogpatch Bottle Shop");
   await page.goto(`${BASE}/shipments/new?type=D`);
-  await selectByLabel(page.locator('select[name="originWarehouseId"]'), /EBB · East Brother/);
+  await selectByLabel(page.locator('select[name="originWarehouseId"]'), /EBB East Brother/);
   const originId = await page.locator('select[name="originWarehouseId"]').inputValue();
   await selectByLabel(page.locator('select[name="destinationLocationId"]'), /Dogpatch Bottle Shop/);
   await page.fill('input[name="scheduledDate"]', today);
@@ -669,7 +669,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await page.waitForURL(/\/shipments\/[0-9a-f-]{36}/);
   const shipmentUrl = page.url().split("?")[0];
   await expectText(page, /Draft created/, "draft created; number not yet assigned");
-  await expectText(page, /Shipment draft|draft/, "draft status visible");
+  await expectText(page, /draft/i, "draft status visible");
 
   j.step("lines: two SKUs from the new lot (CAN-SIX was archived in journey 2, so the half barrel); a blank row is ignored");
   await selectByLabel(page.getByLabel("Row 1 SKU"), /CAN-12C/);
@@ -744,7 +744,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await expectText(page, /Dogpatch Bottle Shop/, "keg balance row exists for the account");
   await page.goto(`${BASE}/shipments`);
   if (shipmentNumber) await expectText(page, new RegExp(shipmentNumber), "shipment listed under its number");
-  await expectText(page, /delivered/, "delivered status in the list");
+  await expectText(page, /Delivered/, "delivered status in the list");
   await shot(page, "j12-06-shipments-list");
 
   j.step("Sales sees the shipment in its market but has no confirm/deliver controls; the driver is refused");
