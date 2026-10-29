@@ -12,6 +12,14 @@ export const MINIMUM_DELIVERY_CENTS = 9000;
 export const NET_TERMS_DAYS = 30;
 
 export type PackageKind = (typeof schema.packageEnum.enumValues)[number];
+export type PriceTier = schema.PriceTier;
+
+/** R2-41: within a market, distributors pay the distributor price and every other account the retail price. */
+export function priceTierForKind(kind: string | null | undefined): PriceTier {
+  return kind === "distributor" ? "distributor" : "retail";
+}
+
+export const PRICE_TIER_LABEL: Record<PriceTier, string> = { retail: "Retail", distributor: "Distributor" };
 
 export const PACKAGE_LABEL: Record<PackageKind, string> = {
   case_12oz_can: "Case · 12 oz cans",
@@ -58,32 +66,35 @@ export async function archiveSku(db: DbOrTx, actor: Actor, skuId: string, reason
 export async function setMarketPrice(
   db: DbOrTx,
   actor: Actor,
-  input: { marketId: string; skuId: string; priceCents: number; effectiveFrom?: Date; reason?: string },
+  input: { marketId: string; skuId: string; priceCents: number; tier?: PriceTier; effectiveFrom?: Date; reason?: string },
 ) {
   authorize(actor, "price.manage", { marketId: input.marketId });
   if (!Number.isInteger(input.priceCents) || input.priceCents < 0) throw new Error("Price must be a non-negative integer number of cents");
+  const tier: PriceTier = input.tier ?? "retail";
+  if (!schema.PRICE_TIERS.includes(tier)) throw new BusinessError("Price tier must be retail or distributor", { field: "tier" });
   const from = input.effectiveFrom ?? new Date();
-  const current = await currentPrice(db, input.marketId, input.skuId, from);
+  const current = await currentPrice(db, input.marketId, input.skuId, from, tier);
   if (current) {
     await db.update(schema.marketPrice).set({ effectiveTo: from }).where(eq(schema.marketPrice.id, current.id));
   }
   const [row] = await db
     .insert(schema.marketPrice)
-    .values({ marketId: input.marketId, skuId: input.skuId, priceCents: input.priceCents, effectiveFrom: from, createdByEmployeeId: actor.employeeId })
+    .values({ marketId: input.marketId, skuId: input.skuId, tier, priceCents: input.priceCents, effectiveFrom: from, createdByEmployeeId: actor.employeeId })
     .returning();
   await recordAudit(db, actor, {
     action: "price.set",
     subjectType: "market_price",
     subjectId: row.id,
-    prior: current ? { priceCents: current.priceCents } : null,
-    current: { priceCents: input.priceCents, effectiveFrom: from.toISOString() },
+    prior: current ? { priceCents: current.priceCents, tier } : null,
+    current: { priceCents: input.priceCents, tier, effectiveFrom: from.toISOString() },
     reason: input.reason ?? null,
     marketId: input.marketId,
   });
   return row;
 }
 
-export async function currentPrice(db: DbOrTx, marketId: string, skuId: string, at: Date = new Date()) {
+/** The posted price for a market, SKU and tier (R2-41). A distributor with no distributor price has no price: it never falls back to retail. */
+export async function currentPrice(db: DbOrTx, marketId: string, skuId: string, at: Date = new Date(), tier: PriceTier = "retail") {
   const [row] = await db
     .select()
     .from(schema.marketPrice)
@@ -91,6 +102,7 @@ export async function currentPrice(db: DbOrTx, marketId: string, skuId: string, 
       and(
         eq(schema.marketPrice.marketId, marketId),
         eq(schema.marketPrice.skuId, skuId),
+        eq(schema.marketPrice.tier, tier),
         lte(schema.marketPrice.effectiveFrom, at),
         or(isNull(schema.marketPrice.effectiveTo), gt(schema.marketPrice.effectiveTo, at)),
       ),
@@ -108,20 +120,21 @@ export interface CatalogEntry {
   reason?: string;
 }
 
-/** Applicable products and prices for a market (customers never see stock counts). */
-export async function marketCatalog(db: DbOrTx, marketId: string, opts: { includeArchived?: boolean } = {}): Promise<CatalogEntry[]> {
+/** Applicable products and prices for a market and price tier (customers never see stock counts). */
+export async function marketCatalog(db: DbOrTx, marketId: string, opts: { includeArchived?: boolean; tier?: PriceTier } = {}): Promise<CatalogEntry[]> {
+  const tier: PriceTier = opts.tier ?? "retail";
   const skus = await db.select().from(schema.sku).orderBy(schema.sku.brand, schema.sku.name);
   const out: CatalogEntry[] = [];
   for (const s of skus) {
     if (s.archivedAt && !opts.includeArchived) continue;
-    const price = await currentPrice(db, marketId, s.id);
+    const price = await currentPrice(db, marketId, s.id, new Date(), tier);
     const archived = Boolean(s.archivedAt);
     out.push({
       sku: s,
       priceCents: price?.priceCents ?? null,
       marketPriceId: price?.id ?? null,
       orderable: !archived && price !== null,
-      reason: archived ? "Archived — historical only" : price === null ? "No price set for this market" : undefined,
+      reason: archived ? "Archived — historical only" : price === null ? (tier === "distributor" ? "No distributor price set for this market" : "No price set for this market") : undefined,
     });
   }
   return out;
@@ -151,6 +164,7 @@ export interface SkuDetailsPatch {
   palletFraction?: string | null;
   recipeVariant?: string | null;
   shelfLifeDays?: number | null;
+  unitCostCents?: number | null;
 }
 
 /** Codes are immutable once referenced (3.2); everything else on the SKU record can be maintained by Admin. */

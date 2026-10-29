@@ -3,7 +3,7 @@
  * writes one `count` movement per SKU that brings on hand to the counted total, so the ledger starts from evidence,
  * not from the workbook.
  */
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import { authorize } from "@/lib/authz/authorize";
 import type { Actor } from "@/lib/authz/actor";
@@ -102,4 +102,26 @@ export async function getCountSession(db: DbOrTx, sessionId: string) {
     .orderBy(asc(schema.sku.code), asc(schema.countLine.lotCode));
   const [warehouse] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, s.warehouseId));
   return { session: s, lines, warehouse: warehouse ?? null };
+}
+
+/** Round 3: count sheets are weekly. Every active origin with a code is due seven days after its last applied count. */
+export const COUNT_CADENCE_DAYS = 7;
+
+export async function countCadence(db: DbOrTx, today: string): Promise<Array<{ warehouse: typeof schema.warehouse.$inferSelect; lastCountedOn: string | null; dueOn: string | null; overdue: boolean }>> {
+  const origins = await db.select().from(schema.warehouse).where(eq(schema.warehouse.active, true));
+  const last = await db
+    .select({ warehouseId: schema.countSession.warehouseId, lastOn: sql<string>`max(${schema.countSession.countedOn})::text` })
+    .from(schema.countSession)
+    .where(eq(schema.countSession.status, "applied"))
+    .groupBy(schema.countSession.warehouseId);
+  return origins
+    .filter((w) => w.originCode)
+    .map((w) => {
+      const lastCountedOn = last.find((l) => l.warehouseId === w.id)?.lastOn ?? null;
+      const due = lastCountedOn ? new Date(`${lastCountedOn}T12:00:00Z`) : null;
+      if (due) due.setUTCDate(due.getUTCDate() + COUNT_CADENCE_DAYS);
+      const dueOn = due ? due.toISOString().slice(0, 10) : null;
+      return { warehouse: w, lastCountedOn, dueOn, overdue: !dueOn || dueOn < today };
+    })
+    .sort((a, b) => (a.dueOn ?? "").localeCompare(b.dueOn ?? ""));
 }

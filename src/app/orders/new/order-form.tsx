@@ -36,6 +36,8 @@ export interface OrderFormProps {
   pickupDefault: boolean;
   /** The market's route days (R2-4), shown as a hint when scheduling; never enforced. */
   routeDays: string[];
+  /** Round 3: the origin's next ship date and cutoff, e.g. "WLA can ship next on Wed, Nov 4. Order by 2:30 p.m. Pacific the day before." */
+  cutoffHint?: string | null;
   repeatOf: { orderNumber: string; notes: string | null; skipped: Array<{ skuName: string; change: string }> } | null;
   /** Generated once per page render on the server; the server refuses to create a second order for the same key. */
   submissionKey: string;
@@ -241,7 +243,7 @@ export function OrderForm(props: OrderFormProps) {
           <Field label="Requested date" hint="What the account asked for; stays on the order (R2-3)." error={state.fieldErrors?.requestedDate}>
             <Input name="requestedDate" type="date" defaultValue={state.values?.requestedDate ?? ""} />
           </Field>
-          <Field label="Scheduled date" hint={`Set it to confirm now; otherwise confirm from the order later.${props.routeDays.length ? ` Route days: ${props.routeDays.join(", ")}.` : ""}`} error={state.fieldErrors?.scheduledDate}>
+          <Field label="Scheduled date" hint={`Set it to confirm now; otherwise confirm from the order later.${props.cutoffHint ? ` ${props.cutoffHint}` : props.routeDays.length ? ` Route days: ${props.routeDays.join(", ")}.` : ""}`} error={state.fieldErrors?.scheduledDate}>
             <Input name="scheduledDate" type="date" min={props.todayIso} defaultValue={state.values?.scheduledDate ?? ""} />
           </Field>
           <Field label="Notes" error={state.fieldErrors?.notes}>

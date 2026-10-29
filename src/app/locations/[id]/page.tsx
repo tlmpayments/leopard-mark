@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
@@ -9,15 +10,17 @@ import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
-import { formatCents, listPriceOverrides, marketCatalog } from "@/lib/domain/catalog/service";
+import { formatCents, listPriceOverrides, marketCatalog, priceTierForKind } from "@/lib/domain/catalog/service";
 import { findSimilarLocations, getLocation, listLocations } from "@/lib/domain/customers/service";
-import { ACCOUNT_KIND_LABEL, DEPOSIT_MODE_LABEL, PAY_BY_LABEL, type PayBy } from "@/lib/domain/customers/shipping";
+import { ACCOUNT_KIND_LABEL, DEPOSIT_MODE_LABEL, FREIGHT_MODE_LABEL, PAY_BY_LABEL, PER_UNIT_KINDS, type FreightMode, type PayBy } from "@/lib/domain/customers/shipping";
+import { accountSpend } from "@/lib/domain/customers/spend";
+import { listFreightLanes } from "@/lib/domain/settings/service";
 import { listEmployees } from "@/lib/domain/employees/service";
 import { kegBalances } from "@/lib/domain/kegs/service";
 import { listWarehouses } from "@/lib/domain/markets/service";
 import { listShipments } from "@/lib/domain/shipments/service";
 import { shipmentNumber } from "../../shipments/labels";
-import { endPriceOverrideAction, setPriceOverrideAction, updateAccountShippingAction, updateDepositOnFileAction } from "./shipping-actions";
+import { endPriceOverrideAction, setPriceOverrideAction, updateAccountFreightAction, updateAccountShippingAction, updateDepositOnFileAction } from "./shipping-actions";
 import { NOTICE_PURPOSE_LABEL, listNotices } from "@/lib/domain/notices/service";
 import { listOrders } from "@/lib/domain/orders/service";
 import { authorizedPayer } from "@/lib/domain/payment/service";
@@ -78,6 +81,11 @@ const CATEGORY_LABEL: Record<string, string> = {
   standing_generation_failed: "Standing order failed",
   custody_reconciliation: "Custody to reconcile",
   provider_handoff_failed: "Provider job failed",
+  payment_setup_missing: "Payment setup before second delivery",
+  freight_below_minimum: "Below the freight pallet minimum",
+  order_change_after_cutoff: "Changed after the cutoff",
+  collections_overdue: "Overdue invoices",
+  origin_stock_aging: "Stock aging at origin",
 };
 
 export default async function LocationPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
@@ -97,7 +105,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
     listOrders(d, actor, { locationId: id, limit: 20 }),
     listStandingForLocation(d, id),
     listOpenExceptions(d, { locationId: id }),
-    marketCatalog(d, loc.marketId),
+    marketCatalog(d, loc.marketId, { tier: priceTierForKind(loc.kind) }),
     customerReferenceStatus(d, id),
     findSimilarLocations(d, loc.marketId, loc.tradeName),
     activityTimeline(d, actor, { locationId: id, cursor: param(sp, "before"), kinds: kind ? [kind as never] : undefined, limit: 25 }),
@@ -138,6 +146,17 @@ export default async function LocationPage({ params, searchParams }: { params: P
   const [servedBy] = loc.servedByLocationId ? await d.select({ id: schema.customerLocation.id, tradeName: schema.customerLocation.tradeName }).from(schema.customerLocation).where(eq(schema.customerLocation.id, loc.servedByLocationId)) : [];
   const distributors = canShipping ? (await listLocations(d, actor, { marketId: loc.marketId })).filter((l) => l.loc.kind === "distributor" && l.loc.id !== id) : [];
   const priceOverrides = await listPriceOverrides(d, id);
+  // Round 3: freight and printed notes for distributors; spend (POS and sample cost) for every account.
+  const isDistributorAcct = loc.kind === "distributor";
+  const lanes = isDistributorAcct ? await listFreightLanes(d) : [];
+  const spend = canShipView ? await accountSpend(d, id) : null;
+  const perUnit = (loc.freightPerUnit ?? {}) as Record<string, number>;
+  const freightText =
+    loc.freightMode === "lane"
+      ? `${FREIGHT_MODE_LABEL.lane}: ${lanes.find((l) => l.code === loc.freightLaneCode)?.name ?? loc.freightLaneCode ?? "no lane chosen"}`
+      : loc.freightMode === "per_unit"
+        ? `Fixed per unit, fuel included: ${PER_UNIT_KINDS.filter((k) => perUnit[k.kind]).map((k) => `${k.label} ${formatCents(perUnit[k.kind])}`).join(", ") || "no rates entered"}`
+        : FREIGHT_MODE_LABEL.none;
   const [kegBalance] = can(actor, "keg.view", { marketId: loc.marketId }) ? await kegBalances(d, actor, { locationId: id }) : [];
   const recentShipments = canShipView ? await listShipments(d, actor, { destinationLocationId: id, limit: 8 }) : [];
 
@@ -793,6 +812,21 @@ export default async function LocationPage({ params, searchParams }: { params: P
             ["Terms", loc.termsDaysOverride != null ? `Net ${loc.termsDaysOverride} (account override)` : `Market rule (Net ${market?.termsDays ?? 30})`],
             ["Pays by", loc.payBy ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy : "not set"],
             ["Invoice on receipt", loc.invoiceOnReceipt ? "Yes: the invoice travels in the delivery pack" : "No"],
+            ["Leave without signature", loc.deliverWithoutSignature ? "Yes: printed on the delivery receipt" : "No: get a signature"],
+            ...(isDistributorAcct
+              ? ([
+                  ["Freight", `${freightText}${loc.freightMinPallets ? `; warn below ${loc.freightMinPallets} pallets` : ""}`],
+                  ["Invoice notes", loc.invoiceNotes ? <span key="in" className="whitespace-pre-line">{loc.invoiceNotes}</span> : "none (the standard FOB line prints)"],
+                ] as Array<[string, ReactNode]>)
+              : []),
+            ...(spend
+              ? ([
+                  [
+                    "Spend on this account",
+                    `${formatCents(spend.totalCents)} (POS ${formatCents(spend.posCostCents)} for ${spend.posUnits} unit${spend.posUnits === 1 ? "" : "s"}, samples ${formatCents(spend.sampleCostCents)} for ${spend.sampleUnits} unit${spend.sampleUnits === 1 ? "" : "s"})${spend.uncostedUnits ? `; ${spend.uncostedUnits} unit${spend.uncostedUnits === 1 ? " has" : "s have"} no cost set yet` : ""}`,
+                  ],
+                ] as Array<[string, ReactNode]>)
+              : []),
             ["Pallet rule", loc.palletRule],
             ["Receiving requirements", loc.receivingRequirements],
             ["First delivery", loc.firstDeliveryOn ? fmtDay(loc.firstDeliveryOn) : "—"],
@@ -901,8 +935,56 @@ export default async function LocationPage({ params, searchParams }: { params: P
                   <input type="checkbox" name="invoiceOnReceipt" defaultChecked={loc.invoiceOnReceipt} /> Print the invoice with the BOL
                 </label>
               </Field>
+              <Field label="Leave without signature" hint="The driver may leave the delivery if no one signs; printed on the delivery receipt.">
+                <label className="flex h-9 items-center gap-2 text-sm">
+                  <input type="checkbox" name="deliverWithoutSignature" defaultChecked={loc.deliverWithoutSignature} /> Allowed for this account
+                </label>
+              </Field>
               <div className="sm:col-span-3">
                 <Button small>Save</Button>
+              </div>
+            </form>
+          </details>
+        ) : null}
+        {canShipping && isDistributorAcct ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-accent">Freight and invoice notes (distributor)</summary>
+            <form action={updateAccountFreightAction} className="mt-2 grid gap-2 sm:grid-cols-3">
+              <input type="hidden" name="locationId" value={id} />
+              <Field label="Freight">
+                <Select name="freightMode" defaultValue={loc.freightMode}>
+                  {(Object.keys(FREIGHT_MODE_LABEL) as FreightMode[]).map((k) => (
+                    <option key={k} value={k}>
+                      {FREIGHT_MODE_LABEL[k]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Freight lane" hint="Rates live under Settings, Freight lanes.">
+                <Select name="freightLaneCode" defaultValue={loc.freightLaneCode ?? ""}>
+                  <option value="">None</option>
+                  {lanes.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.code}: {l.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Warn below (pallets)" hint="Opens a case at confirmation when a shipment is smaller. Blank = no minimum.">
+                <Input name="freightMinPallets" type="number" min={1} max={30} defaultValue={loc.freightMinPallets ?? ""} />
+              </Field>
+              {PER_UNIT_KINDS.map((k) => (
+                <Field key={k.kind} label={`Per-unit charge, ${k.label} ($)`}>
+                  <Input name={`perUnit:${k.kind}`} inputMode="decimal" defaultValue={perUnit[k.kind] ? (perUnit[k.kind] / 100).toFixed(2) : ""} />
+                </Field>
+              ))}
+              <div className="sm:col-span-3">
+                <Field label="Invoice notes (one per line, printed as bullets)" hint="FOB, taxes, freight, the keg statement and terms. {posting_date} prints as the first of the invoice's month (the price posting in effect). When these mention FOB, the standard FOB line is not printed again.">
+                  <Textarea name="invoiceNotes" rows={6} defaultValue={loc.invoiceNotes ?? ""} />
+                </Field>
+              </div>
+              <div className="sm:col-span-3">
+                <Button small>Save freight and notes</Button>
               </div>
             </form>
           </details>

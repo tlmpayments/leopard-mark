@@ -43,6 +43,20 @@
       "when": 1793251252482,
       "tag": "0005_round2",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793302608142,
+      "tag": "0006_round3",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793304842155,
+      "tag": "0007_round3_posting_date",
+      "breakpoints": true
     }
   ]
 }

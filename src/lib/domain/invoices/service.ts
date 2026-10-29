@@ -31,9 +31,56 @@ interface Computed {
   lines: Array<Omit<InvoiceLine, "id" | "invoiceId">>;
   subtotalCents: number;
   depositCents: number;
+  freightCents: number;
   totalCents: number;
   fobWording: string | null;
   termsDays: number;
+  printedNotes: string | null;
+}
+
+const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+/** Pallets on a shipment: the office's count when entered, else the lines' pallet fractions rounded up (3.7). */
+export function palletsForLines(lines: Array<{ qty: number; palletFraction: string | number | null }>, entered: number | null): number {
+  if (entered != null && entered > 0) return entered;
+  const raw = lines.reduce((sum, l) => sum + l.qty * Number(l.palletFraction ?? 0), 0);
+  if (raw <= 0) return lines.some((l) => l.qty > 0) ? 1 : 0;
+  return Math.ceil(raw - 1e-9);
+}
+
+export interface LaneRates {
+  minCents: number;
+  tier2to4Cents: number;
+  tier5to8Cents: number;
+  truckloadCents: number;
+}
+
+/**
+ * Lane freight for a pallet count (R2-52): one pallet pays the minimum, 2 to 4 and 5 to 8 pallets pay their per-pallet
+ * rate, more than 8 is a flat truckload. Returns the line and its total, or null for no pallets.
+ */
+export function laneFreight(pallets: number, r: LaneRates): { qty: number; unitCents: number; totalCents: number; description: string } | null {
+  if (pallets <= 0) return null;
+  if (pallets === 1) return { qty: 1, unitCents: r.minCents, totalCents: r.minCents, description: "Freight, prepaid and add, LTL to distributor (1 pallet, minimum charge)" };
+  if (pallets <= 4) return { qty: pallets, unitCents: r.tier2to4Cents, totalCents: pallets * r.tier2to4Cents, description: `Freight, prepaid and add, LTL to distributor (${pallets} pallets at ${money(r.tier2to4Cents)} per pallet)` };
+  if (pallets <= 8) return { qty: pallets, unitCents: r.tier5to8Cents, totalCents: pallets * r.tier5to8Cents, description: `Freight, prepaid and add, LTL to distributor (${pallets} pallets at ${money(r.tier5to8Cents)} per pallet)` };
+  return { qty: 1, unitCents: r.truckloadCents, totalCents: r.truckloadCents, description: `Freight, prepaid and add, truckload to distributor (${pallets} pallets)` };
+}
+
+/**
+ * Printed invoice notes with their placeholders filled in. {posting_date} is the price posting in effect: the first
+ * of the invoice's month (MM/01/YYYY), or of today's month (Pacific) while the invoice is a draft.
+ */
+export const POSTING_DATE_TOKEN = "{posting_date}";
+export function renderInvoiceNotes(notes: string, invoiceDate: string | null, now: Date = new Date()): string {
+  const iso = invoiceDate ?? new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const [y, m] = iso.split("-");
+  return notes.split(POSTING_DATE_TOKEN).join(`${m}/01/${y}`);
+}
+
+/** The fuel surcharge on lane freight only, rounded to the cent (R2-52). */
+export function fuelSurchargeCents(freightCents: number, pct: number): number {
+  return Math.round((freightCents * pct) / 100);
 }
 
 async function loadShipmentContext(db: DbOrTx, shipmentId: string) {
@@ -59,7 +106,11 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
   let kegs = 0;
   let halfKegs = 0;
   let sixtelKegs = 0;
+  /** Billed beer per shipment, for freight (R2-52). */
+  const freightBasis: Array<{ palletCount: number | null; lines: Array<{ qty: number; palletFraction: string | null; packageKind: string }> }> = [];
   for (const sid of shipmentIds) {
+    const basis: (typeof freightBasis)[number] = { palletCount: null, lines: [] };
+    freightBasis.push(basis);
     const rows = await db
       .select({ l: schema.shipmentLine, sku: schema.sku, pos: schema.posItem, s: schema.shipment })
       .from(schema.shipmentLine)
@@ -72,8 +123,10 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
       // Before delivery the draft shows the planned quantity; after it, what the account kept (R2-8). Refused and
       // damaged units are never invoiced (R2-9).
       const billed = l.deliveredQty ?? l.qty;
+      basis.palletCount = s.palletCount;
       n += 1;
       if (sku) {
+        basis.lines.push({ qty: billed, palletFraction: sku.palletFraction, packageKind: sku.packageKind });
         const unit = series === "NC" ? 0 : (l.unitPriceCents ?? 0);
         const total = unit * billed;
         subtotal += total;
@@ -85,7 +138,11 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
         const outcome = l.deliveredQty !== null && billed !== l.qty ? ` (${l.qty} shipped, ${l.refusedQty ? `${l.refusedQty} refused` : ""}${l.refusedQty && l.damagedQty ? ", " : ""}${l.damagedQty ? `${l.damagedQty} damaged` : ""})` : "";
         lines.push({ lineNo: n, kind: "beer", shipmentLineId: l.id, skuId: sku.id, description: `${sku.brand} ${sku.name}${s.number ? ` (${s.number})` : ""}${outcome}`, lotCode: l.lotCode, qty: billed, unitPriceCents: unit, lineTotalCents: total });
       } else if (pos) {
-        lines.push({ lineNo: n, kind: "pos", shipmentLineId: l.id, skuId: null, description: `${pos.name} (no charge)`, lotCode: null, qty: billed, unitPriceCents: 0, lineTotalCents: 0 });
+        // Round 3: a POS item with a price is charged (never on a no-charge invoice); without one it goes at no charge.
+        const unit = series === "NC" ? 0 : (pos.priceCents ?? 0);
+        const total = unit * billed;
+        subtotal += total;
+        lines.push({ lineNo: n, kind: "pos", shipmentLineId: l.id, skuId: null, description: unit > 0 ? pos.name : `${pos.name} (no charge)`, lotCode: null, qty: billed, unitPriceCents: unit, lineTotalCents: total });
       }
     }
   }
@@ -99,21 +156,67 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
       lines.push({ lineNo: n, kind: "deposit", shipmentLineId: null, skuId: null, description: `Keg deposit (${kegs} keg${kegs === 1 ? "" : "s"} at ${(perKeg / 100).toFixed(2)})`, lotCode: null, qty: kegs, unitPriceCents: perKeg, lineTotalCents: deposit });
     }
   }
-  if (isDistributor && kegs > 0) {
-    n += 1;
-    lines.push({ lineNo: n, kind: "info", shipmentLineId: null, skuId: null, description: `MicroStar kegs shipped: ${halfKegs} half barrel, ${sixtelKegs} sixtel. Deposit billed by MicroStar to the distributor.`, lotCode: null, qty: 0, unitPriceCents: 0, lineTotalCents: 0 });
-  }
+  // Distributors (Round 3): the keg statement goes in the notes, never as an invoice line. The account's own notes
+  // carry it when they mention kegs; otherwise a standard MicroStar statement is added.
+  const ownNotes = loc.invoiceNotes?.trim() || null;
+  const kegNote =
+    isDistributor && kegs > 0 && !(ownNotes && /\bkegs?\b/i.test(ownNotes))
+      ? `Kegs are MicroStar-owned (${halfKegs} half barrel, ${sixtelKegs} sixtel on this invoice). No keg deposit is charged; MicroStar bills keg deposits directly to the distributor. Return empties to the MicroStar network.`
+      : null;
   if (loc.depositMode === "floating" && kegs > 0) {
     n += 1;
     lines.push({ lineNo: n, kind: "info", shipmentLineId: null, skuId: null, description: "Floating keg deposit on file; no per-keg deposit charged.", lotCode: null, qty: 0, unitPriceCents: 0, lineTotalCents: 0 });
   }
-  return { lines, subtotalCents: subtotal, depositCents: deposit, totalCents: subtotal + deposit, fobWording: isDistributor ? DISTRIBUTOR_FOB : null, termsDays: loc.termsDaysOverride ?? market.termsDays };
+  // Freight to a distributor (R2-52): passed through at cost, never on a no-charge invoice.
+  let freight = 0;
+  if (series === "INV" && isDistributor && loc.freightMode === "lane" && loc.freightLaneCode) {
+    const [lane] = await db.select().from(schema.freightLane).where(eq(schema.freightLane.code, loc.freightLaneCode));
+    if (lane && lane.active) {
+      const settings = await getCompanySettings(db);
+      const pct = Number(settings.fuelSurchargePct ?? 0);
+      for (const b of freightBasis) {
+        const f = laneFreight(palletsForLines(b.lines, b.palletCount), lane);
+        if (!f) continue;
+        n += 1;
+        lines.push({ lineNo: n, kind: "freight", shipmentLineId: null, skuId: null, description: f.description, lotCode: null, qty: f.qty, unitPriceCents: f.unitCents, lineTotalCents: f.totalCents });
+        freight += f.totalCents;
+        const fsc = fuelSurchargeCents(f.totalCents, pct);
+        if (fsc > 0) {
+          n += 1;
+          lines.push({ lineNo: n, kind: "freight", shipmentLineId: null, skuId: null, description: `Fuel surcharge, ${pct}% of freight`, lotCode: null, qty: 1, unitPriceCents: fsc, lineTotalCents: fsc });
+          freight += fsc;
+        }
+      }
+    }
+  } else if (series === "INV" && isDistributor && loc.freightMode === "per_unit" && loc.freightPerUnit) {
+    const perUnit = loc.freightPerUnit;
+    const byKind = new Map<string, number>();
+    for (const b of freightBasis) for (const l of b.lines) byKind.set(l.packageKind, (byKind.get(l.packageKind) ?? 0) + l.qty);
+    const labels: Record<string, string> = { keg_half: "1/2 bbl keg", keg_sixtel: "1/6 bbl keg", case_12oz_can: "case", case_24oz_can: "24 oz case" };
+    for (const [kind, qty] of byKind) {
+      const rate = perUnit[kind];
+      if (!rate || qty <= 0) continue;
+      n += 1;
+      lines.push({ lineNo: n, kind: "freight", shipmentLineId: null, skuId: null, description: `Delivery charge, ${labels[kind] ?? kind} (fixed per unit, fuel included)`, lotCode: null, qty, unitPriceCents: rate, lineTotalCents: qty * rate });
+      freight += qty * rate;
+    }
+  }
+  return {
+    lines,
+    subtotalCents: subtotal,
+    depositCents: deposit,
+    freightCents: freight,
+    totalCents: subtotal + deposit + freight,
+    fobWording: isDistributor ? DISTRIBUTOR_FOB : null,
+    termsDays: loc.termsDaysOverride ?? market.termsDays,
+    printedNotes: [ownNotes, kegNote].filter(Boolean).join("\n") || null,
+  };
 }
 
 async function writeLines(db: DbOrTx, invoiceId: string, c: Computed) {
   await db.delete(schema.invoiceLine).where(eq(schema.invoiceLine.invoiceId, invoiceId));
   for (const l of c.lines) await db.insert(schema.invoiceLine).values({ ...l, invoiceId });
-  await db.update(schema.invoice).set({ subtotalCents: c.subtotalCents, depositCents: c.depositCents, totalCents: c.totalCents, fobWording: c.fobWording, termsDays: c.termsDays, updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId));
+  await db.update(schema.invoice).set({ subtotalCents: c.subtotalCents, depositCents: c.depositCents, freightCents: c.freightCents, totalCents: c.totalCents, fobWording: c.fobWording, termsDays: c.termsDays, printedNotes: c.printedNotes, updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId));
 }
 
 /** Called inside the confirmation transaction. One draft per shipment by default (7.2); samples always on their own NC draft (7.3). */
@@ -318,8 +421,10 @@ export async function buildInvoiceSnapshot(db: DbOrTx, invoiceId: string, genera
     lines: snapLines,
     subtotalCents: inv.subtotalCents,
     depositCents: inv.depositCents,
+    freightCents: inv.freightCents ?? 0,
     totalCents: inv.totalCents,
     notes: inv.notes,
+    printedNotes: inv.printedNotes ? renderInvoiceNotes(inv.printedNotes, inv.invoiceDate).split(/\r?\n/).map((l) => l.replace(/^\s*[•*-]\s*/, "").trim()).filter(Boolean) : [],
     generatedAt: new Date().toISOString(),
     generatedBy,
   };

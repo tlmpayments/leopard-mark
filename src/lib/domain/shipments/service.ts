@@ -15,11 +15,11 @@ import { type DbOrTx, type Tx, withTx } from "@/lib/db/types";
 import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException } from "@/lib/exceptions/service";
 import { availability, commitReservationsForShipmentLines, fulfilReservationsForOrderLines, lockPosition, uncommitReservationsForOrderLines } from "@/lib/domain/allocation/service";
-import { currentPrice } from "@/lib/domain/catalog/service";
+import { currentPrice, priceTierForKind } from "@/lib/domain/catalog/service";
 import { originAddressLines } from "@/lib/domain/origins/service";
 import { yymmdd } from "@/lib/domain/lots/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
-import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, recomputeIssuedInvoice, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
+import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, palletsForLines, recomputeIssuedInvoice, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
 import { cancelUndeliveredDemand } from "@/lib/domain/orders/service";
 import { recordKegEventForShipment } from "@/lib/domain/kegs/service";
 import { renderPdf } from "@/lib/documents/render";
@@ -417,13 +417,61 @@ async function capturePrices(tx: Tx, s: Shipment) {
         .limit(1);
       if (override[0]) price = override[0].priceCents;
       else {
-        const mp = await currentPrice(tx, dest.marketId, l.skuId);
+        const mp = await currentPrice(tx, dest.marketId, l.skuId, new Date(), priceTierForKind(dest.kind));
         price = mp?.priceCents ?? null;
       }
     } else if (l.skuId && s.type === "S") {
       price = 0;
     }
     await tx.update(schema.shipmentLine).set({ unitPriceCents: price }).where(eq(schema.shipmentLine.id, l.id));
+  }
+}
+
+/**
+ * Round 3 warnings at confirmation; none of them blocks the shipment.
+ * - R2-50: a retail account's second delivery with no payment method on file (Fintech, Stripe or check).
+ * - Martignetti's 5-pallet minimum (freight per unit): a smaller shipment opens a warning.
+ */
+async function confirmationWarnings(tx: Tx, actor: Actor, row: Shipment) {
+  if (row.type !== "D" || !row.destinationLocationId) return;
+  const dest = await loadDestination(tx, row.destinationLocationId);
+  if (dest.kind === "retail" && !dest.payBy) {
+    const [{ n }] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(schema.shipment)
+      .where(and(eq(schema.shipment.destinationLocationId, dest.id), eq(schema.shipment.type, "D"), eq(schema.shipment.status, "delivered"), eq(schema.shipment.legacy, false)));
+    if (n >= 1) {
+      await openException(tx, actor, {
+        category: "payment_setup_missing",
+        title: `${dest.tradeName}: second delivery (${row.number}) with no payment method on file`,
+        cause: "Payment setup (Fintech or ACH) is required before the second delivery (R2-50). This is a warning; the shipment was confirmed.",
+        marketId: row.marketId,
+        ownerRole: "admin",
+        nextAction: "Set the account's payment method, or confirm with the Owner that delivery goes ahead.",
+        dedupeKey: `payment_setup_missing:${dest.id}`,
+        links: [{ subjectType: "location", subjectId: dest.id }, { subjectType: "shipment", subjectId: row.id }],
+      });
+    }
+  }
+  if (dest.kind === "distributor" && dest.freightMinPallets && dest.freightMinPallets > 0) {
+    const lines = await tx
+      .select({ qty: schema.shipmentLine.qty, palletFraction: schema.sku.palletFraction })
+      .from(schema.shipmentLine)
+      .innerJoin(schema.sku, eq(schema.sku.id, schema.shipmentLine.skuId))
+      .where(eq(schema.shipmentLine.shipmentId, row.id));
+    const pallets = palletsForLines(lines, row.palletCount);
+    if (pallets < dest.freightMinPallets) {
+      await openException(tx, actor, {
+        category: "freight_below_minimum",
+        title: `${row.number} to ${dest.tradeName}: ${pallets} pallet${pallets === 1 ? "" : "s"}, below the ${dest.freightMinPallets}-pallet minimum`,
+        cause: "The distributor's fixed per-unit freight assumes a minimum shipment size. This is a warning; the shipment was confirmed.",
+        marketId: row.marketId,
+        ownerRole: "admin",
+        nextAction: "Add to the shipment, combine with the next PO, or confirm with the distributor.",
+        dedupeKey: `freight_below_minimum:${row.id}`,
+        links: [{ subjectType: "shipment", subjectId: row.id }],
+      });
+    }
   }
 }
 
@@ -454,6 +502,7 @@ export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: stri
     await commitReservationsForShipmentLines(tx, lines.map((l) => ({ orderLineId: l.orderLineId, qty: l.qty })));
     await allocate(tx, actor, row);
     await capturePrices(tx, row);
+    await confirmationWarnings(tx, actor, row);
     for (const l of lines) {
       if (l.lotId && l.lotReason) {
         const [lot] = await tx.select().from(schema.lot).where(eq(schema.lot.id, l.lotId));
@@ -957,7 +1006,12 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
   const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, s.originWarehouseId));
   if (!origin) throw new BusinessError("Origin not found");
   let shipTo: ShipmentSnapshot["shipTo"];
-  if (s.destinationLocationId) shipTo = (await partyForLocation(db, s.destinationLocationId)).party;
+  let leaveWithoutSignature = false;
+  if (s.destinationLocationId) {
+    const dest = await partyForLocation(db, s.destinationLocationId);
+    shipTo = dest.party;
+    leaveWithoutSignature = Boolean(dest.loc.deliverWithoutSignature);
+  }
   else if (s.destinationWarehouseId) {
     const [dw] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, s.destinationWarehouseId));
     shipTo = { name: dw?.name ?? "Destination", lines: dw ? originAddressLines(dw) : [], contact: dw?.shippingContactName ?? null, phone: dw?.shippingContactPhone ?? null };
@@ -1031,6 +1085,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     nmfc: s.template === "distributor" || s.template === "transfer" ? { keg: settings.nmfcKeg, can: settings.nmfcCan, status: settings.nmfcStatus } : null,
     deliveryWindow: s.deliveryWindow,
     receivingInstructions: s.receivingInstructions,
+    leaveWithoutSignature,
     notes: s.notes,
     lines,
     totals,

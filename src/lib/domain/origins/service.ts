@@ -22,7 +22,7 @@ export const ORIGIN_CODES: ReadonlyArray<{ code: string; name: string; kind: Ori
   { code: "RTB", name: "Round Table Brewing", kind: "brewery", lotFacilityCode: "04" },
   { code: "ALE", name: "AleSmith Brewing", kind: "brewery", lotFacilityCode: "05" },
   { code: "JAB", name: "Jack's Abby Brewing", kind: "brewery", lotFacilityCode: "06" },
-  { code: "RAL", name: "Real Ale Brewing", kind: "brewery", lotFacilityCode: "07" },
+  { code: "REA", name: "Real Ale Brewing", kind: "brewery", lotFacilityCode: "07" },
   { code: "EWD", name: "Express Wine Delivery", kind: "warehouse", lotFacilityCode: null },
   { code: "WLA", name: "Balmuth & Co.", kind: "warehouse", lotFacilityCode: null },
   { code: "RAD", name: "Radford Warehouse", kind: "warehouse", lotFacilityCode: null },
@@ -77,6 +77,11 @@ export interface OriginPatch {
   /** End-of-day pull sheet (R2-29): where the warehouse receives it and at what local time; sending is behind the company switch. */
   pullSheetEmail?: string | null;
   pullSheetSendTime?: string | null;
+  /** Round 3: order cutoff (HH:MM Pacific), lead days, delivery weekdays, and the most days beer may sit here. */
+  orderCutoff?: string | null;
+  leadDays?: number;
+  deliveryDays?: string[] | null;
+  maxDaysOnHand?: number | null;
 }
 
 /** Admin maintains origins (warehouse.manage). Codes are validated; the primary flag stays unique per market. */
@@ -133,6 +138,25 @@ export async function updateOrigin(db: DbOrTx, actor: Actor, id: string, patch: 
     const t = patch.pullSheetSendTime?.trim() || null;
     if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new BusinessError("Send time is HH:MM, 24-hour, local to the warehouse's market", { field: "pullSheetSendTime" });
     set.pullSheetSendTime = t;
+  }
+  if (patch.orderCutoff !== undefined) {
+    const t = patch.orderCutoff?.trim() || null;
+    if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new BusinessError("Order cutoff is HH:MM, 24-hour, Pacific time", { field: "orderCutoff" });
+    set.orderCutoff = t;
+  }
+  if (patch.leadDays !== undefined) {
+    if (!Number.isInteger(patch.leadDays) || patch.leadDays < 0 || patch.leadDays > 30) throw new BusinessError("Lead days must be a whole number from 0 to 30", { field: "leadDays" });
+    set.leadDays = patch.leadDays;
+  }
+  if (patch.deliveryDays !== undefined) {
+    const valid = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const days = (patch.deliveryDays ?? []).filter((d) => valid.includes(d));
+    set.deliveryDays = days.length ? days : null;
+  }
+  if (patch.maxDaysOnHand !== undefined) {
+    const v = patch.maxDaysOnHand;
+    if (v != null && (!Number.isInteger(v) || v < 1 || v > 365)) throw new BusinessError("Most days on hand must be a whole number from 1 to 365", { field: "maxDaysOnHand" });
+    set.maxDaysOnHand = v ?? null;
   }
   if (patch.isPrimary !== undefined) {
     const marketId = patch.marketId ?? prior.marketId;

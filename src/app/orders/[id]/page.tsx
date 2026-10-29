@@ -10,11 +10,12 @@ import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
-import { formatCents, marketCatalog } from "@/lib/domain/catalog/service";
+import { formatCents, marketCatalog, priceTierForKind } from "@/lib/domain/catalog/service";
 import { listWarehouses } from "@/lib/domain/markets/service";
 import { NOTICE_PURPOSE_LABEL } from "@/lib/domain/notices/service";
 import { ORDER_SOURCE_LABEL, getOrder, minimumAppliesTo, type MinimumEvaluation } from "@/lib/domain/orders/service";
 import { originLabel } from "@/lib/domain/origins/service";
+import { changeDeadline, formatCutoff, nextShipDate, originCutoff } from "@/lib/domain/cutoff/service";
 import { evaluateLocationReadiness } from "@/lib/domain/readiness/service";
 import { getShipment } from "@/lib/domain/shipments/service";
 import { activityTimeline } from "@/lib/domain/timeline/service";
@@ -62,7 +63,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const canSubmit = can(actor, "order.submit", { marketId: o.order.marketId });
   const canNotice = can(actor, "notice.record_outcome", { marketId: o.order.marketId });
   const showNotices = can(actor, "notice.view", { marketId: o.order.marketId });
-  const catalog = canRequest ? await marketCatalog(d, o.order.marketId) : [];
+  const catalog = canRequest ? await marketCatalog(d, o.order.marketId, { tier: priceTierForKind(o.location?.kind) }) : [];
   const remaining = o.lines.reduce((s, l) => s + (l.currentQty - l.deliveredQty), 0);
   const reservations = isAdmin ? await d.select().from(schema.reservation).where(and(inArray(schema.reservation.orderLineId, o.lines.map((l) => l.id)), eq(schema.reservation.state, "reserved"))) : [];
   const merchandise = o.lines.reduce((s, l) => s + l.currentQty * l.unitPriceCentsAtSubmission, 0);
@@ -77,6 +78,12 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const active = activeRow ? await getShipment(d, activeRow.id) : null;
   const status = orderStatusLine(o, activeRow, readiness.summary, openCases);
   const today = todayIso(tz);
+  // Round 3: the origin's cutoff sets the earliest ship date and when changes close (changes later are exceptions).
+  const cutoff = await originCutoff(d, activeRow?.originWarehouseId ?? o.order.warehouseId ?? null);
+  const nextShip = cutoff ? nextShipDate(cutoff) : today;
+  const confirmDefault = o.order.requestedDate && o.order.requestedDate >= nextShip ? o.order.requestedDate : nextShip;
+  const shipDate = activeRow?.scheduledDate ?? o.order.requestedDate;
+  const deadline = cutoff && shipDate && activeRow?.status !== "delivered" ? changeDeadline(cutoff, shipDate) : null;
   const decidedBy = o.order.shortfallDecidedByEmployeeId ? (await d.select({ name: schema.employee.displayName }).from(schema.employee).where(eq(schema.employee.id, o.order.shortfallDecidedByEmployeeId)))[0]?.name ?? null : null;
   const skuName = new Map(o.lines.map((l) => [l.skuId, `${l.sku.brand} ${l.sku.name}`]));
 
@@ -289,7 +296,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
                 <input type="hidden" name="orderId" value={id} />
                 <input type="hidden" name="shipmentId" value={active.shipment.id} />
                 <Field label="Scheduled date" hint="Numbers the shipment, allocates stock and stores the BOL and picking ticket (R2-3).">
-                  <Input name="scheduledDate" type="date" required defaultValue={o.order.requestedDate && o.order.requestedDate >= today ? o.order.requestedDate : today} />
+                  <Input name="scheduledDate" type="date" required defaultValue={confirmDefault} />
                 </Field>
                 <Button small>Confirm</Button>
               </form>
@@ -359,6 +366,17 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       }
     >
       <Flash {...flash} />
+      {deadline && open ? (
+        deadline.passed ? (
+          <Notice tone="warn">
+            The cutoff for {activeRow?.number ?? "this order"} has passed{deadline.time ? ` (${formatCutoff(deadline.time)} Pacific on ${fmtDay(deadline.date)})` : ""}. Changes now are exceptions and are logged; cancelling is still allowed.
+          </Notice>
+        ) : (
+          <Notice tone="info">
+            Changes to {activeRow?.number ?? "this order"} close {deadline.time ? `at ${formatCutoff(deadline.time)} Pacific ` : ""}on {fmtDay(deadline.date)}, the origin&apos;s cutoff. Cancelling is allowed any time.
+          </Notice>
+        )
+      ) : null}
       <StateLine kind={status.kind}>{status.text}</StateLine>
       {openCases.length ? (
         <ul className="space-y-1 text-sm">

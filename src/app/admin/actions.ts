@@ -173,8 +173,9 @@ export async function archiveSkuAction(form: FormData) {
 }
 export async function setPriceAction(form: FormData) {
   return runAction("/admin/catalog", async ({ db, actor }) => {
-    await setMarketPrice(db, actor, { marketId: str(form, "marketId"), skuId: str(form, "skuId"), priceCents: Math.round(num(form, "price") * 100), reason: opt(form, "reason") ?? undefined });
-    return "Market price set with effective dating";
+    const tier = opt(form, "tier") === "distributor" ? "distributor" : "retail";
+    await setMarketPrice(db, actor, { marketId: str(form, "marketId"), skuId: str(form, "skuId"), tier, priceCents: Math.round(num(form, "price") * 100), reason: opt(form, "reason") ?? undefined });
+    return `${tier === "distributor" ? "Distributor" : "Retail"} price set with effective dating`;
   });
 }
 

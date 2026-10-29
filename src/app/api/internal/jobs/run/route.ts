@@ -3,6 +3,7 @@ import { SYSTEM_ACTOR } from "@/lib/authz/actor";
 import { getDb } from "@/lib/db/client";
 import { generateStandingOccurrences } from "@/lib/domain/standing/service";
 import { schedulePullSheetSends } from "@/lib/domain/pullsheet/service";
+import { sweepOriginStockAging, sweepOverdueInvoices } from "@/lib/domain/alerts/service";
 import { runDueJobs } from "@/lib/jobs/queue";
 import "@/lib/integrations/stripe/adapter"; // registers job handlers
 
@@ -21,6 +22,16 @@ export async function GET(req: NextRequest) {
     out.pullSheets = await schedulePullSheetSends(await getDb());
   } catch (err) {
     out.pullSheetsError = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    // Round 3 sweeps: overdue invoices and beer aging at an origin with a days-on-hand limit. Cases only, no email.
+    // The cron fires every five minutes; the sweeps run once an hour (they are idempotent either way).
+    if (new Date().getUTCMinutes() < 5 || req.nextUrl.searchParams.get("sweeps") === "1") {
+      out.overdue = await sweepOverdueInvoices(await getDb(), SYSTEM_ACTOR);
+      out.aging = await sweepOriginStockAging(await getDb(), SYSTEM_ACTOR);
+    }
+  } catch (err) {
+    out.sweepsError = err instanceof Error ? err.message : String(err);
   }
   try {
     out.jobs = await runDueJobs((await getDb()), { limit: 50, workerId: "vercel-cron" });

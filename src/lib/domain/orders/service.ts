@@ -9,7 +9,8 @@ import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import { getPolicy } from "@/lib/policy/policy";
 import { adjustLineReservation, availability, releaseLineReservations, reserveForLine } from "../allocation/service";
-import { KEG_DEPOSIT_CENTS, MINIMUM_DELIVERY_CENTS, currentPrice } from "../catalog/service";
+import { KEG_DEPOSIT_CENTS, MINIMUM_DELIVERY_CENTS, currentPrice, priceTierForKind, type PriceTier } from "../catalog/service";
+import { changeDeadline, formatCutoff, originCutoff } from "../cutoff/service";
 import { suggestLot } from "../lots/service";
 import { primaryWarehouse } from "../markets/service";
 import { originLabel } from "../origins/service";
@@ -31,6 +32,13 @@ import { createShipment, voidShipment } from "../shipments/service";
  * - Holds and readiness gaps never block capture (U06–U07).
  * - Abnormal orders are flagged only by a person or a selected D09 criterion.
  */
+
+/** R2-41: the price tier an account buys at (distributor or retail). */
+async function tierForLocation(db: DbOrTx, locationId: string | null): Promise<PriceTier> {
+  if (!locationId) return "retail";
+  const [loc] = await db.select({ kind: schema.customerLocation.kind }).from(schema.customerLocation).where(eq(schema.customerLocation.id, locationId));
+  return priceTierForKind(loc?.kind);
+}
 
 export interface OrderLineInput {
   skuId: string;
@@ -270,8 +278,9 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
       const [s] = await tx.select().from(schema.sku).where(eq(schema.sku.id, skuId));
       if (!s) throw new BusinessError("Unknown product", { field: "lines" });
       if (s.archivedAt) throw new BusinessError(`${s.name} is archived and cannot be newly ordered`, { field: `qty:${skuId}` });
-      const price = await currentPrice(tx, loc.marketId, skuId);
-      if (!price) throw new BusinessError(`${s.name} has no price in this market; Admin must set one`, { field: `qty:${skuId}` });
+      const tier = priceTierForKind(loc.kind);
+      const price = await currentPrice(tx, loc.marketId, skuId, new Date(), tier);
+      if (!price) throw new BusinessError(`${s.name} has no ${tier === "distributor" ? "distributor " : ""}price in this market; Admin must set one`, { field: `qty:${skuId}` });
       priced.push({ skuId, qty, unitPriceCents: price.priceCents, marketPriceId: price.id, kegsPerUnit: s.kegsPerUnit, skuName: s.name });
     }
 
@@ -765,7 +774,7 @@ export async function requestOrderChange(
   if (ord.demandState === "cancelled" || ord.demandState === "fulfilled") throw new StaleStateError(`${ord.orderNumber} is ${ord.demandState}; a change can no longer be requested.`);
   if (!input.reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
   if (input.kind === "amend_qty" && (input.requestedQty === undefined || !Number.isInteger(input.requestedQty) || input.requestedQty < 0)) throw new BusinessError("Requested quantity must be a whole number", { field: "requestedQty" });
-  const price = await currentPrice(db, ord.marketId, line.skuId);
+  const price = await currentPrice(db, ord.marketId, line.skuId, new Date(), await tierForLocation(db, ord.locationId));
   const [change] = await db
     .insert(schema.orderLineChange)
     .values({
@@ -830,7 +839,7 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
     if (newQty > line.currentQty) {
       const [sku] = await tx.select().from(schema.sku).where(eq(schema.sku.id, line.skuId));
       if (sku?.archivedAt) throw new BusinessError(`${sku.name} is archived; its quantity cannot be increased`, { field: "newQty" });
-      const price = await currentPrice(tx, ord.marketId, line.skuId);
+      const price = await currentPrice(tx, ord.marketId, line.skuId, new Date(), await tierForLocation(tx, ord.locationId));
       if (!price || price.priceCents !== line.unitPriceCentsAtSubmission) {
         throw new BusinessError("Added quantity would need a price decision (D12 unselected): submitted price differs from the current market price", { code: "unselected_policy" });
       }
@@ -854,6 +863,7 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
     });
     await syncDraftShipmentLine(tx, ord.id, orderLineId);
     await reassessOrder(tx, actor, ord.id);
+    await flagChangeAfterCutoff(tx, actor, ord, `quantity ${line.currentQty} to ${newQty}: ${reason}`);
     await recordAudit(tx, actor, {
       action: "order.amend_qty",
       subjectType: "order",
@@ -864,6 +874,33 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
       marketId: ord.marketId,
     });
     return row;
+  });
+}
+
+/**
+ * Round 3: orders may change until the origin's cutoff for the scheduled ship date; a change after it is allowed
+ * but logged as an exception for the office (cancelling is allowed any time and is not flagged).
+ */
+async function flagChangeAfterCutoff(tx: Tx, actor: Actor, ord: typeof schema.order.$inferSelect, what: string) {
+  const active = await activeShipmentForOrder(tx, ord.id);
+  if (active?.status === "delivered") return;
+  // The draft has no date until the office confirms it (R2-3), so the requested date stands in until then.
+  const shipDate = active?.scheduledDate ?? ord.requestedDate;
+  if (!shipDate) return;
+  const cutoff = await originCutoff(tx, active?.originWarehouseId ?? ord.warehouseId);
+  if (!cutoff) return;
+  const deadline = changeDeadline(cutoff, shipDate);
+  if (!deadline.passed) return;
+  await openException(tx, actor, {
+    category: "order_change_after_cutoff",
+    title: `${ord.orderNumber} changed after the cutoff`,
+    cause: `Changed ${what}. Changes for the ${shipDate} shipment closed ${deadline.time ? `at ${formatCutoff(deadline.time)} Pacific ` : ""}on ${deadline.date}.`,
+    marketId: ord.marketId,
+    locationId: ord.locationId,
+    ownerRole: "admin",
+    nextAction: "Confirm the origin can still pull the changed quantity, or move the ship date.",
+    dedupeKey: `order_change_after_cutoff:${ord.id}:${shipDate}`,
+    links: [{ subjectType: "order", subjectId: ord.id }, ...(active ? [{ subjectType: "shipment", subjectId: active.id }] : [])],
   });
 }
 
@@ -1000,7 +1037,7 @@ async function previewFromOrder(db: DbOrTx, last: typeof schema.order.$inferSele
   const out: RepeatPreviewLine[] = [];
   for (const l of lines) {
     const [s] = await db.select().from(schema.sku).where(eq(schema.sku.id, l.skuId));
-    const price = await currentPrice(db, last.marketId, l.skuId);
+    const price = await currentPrice(db, last.marketId, l.skuId, new Date(), await tierForLocation(db, last.locationId));
     const archived = Boolean(s?.archivedAt);
     out.push({
       skuId: l.skuId,

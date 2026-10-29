@@ -227,7 +227,7 @@ describe("Acceptance 4 — transfers", () => {
 });
 
 describe("Acceptance 5 — invoices", () => {
-  it("samples issue an NC invoice with $0 lines; distributors get no deposit, the FOB wording and MicroStar info; floating accounts get no deposit", async () => {
+  it("samples issue an NC invoice with $0 lines; distributors get no deposit, the FOB wording and the MicroStar note; floating accounts get no deposit", async () => {
     const sample = await createShipment(db, f.admin, header({ type: "S", scheduledDate: "2026-11-20" }), [{ skuId: f.skus.cantinescaCase.id, lotId: lotCase, qty: 2 }]);
     await confirmShipment(db, f.admin, sample.id);
     await deliverShipment(db, f.admin, sample.id, { actualDate: "2026-11-20" });
@@ -244,7 +244,9 @@ describe("Acceptance 5 — invoices", () => {
     expect(dInv.invoice.number).toBe("INV26378");
     expect(dInv.invoice.fobWording).toBe("FOB brewery or designated warehouse");
     expect(dInv.lines.some((l) => l.kind === "deposit")).toBe(false);
-    expect(dInv.lines.find((l) => l.kind === "info")?.description).toMatch(/MicroStar kegs shipped: 2 half barrel, 1 sixtel/);
+    // Round 3: the keg statement is in the printed notes, not an invoice line.
+    expect(dInv.lines.some((l) => /MicroStar/.test(l.description))).toBe(false);
+    expect(dInv.invoice.printedNotes).toMatch(/MicroStar-owned \(2 half barrel, 1 sixtel on this invoice\)/);
     expect(dInv.invoice.depositCents).toBe(0);
 
     const fl = await createShipment(db, f.admin, header({ destinationLocationId: floating.id, scheduledDate: "2026-11-22" }), [{ skuId: f.skus.cantinescaSixtel.id, lotId: lotSixtel, qty: 1 }]);

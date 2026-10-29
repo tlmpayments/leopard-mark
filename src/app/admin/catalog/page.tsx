@@ -3,7 +3,7 @@ import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
-import { PACKAGE_LABEL, currentPrice, formatCents, listSkuAliases, listSkus, type PackageKind } from "@/lib/domain/catalog/service";
+import { PACKAGE_LABEL, PRICE_TIER_LABEL, currentPrice, formatCents, listSkuAliases, listSkus, type PackageKind } from "@/lib/domain/catalog/service";
 import { listMarkets } from "@/lib/domain/markets/service";
 import { archiveSkuAction, createSkuAction, setPriceAction } from "../actions";
 import { updateSkuDetailsAction, upsertSkuAliasAction } from "./actions";
@@ -15,9 +15,22 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
   const [skus, markets, aliases] = await Promise.all([listSkus(d), listMarkets(d), listSkuAliases(d)]);
   const skuCode = new Map(skus.map((s) => [s.id, s.code]));
   const prices = new Map<string, number | null>();
-  for (const s of skus) for (const m of markets) prices.set(`${m.id}:${s.id}`, (await currentPrice(d, m.id, s.id))?.priceCents ?? null);
+  for (const s of skus)
+    for (const m of markets)
+      for (const tier of ["retail", "distributor"] as const) prices.set(`${m.id}:${s.id}:${tier}`, (await currentPrice(d, m.id, s.id, new Date(), tier))?.priceCents ?? null);
+  const priceCell = (marketId: string, skuId: string) => {
+    const r = prices.get(`${marketId}:${skuId}:retail`);
+    const dist = prices.get(`${marketId}:${skuId}:distributor`);
+    if (r == null && dist == null) return "—";
+    return (
+      <span className="whitespace-nowrap">
+        {r != null ? formatCents(r) : "—"}
+        {dist != null ? <span className="text-muted"> · Dist {formatCents(dist)}</span> : null}
+      </span>
+    );
+  };
   return (
-    <Page title="Catalog & market prices" subtitle="Internal catalog and market prices are authoritative (U23). Prices are fixed; Sales cannot override. Price history is retained with effective dates.">
+    <Page title="Catalog & market prices" subtitle="Internal catalog and market prices are authoritative (U23). Each market has a retail price and a distributor price (R2-41); Sales cannot override. Price history is retained with effective dates.">
       <Flash {...flash} />
       <Card title="SKUs">
         <Table
@@ -30,7 +43,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
             PACKAGE_LABEL[s.packageKind as PackageKind],
             s.sellingUnit,
             String(s.kegsPerUnit),
-            ...markets.map((m) => formatCents(prices.get(`${m.id}:${s.id}`))),
+            ...markets.map((m) => priceCell(m.id, s.id)),
             !s.archivedAt && can(actor, "catalog.manage") ? (
               <form key="a" action={archiveSkuAction}>
                 <input type="hidden" name="skuId" value={s.id} />
@@ -58,7 +71,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
         </form>
       </Card>
       <Card title="Set a market price">
-        <form action={setPriceAction} className="grid gap-2 sm:grid-cols-5">
+        <form action={setPriceAction} className="grid gap-2 sm:grid-cols-6">
           <Select name="marketId" required defaultValue="">
             <option value="" disabled>
               Market…
@@ -79,11 +92,18 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
               </option>
             ))}
           </Select>
+          <Select name="tier" required defaultValue="retail" aria-label="Price tier">
+            {(["retail", "distributor"] as const).map((t) => (
+              <option key={t} value={t}>
+                {PRICE_TIER_LABEL[t]}
+              </option>
+            ))}
+          </Select>
           <Input name="price" type="number" step="0.01" min={0} required placeholder="Price (USD)" />
           <Input name="reason" placeholder="Reason" />
           <Button small variant="secondary">Set price</Button>
         </form>
-        <Notice tone="info">Orders keep their price at submission; whether it is committed or repriced later is D12 (unselected). Keg deposit is $35 per keg regardless of package (O28).</Notice>
+        <Notice tone="info">Distributor accounts are priced from the distributor price and every other account from the retail price; a distributor with no distributor price set cannot be ordered for. Orders keep their price at submission. Keg deposits apply to self-distribution accounts only.</Notice>
       </Card>
       <Card title="SKU details for documents (3.1, 3.7, 3.8, 4.8)">
         <p className="mb-2 text-xs text-muted">Codes are immutable once referenced (3.2). Case UPC prints on the distributor template; the pallet fraction sizes the computed pallet count; weight prints per line; shelf life is internal only and stays blank until the owner supplies day counts.</p>
@@ -122,6 +142,9 @@ export default async function CatalogPage({ searchParams }: { searchParams: Sear
                   </Field>
                   <Field label="Shelf life (days, internal)">
                     <Input name="shelfLifeDays" type="number" min={0} step={1} defaultValue={s.shelfLifeDays ?? ""} />
+                  </Field>
+                  <Field label="Unit cost (USD, internal)" hint="Counts samples toward the spend on an account">
+                    <Input name="unitCost" type="number" step="0.01" min={0} defaultValue={s.unitCostCents != null ? (s.unitCostCents / 100).toFixed(2) : ""} />
                   </Field>
                   <div className="flex items-end">
                     <Button small variant="secondary">

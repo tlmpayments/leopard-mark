@@ -257,7 +257,7 @@ those rows rather than duplicating them. After this revision deploys:
    batches and lots written as history that never touches the ledger. A second dry run of the same file must
    report zero creates and zero updates.
 4. **Verify origins and counters**: under *Markets & stock* every active origin that will ship shows its
-   three-letter code (EBB, BWD, PRO, RTB, ALE, JAB, RAL, EWD, WLA, RAD) and every brewery its two-digit lot
+   three-letter code (EBB, BWD, PRO, RTB, ALE, JAB, REA, EWD, WLA, RAD) and every brewery its two-digit lot
    facility code; Radford shows 31 Plymouth St, Mansfield, MA 02048; Envision and SC Warehouses are inactive
    with no code. Confirm one test shipment on a scratch date only if the Owner agrees, since the number it takes
    is permanent; otherwise confirm the counters by reading the next INV / NC numbers on the first real issue

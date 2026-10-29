@@ -450,8 +450,12 @@ export const invoice = pgTable(
     payBy: payByEnum("pay_by"),
     subtotalCents: integer("subtotal_cents").notNull().default(0),
     depositCents: integer("deposit_cents").notNull().default(0),
+    /** Round 3 (R2-52): freight and fuel surcharge passed through to a distributor, its own lines; part of the total. */
+    freightCents: integer("freight_cents").notNull().default(0),
     totalCents: integer("total_cents").notNull().default(0),
     notes: text("notes"),
+    /** Round 3: the account's invoice notes as they stood when the invoice was computed; printed under the lines. */
+    printedNotes: text("printed_notes"),
     issuedByEmployeeId: uuid("issued_by_employee_id"),
     issuedAt: timestamp("issued_at", { withTimezone: true }),
     paidAt: timestamp("paid_at", { withTimezone: true }),
@@ -473,7 +477,7 @@ export const invoiceLine = pgTable(
       .notNull()
       .references(() => invoice.id),
     lineNo: integer("line_no").notNull(),
-    kind: text("kind").notNull(), // beer | deposit | pos | info
+    kind: text("kind").notNull(), // beer | deposit | pos | info | freight (Round 3)
     shipmentLineId: uuid("shipment_line_id"),
     skuId: uuid("sku_id").references(() => sku.id),
     description: text("description").notNull(),
@@ -569,6 +573,10 @@ export const companySettings = pgTable("company_settings", {
   remitTo: text("remit_to"),
   /** End-of-day pull sheets go to each warehouse's address at its send time when on (R2-29); off by default, ships off. */
   autoSendPullSheets: boolean("auto_send_pull_sheets").notNull().default(false),
+  /** Round 3: fuel surcharge on freight lanes, as a percentage of the freight (linehaul) only. 42 in October 2026. */
+  fuelSurchargePct: numeric("fuel_surcharge_pct", { precision: 5, scale: 2 }).notNull().default("43"),
+  /** R2-51: an account whose overdue balance reaches this amount is raised in Exceptions; distributors are raised when any invoice is overdue. */
+  collectionsThresholdCents: integer("collections_threshold_cents").notNull().default(50000),
   updatedByEmployeeId: uuid("updated_by_employee_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

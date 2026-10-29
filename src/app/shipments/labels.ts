@@ -37,3 +37,6 @@ export function splitList(text: string): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+/** Round 3: the carriers in use, offered as a picklist; any other carrier can still be typed. */
+export const CARRIERS = ["Own driver", "Express Wine Delivery", "Orange Courier", "Distributor pickup", "LTL carrier"] as const;

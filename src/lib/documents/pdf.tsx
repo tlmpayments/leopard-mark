@@ -498,6 +498,11 @@ function DeliveryReceipt({ s }: { s: ShipmentSnapshot }) {
           <Text style={styles.bannerText}>Will call, picked up at origin</Text>
         </View>
       ) : null}
+      {s.leaveWithoutSignature && !s.pickup ? (
+        <View style={styles.banner}>
+          <Text style={styles.bannerText}>No signature needed: the account allows the driver to leave this delivery</Text>
+        </View>
+      ) : null}
       <View style={styles.twoCol}>
         <Party label="Ship from" party={s.shipFrom} />
         <Party label="Ship to" party={s.shipTo} />
@@ -686,6 +691,10 @@ function InvoiceDocument({ inv }: { inv: InvoiceSnapshot }) {
     { label: "Amount", width: 80, align: "right", render: (l) => formatMoney(l.lineTotalCents) },
   ];
   const shipTo: PartyBlock = inv.shipTo ?? { name: "Will call", lines: [] };
+  const freight = inv.freightCents ?? 0;
+  const notes = inv.printedNotes ?? [];
+  // Distributors are never charged a keg deposit; the row only shows when something was charged or on a retail invoice.
+  const showDeposit = inv.depositCents > 0 || !inv.fobWording;
   return (
     <Page size="LETTER" style={styles.page}>
       {stamp ? <Stamp word={stamp} /> : null}
@@ -748,18 +757,28 @@ function InvoiceDocument({ inv }: { inv: InvoiceSnapshot }) {
         <View style={styles.totalsRow} wrap={false}>
           <View style={[styles.cell, { flex: 1 }]} />
           <View style={[styles.cell, { width: 150 }]}>
-            <Text>Subtotal</Text>
-            <Text>Keg deposit</Text>
+            <Text>{freight > 0 ? "Product subtotal" : "Subtotal"}</Text>
+            {showDeposit ? <Text>Keg deposit</Text> : null}
+            {freight > 0 ? <Text>Freight and fuel (pass-through)</Text> : null}
             <Text style={styles.bold}>Total</Text>
           </View>
           <View style={[styles.cell, { width: 80, textAlign: "right" }]}>
             <Text>{formatMoney(inv.subtotalCents)}</Text>
-            <Text>{formatMoney(inv.depositCents)}</Text>
+            {showDeposit ? <Text>{formatMoney(inv.depositCents)}</Text> : null}
+            {freight > 0 ? <Text>{formatMoney(freight)}</Text> : null}
             <Text style={styles.bold}>{formatMoney(inv.totalCents)}</Text>
           </View>
         </View>
       </View>
-      {inv.fobWording ? <Text style={styles.bold}>{text(inv.fobWording)}</Text> : null}
+      {inv.fobWording && !notes.some((n) => n.includes("FOB")) ? <Text style={styles.bold}>{text(inv.fobWording)}</Text> : null}
+      {notes.length ? (
+        <View style={{ marginTop: 8 }} wrap={false}>
+          <Text style={styles.sectionTitle}>Notes</Text>
+          {notes.map((n, i) => (
+            <Text key={i}>{`\u2022 ${text(n)}`}</Text>
+          ))}
+        </View>
+      ) : null}
       {inv.issuer.remitTo ? (
         <View style={{ marginTop: 8 }}>
           <Text style={styles.sectionTitle}>Remit to</Text>

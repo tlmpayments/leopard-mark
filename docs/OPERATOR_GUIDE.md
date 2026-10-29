@@ -131,7 +131,7 @@ return or correct the same sample is refused with its current state.
 ## Origins: codes, lot facility codes, kinds (Stock: Markets & stock, origins editor)
 Every brewery, warehouse and cold store that ships is an **origin** (the `warehouse` record with extra fields).
 * **Origin code** — three letters, unique, typed in capitals: the confirmed codes are EBB East Brother, BWD
-  Beachwood, PRO Prost, RTB Round Table, ALE AleSmith, JAB Jack's Abby, RAL Real Ale, EWD Express Wine Delivery,
+  Beachwood, PRO Prost, RTB Round Table, ALE AleSmith, JAB Jack's Abby, REA Real Ale, EWD Express Wine Delivery,
   WLA Balmuth, RAD Radford (2.2). The code is the first segment of every shipment number, so **confirmation
   refuses an origin that has no code** and tells you to set one. A code already used by another origin is refused.
 * **Lot facility code** — two digits (01 to 99) on breweries only; it is the first segment of every lot code.
