@@ -44,3 +44,7 @@ tests/ui/shots/
 # embedded demo database (development demo mode)
 .fv-demo/
 !.env.example
+
+# Workbook exports and other real business data never enter the repository (tests read TLM_WORKBOOK_PATH when set)
+*.xlsx
+!tests/fixtures/synthetic-*.xlsx
