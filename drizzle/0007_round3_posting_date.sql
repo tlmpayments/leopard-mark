@@ -1,0 +1,4 @@
+-- Round 3 follow-up: distributor invoice notes name the price posting effective the first of the invoice's month.
+-- {posting_date} is filled in on each invoice (the first of the invoice month, MM/01/YYYY).
+UPDATE "customer_location" SET "invoice_notes" = replace("invoice_notes", 'price posting effective 10/01/2026', 'price posting effective {posting_date}') WHERE "kind" = 'distributor' AND "invoice_notes" LIKE '%price posting effective 10/01/2026%';--> statement-breakpoint
+UPDATE "customer_location" SET "invoice_notes" = replace("invoice_notes", 'per Supplier''s MA price filing (FOB brewery or designated warehouse)', 'per Supplier''s MA price filing effective {posting_date} (FOB brewery or designated warehouse)') WHERE "kind" = 'distributor' AND "invoice_notes" LIKE '%per Supplier''s MA price filing (FOB brewery or designated warehouse)%';

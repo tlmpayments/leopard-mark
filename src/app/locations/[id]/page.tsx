@@ -979,7 +979,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
                 </Field>
               ))}
               <div className="sm:col-span-3">
-                <Field label="Invoice notes (one per line, printed as bullets)" hint="FOB, taxes, freight, the keg statement and terms. When these mention FOB, the standard FOB line is not printed again.">
+                <Field label="Invoice notes (one per line, printed as bullets)" hint="FOB, taxes, freight, the keg statement and terms. {posting_date} prints as the first of the invoice's month (the price posting in effect). When these mention FOB, the standard FOB line is not printed again.">
                   <Textarea name="invoiceNotes" rows={6} defaultValue={loc.invoiceNotes ?? ""} />
                 </Field>
               </div>

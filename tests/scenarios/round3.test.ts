@@ -15,7 +15,7 @@ import { countCadence } from "@/lib/domain/counts/service";
 import { accountSpend } from "@/lib/domain/customers/spend";
 import { updateAccountShipping } from "@/lib/domain/customers/shipping";
 import { changeDeadline, cutoffHint, nextShipDate } from "@/lib/domain/cutoff/service";
-import { fuelSurchargeCents, getInvoice, laneFreight, markInvoicePaid, palletsForLines } from "@/lib/domain/invoices/service";
+import { buildInvoiceSnapshot, fuelSurchargeCents, getInvoice, laneFreight, markInvoicePaid, palletsForLines, renderInvoiceNotes } from "@/lib/domain/invoices/service";
 import { recordPackagingReport } from "@/lib/domain/lots/service";
 import { adminAmendQuantity, getOrder, submitOrder } from "@/lib/domain/orders/service";
 import { updateOrigin } from "@/lib/domain/origins/service";
@@ -135,6 +135,18 @@ describe("Distributor invoices: lane freight, per-unit freight, notes", () => {
     expect(inv.lines.some((l) => /Fuel surcharge/.test(l.description))).toBe(false);
     // No notes of its own mentioning kegs: the standard MicroStar statement is added to the notes.
     expect(inv.invoice.printedNotes).toMatch(/MicroStar-owned \(0 half barrel, 10 sixtel on this invoice\)/);
+  });
+
+  it("the price posting date on the notes is the first of the invoice's month", async () => {
+    expect(renderInvoiceNotes("Price posting effective {posting_date}.", "2026-11-12")).toBe("Price posting effective 11/01/2026.");
+    expect(renderInvoiceNotes("Posting {posting_date}", null, at("2027-01-15T20:00:00Z"))).toBe("Posting 01/01/2027");
+    await updateAccountShipping(db, f.admin, hdi.id, { invoiceNotes: "Pricing is FOB brewery or designated warehouse per the Connecticut price posting effective {posting_date}.\nKegs: no keg deposit is charged." });
+    const s = await createShipment(db, f.admin, { type: "D", originWarehouseId: f.warehouse.id, destinationLocationId: hdi.id, scheduledDate: "2026-12-03" }, [{ skuId: f.skus.cantinescaCase.id, lotId: lot, qty: 10 }]);
+    await confirmShipment(db, f.admin, s.id);
+    await deliverShipment(db, f.admin, s.id, { actualDate: "2026-12-03" });
+    const invId = (await getShipment(db, s.id))!.invoices[0].id;
+    const snap = await buildInvoiceSnapshot(db, invId, "test");
+    expect(snap.printedNotes?.[0]).toBe("Pricing is FOB brewery or designated warehouse per the Connecticut price posting effective 12/01/2026.");
   });
 
   it("validates freight settings on the account", async () => {

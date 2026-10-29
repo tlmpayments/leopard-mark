@@ -67,6 +67,17 @@ export function laneFreight(pallets: number, r: LaneRates): { qty: number; unitC
   return { qty: 1, unitCents: r.truckloadCents, totalCents: r.truckloadCents, description: `Freight, prepaid and add, truckload to distributor (${pallets} pallets)` };
 }
 
+/**
+ * Printed invoice notes with their placeholders filled in. {posting_date} is the price posting in effect: the first
+ * of the invoice's month (MM/01/YYYY), or of today's month (Pacific) while the invoice is a draft.
+ */
+export const POSTING_DATE_TOKEN = "{posting_date}";
+export function renderInvoiceNotes(notes: string, invoiceDate: string | null, now: Date = new Date()): string {
+  const iso = invoiceDate ?? new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const [y, m] = iso.split("-");
+  return notes.split(POSTING_DATE_TOKEN).join(`${m}/01/${y}`);
+}
+
 /** The fuel surcharge on lane freight only, rounded to the cent (R2-52). */
 export function fuelSurchargeCents(freightCents: number, pct: number): number {
   return Math.round((freightCents * pct) / 100);
@@ -413,7 +424,7 @@ export async function buildInvoiceSnapshot(db: DbOrTx, invoiceId: string, genera
     freightCents: inv.freightCents ?? 0,
     totalCents: inv.totalCents,
     notes: inv.notes,
-    printedNotes: inv.printedNotes ? inv.printedNotes.split(/\r?\n/).map((l) => l.replace(/^\s*[•*-]\s*/, "").trim()).filter(Boolean) : [],
+    printedNotes: inv.printedNotes ? renderInvoiceNotes(inv.printedNotes, inv.invoiceDate).split(/\r?\n/).map((l) => l.replace(/^\s*[•*-]\s*/, "").trim()).filter(Boolean) : [],
     generatedAt: new Date().toISOString(),
     generatedBy,
   };
