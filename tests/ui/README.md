@@ -1,15 +1,15 @@
 # Role browser journeys (Playwright)
 
 `tests/ui/journeys.mjs` runs the nine role-based journeys of the hardening brief (§6.3), plus a tenth for the
-email + PIN sign-in, an eleventh for the setup page and a twelfth for the shipments module (origins, lots,
-shipments, documents, delivery, invoice, kegs), against a running local demo. Each journey asserts the **visible result** (flash messages, page text) and the **persisted
+email + PIN sign-in, an eleventh for the setup page, a twelfth for the shipments module (origins, lots,
+shipments, documents, delivery, invoice, kegs) and a thirteenth for the navigation sections per role, against a running local demo. Each journey asserts the **visible result** (flash messages, page text) and the **persisted
 outcome** (re-read after a fresh page load), takes full-page screenshots of the changed views, and records
 step counts and wall-clock time. This is automated validation with fictional data — it is not a staff
 usability session (see `docs/STAFF_SESSION_SCRIPT.md` for that).
 
 ```bash
 npm run demo                         # shell 1: zero-setup demo (embedded database, fictional data)
-npm run test:ui                      # shell 2: journeys 1 to 12; exits 1 on any failed assertion, page error or 5xx
+npm run test:ui                      # shell 2: journeys 1 to 13; exits 1 on any failed assertion, page error or 5xx
 SHOTS_DIR=/tmp/shots npm run test:ui # choose where screenshots + timings.json land (default tests/ui/shots/, git-ignored)
 ```
 
@@ -37,6 +37,7 @@ demo database.
 | 11 | Setup page | state card shows migrations/Owner; an action without the setup token is refused |
 | 10 | Sign-in — email + PIN | wrong PIN refused generically with the email kept; correct PIN signs in with internal authority only; Admin-set temporary PIN → old PIN refused → forced *Choose your PIN* → weak PIN refused → normal use |
 | 12 | Shipments — origin code, packaging lot, draft with lines, confirm assigns the number, BOL PDF, delivery issues the invoice and posts kegs | Admin sets `EBB` / lot facility `01` / kind brewery on East Brother in the origins editor and the code persists after reload (`j12-01-origins`); the packaging report records a Cantinesca lot with a computed code of the shape `01CNT` + yymmdd + run and shows the quantities packaged (`j12-02-lot`); a delivery draft from EBB to a demo account is created without a number; two lines each name the new lot and a blank row is ignored; *Confirm (assign number)* reports `EBB-D-YYMMDD-SEQ`, the BOL and picking ticket are stored, the INV draft exists and stock is allocated (`j12-03-confirmed`); the BOL and picking ticket routes return `application/pdf` bodies starting with `%PDF`, and the batch print for the origin and date renders; *Mark delivered* with the actual date and one empty half barrel reports the delivery, shows an `INV` + five-digit number and the empties collected, and removes the state actions (`j12-04-delivered`); the invoice is listed, its PDF renders, it is issued and carries the keg deposit line (`j12-05-invoice`); the Kegs page has a balance row for the account and the Shipments list shows the number as delivered (`j12-06-shipments-list`); Sales in the same market can open the shipment but sees no void or regenerate controls; an unassigned Driver cannot open it |
+| 13 | Navigation — sections in the row, the current section underlined, its pages on the second row, per role | The Owner's row is Accounts, Orders, Shipments, Stock, Invoices, Kegs, Exceptions, Reports, Admin in that order, and a single-page section (Shipments) has no second row; /admin/markets and /batches land in Stock (Lots, Stock counts, Markets & stock), /admin/intake in Orders, /finance in Invoices, /admin in Exceptions (Command center, Exceptions, Notices) and /admin/settings in Admin with its seven pages (`j13-01-owner-stock`); a Sales rep's row is Accounts, Orders, Shipments, Invoices, Kegs with Orders holding Orders and Samples, and /lots still opens for Sales by URL; a Driver's row is Shipments only |
 
 ## Go-live path on a production build (`tests/ui/production-setup.mjs`)
 

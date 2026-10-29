@@ -311,7 +311,7 @@ At the hardening revision 94 PGlite tests, 10 real-Postgres tests and 10 browser
 commands are recorded in `HARDENING_REPORT.md`. On the shipments revision (October 28) `npm test` reports
 **137 passed and 12 skipped** (16 test files passed, the 3 real-Postgres files skipped; the skips are the 11 real-Postgres tests, which need
 `TEST_DATABASE_URL`, and the real-workbook import, which needs `TLM_WORKBOOK_PATH`); `npm run test:ui` runs
-**12 journeys**.
+**13 journeys** (journey 13: navigation sections per role).
 
 ## 8. Independent review history
 

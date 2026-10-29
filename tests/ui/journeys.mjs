@@ -762,6 +762,67 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   await ctx.close();
 }
 
+// ---------------- 13. Navigation: daily sections in the row, setup under Admin, per role ----------------
+{
+  const j = journey("13 Navigation — sections in the row, the current section underlined, its pages on the second row, per role");
+  const rowOf = (page) => page.locator('nav[aria-label="Main"] a').allInnerTexts();
+  const currentOf = (page) => page.locator('nav[aria-label="Main"] a[aria-current]').allInnerTexts();
+  const secondOf = (page) => page.locator('header nav:not([aria-label="Main"]) a').allInnerTexts();
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x.trim() === b[i]);
+
+  j.step("Owner: nine sections in order");
+  const owner = await session("Demo Owner");
+  await owner.page.goto(`${BASE}/shipments`);
+  const ownerRow = await rowOf(owner.page);
+  const expected = ["Accounts", "Orders", "Shipments", "Stock", "Invoices", "Kegs", "Exceptions", "Reports", "Admin"];
+  if (same(ownerRow, expected)) ok("Owner row: " + expected.join(", "));
+  else fail(`Owner row was ${ownerRow.join(", ")}`);
+  if (same(await secondOf(owner.page), [])) ok("single-page section has no second row");
+  else fail("Shipments shows a second row");
+
+  j.step("Owner: each page lands in its section (longest path wins: /admin/markets is Stock, /admin is Exceptions)");
+  const cases = [
+    ["/admin/markets", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
+    ["/batches", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
+    ["/admin/intake", "Orders", ["Orders", "Samples", "Email intake"]],
+    ["/finance", "Invoices", ["Invoices", "Finance"]],
+    ["/admin", "Exceptions", ["Command center", "Exceptions", "Notices"]],
+    ["/admin/settings", "Admin", ["Employees & access", "Company settings", "Catalog & prices", "Products", "Decisions", "Integrations", "Import from workbook"]],
+  ];
+  for (const [url, section, pages] of cases) {
+    await owner.page.goto(`${BASE}${url}`);
+    const cur = await currentOf(owner.page);
+    const second = await secondOf(owner.page);
+    if (same(cur, [section]) && same(second, pages)) ok(`${url}: ${section} current; second row ${pages.join(", ")}`);
+    else fail(`${url}: current ${cur.join(",")}, second row ${second.join(", ")}`);
+  }
+  await owner.page.goto(`${BASE}/admin/markets`);
+  await shot(owner.page, "j13-01-owner-stock");
+  await owner.ctx.close();
+
+  j.step("Sales: the selling sections only; no Stock, no Admin");
+  const sales = await session("Sam Sales");
+  await sales.page.goto(`${BASE}/orders`);
+  const salesRow = await rowOf(sales.page);
+  if (same(salesRow, ["Accounts", "Orders", "Shipments", "Invoices", "Kegs"])) ok("Sales row: Accounts, Orders, Shipments, Invoices, Kegs");
+  else fail(`Sales row was ${salesRow.join(", ")}`);
+  const salesSecond = await secondOf(sales.page);
+  if (same(salesSecond, ["Orders", "Samples"])) ok("Sales Orders section: Orders, Samples (Email intake is Admin-only)");
+  else fail(`Sales second row was ${salesSecond.join(", ")}`);
+  await sales.page.goto(`${BASE}/lots`);
+  await expectText(sales.page, /Lots/, "a page Sales may open but not in its row still opens by URL");
+  await sales.ctx.close();
+
+  j.step("Driver: Shipments only");
+  const driver = await session("Dee Driver");
+  await driver.page.goto(`${BASE}/shipments`);
+  const driverRow = await rowOf(driver.page);
+  if (same(driverRow, ["Shipments"])) ok("Driver row: Shipments");
+  else fail(`Driver row was ${driverRow.join(", ")}`);
+  await driver.ctx.close();
+  j.end();
+}
+
 await browser.close();
 console.log("\nTIMINGS (automated browser, fictional data — not a staff session):");
 for (const t of timings) console.log(`  ${t.name}: ${t.steps} steps, ${t.seconds}s ${t.note}`);
