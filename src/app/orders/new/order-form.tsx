@@ -75,7 +75,7 @@ export function OrderForm(props: OrderFormProps) {
       <input type="hidden" name="locationId" value={props.locationId} />
       <input type="hidden" name="submissionKey" value={submissionKey} />
       {state.error ? (
-        <div id="form-error" data-flash="error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+        <div id="form-error" data-flash="error" role="alert" className=" bg-danger-soft px-3 py-2 text-sm text-danger">
           {state.error}
         </div>
       ) : null}
@@ -153,7 +153,7 @@ export function OrderForm(props: OrderFormProps) {
       </Card>
       <div className="flex flex-wrap gap-2">
         <Button disabled={!anyQty}>{props.repeatOf ? "Place new order" : "Submit order"}</Button>
-        <Link href={`/locations/${props.locationId}`} className="inline-flex min-h-11 items-center rounded-lg border border-line bg-card px-4 py-2.5 text-sm">
+        <Link href={`/locations/${props.locationId}`} className="inline-flex min-h-11 items-center border border-rule bg-card px-4 py-2.5 text-sm">
           Cancel
         </Link>
       </div>

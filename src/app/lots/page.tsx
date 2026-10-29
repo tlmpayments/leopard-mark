@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Badge, Button, Card, Flash, Input, Page, Select, Table, fmtDay } from "@/components/ui";
+import { Button, Code, FilterBar, Flash, Input, Num, Page, Select, Table, fmtDay } from "@/components/ui";
+import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -36,27 +37,29 @@ export default async function LotsPage({ searchParams }: { searchParams: SearchP
       actions={
         can(actor, "lot.manage") ? (
           <>
-            <Button href="/lots/new">Packaging report</Button>
-            <Button href="/batches" variant="secondary">
+            <Button href="/batches" variant="secondary" small>
               Batches
+            </Button>
+            <Button href="/lots/new" small>
+              Packaging report
             </Button>
           </>
         ) : (
-          <Button href="/batches" variant="secondary">
+          <Button href="/batches" variant="secondary" small>
             Batches
           </Button>
         )
       }
     >
       <Flash {...flash} />
-      <form className="grid gap-2 sm:grid-cols-5" role="search">
-        <Select name="facility" defaultValue={facility ?? ""} aria-label="Facility">
+      <FilterBar>
+        <Select name="facility" defaultValue={facility ?? ""} aria-label="Facility" className="min-w-40">
           <option value="">All facilities</option>
           {origins
             .filter((o) => o.kind === "brewery")
             .map((o) => (
               <option key={o.id} value={o.id}>
-                {o.lotFacilityCode ? `${o.lotFacilityCode} · ` : ""}
+                {o.lotFacilityCode ? `${o.lotFacilityCode} ` : ""}
                 {o.name}
               </option>
             ))}
@@ -65,36 +68,39 @@ export default async function LotsPage({ searchParams }: { searchParams: SearchP
           <option value="">All brands</option>
           {BRAND_CODES.map((b) => (
             <option key={b.code} value={b.code}>
-              {b.code} · {b.name}
+              {b.code} {b.name}
             </option>
           ))}
         </Select>
-        <Input name="q" defaultValue={q ?? ""} placeholder="Lot code" aria-label="Lot code" />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Show dotted legacy lots
+        <Input name="q" defaultValue={q ?? ""} placeholder="Lot code" aria-label="Lot code" className="w-44 font-mono" />
+        <label className="flex items-center gap-1.5 text-[13px] text-ink-2">
+          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Dotted legacy lots
         </label>
-        <Button variant="secondary">Filter</Button>
-      </form>
-      <Card>
-        <Table
-          caption="Lots"
-          head={["Lot code", "Facility", "Brand", "Packaged", "Run", "Quantities", "Source", "Age (days)"]}
-          rows={shown.map((l) => [
-            <Link key="c" href={`/lots/${l.id}`} className="font-mono text-sm font-medium hover:underline">
-              {l.lotCode}
-              {l.legacyCode ? <span className="ml-1 text-xs text-muted">({l.legacyCode}, history only)</span> : null}
-            </Link>,
-            facilityName.get(l.facilityWarehouseId) ?? "—",
-            `${l.brandCode}${brandName.has(l.brandCode) ? ` · ${brandName.get(l.brandCode)}` : ""}`,
-            fmtDay(l.packagingDate),
-            l.runCode,
-            l.quantitiesKnown ? <Badge key="q" tone="good">known</Badge> : <Badge key="q" tone="warn">unconfirmed</Badge>,
-            SOURCE_LABEL[l.source] ?? l.source,
-            String(ageDays(l.packagingDate, today)),
-          ])}
-        />
-        <p className="mt-2 text-xs text-muted">Lot age is internal (4.8) and never printed on customer documents. Dotted legacy lots never appear in pickers (1.7).</p>
-      </Card>
+        <Button variant="secondary" small>
+          Filter
+        </Button>
+      </FilterBar>
+      <Table
+        caption="Lots"
+        head={["Lot code", "Facility", "Brand", "Packaged", "Run", "Quantities", "Source", "Age (days)"]}
+        widths={[LIST_WIDTHS.number, undefined, "11rem", LIST_WIDTHS.date, "3.5rem", LIST_WIDTHS.status, "12rem", LIST_WIDTHS.qty]}
+        align={["left", "left", "left", "left", "center", "left", "left", "right"]}
+        empty="No lots match this filter."
+        rows={shown.map((l) => [
+          <Link key="c" href={`/lots/${l.id}`} className="whitespace-nowrap text-navy hover:underline">
+            <Code className="font-medium">{l.lotCode}</Code>
+            {l.legacyCode ? <span className="ml-1.5 text-[11px] text-ink-3">{l.legacyCode}, history only</span> : null}
+          </Link>,
+          facilityName.get(l.facilityWarehouseId) ?? "—",
+          `${l.brandCode}${brandName.has(l.brandCode) ? ` ${brandName.get(l.brandCode)}` : ""}`,
+          <span key="d" className="whitespace-nowrap">{fmtDay(l.packagingDate)}</span>,
+          l.runCode,
+          l.quantitiesKnown ? <span key="q" className="font-semibold text-navy">Known</span> : <span key="q" className="text-ink-2">Unconfirmed</span>,
+          SOURCE_LABEL[l.source] ?? l.source,
+          <Num key="a">{String(ageDays(l.packagingDate, today))}</Num>,
+        ])}
+      />
+      <p className="text-xs text-ink-3">Lot age is internal (4.8) and never printed on customer documents. Dotted legacy lots never appear in pickers (1.7).</p>
     </Page>
   );
 }

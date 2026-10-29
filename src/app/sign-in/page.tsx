@@ -23,8 +23,8 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
   const refused = reason && reason !== "session" ? decodeURIComponent(reason).replace(/_/g, " ") : null;
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4 py-10">
-      <h1 className="text-2xl font-semibold">Leopard Mark Ops</h1>
-      <p className="mt-1 text-sm text-muted">Familiar Ventures self-distribution operating system. Sign in with your company email and PIN; what you may do is decided by your internal role and market grants.</p>
+      <h1 className="font-display text-[22px] font-bold">Sign in</h1>
+      <p className="mt-1 text-sm text-ink-2">Sign in with your company email and PIN; what you may do is decided by your internal role and market grants.</p>
       {demo ? (
         <div className="mt-4">
           <Notice tone="warn" title="DEVELOPMENT DEMO MODE.">
@@ -68,7 +68,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
             <p className="mb-3 text-xs text-muted">Signs in as a seeded employee without a PIN. Enabled state and grants still apply. Never available on a deployment.</p>
             <form action="/api/auth/dev" method="post" className="space-y-2">
               {employees.map((e) => (
-                <button key={e.id} name="employeeId" value={e.id} className="flex w-full items-center justify-between rounded-lg border border-line px-3 py-2 text-left text-sm hover:bg-background">
+                <button key={e.id} name="employeeId" value={e.id} className="flex w-full items-center justify-between border-b border-rule-soft py-2 text-left text-sm hover:bg-background">
                   <span>
                     {e.displayName}
                     {!e.enabled ? <span className="ml-2 text-xs text-danger">disabled</span> : null}

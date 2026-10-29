@@ -43,7 +43,7 @@ function Changes({ changes }: { changes: FieldChange[] }) {
 
 function Details({ summary, children, open = false }: { summary: ReactNode; children: ReactNode; open?: boolean }) {
   return (
-    <details open={open} className="rounded-lg border border-line">
+    <details open={open} className="border-t border-rule">
       <summary className="cursor-pointer px-3 py-2 text-sm font-medium">{summary}</summary>
       <div className="border-t border-line px-3 py-2">{children}</div>
     </details>

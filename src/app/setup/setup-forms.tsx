@@ -7,7 +7,7 @@ import type { FormState } from "@/lib/actions/helpers";
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 
 function Result({ state }: { state: FormState }) {
-  if (state.error) return <div data-flash="error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{state.error}</div>;
+  if (state.error) return <div data-flash="error" role="alert" className=" bg-danger-soft px-3 py-2 text-sm text-danger">{state.error}</div>;
   return null;
 }
 

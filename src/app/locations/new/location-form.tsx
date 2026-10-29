@@ -19,11 +19,11 @@ export function LocationForm({ markets, action }: LocationFormProps) {
     <form action={formAction} className="space-y-4">
       <input type="hidden" name="billingSame" value={billingSame ? "on" : "off"} />
       {state.error && !Object.keys(state.fieldErrors ?? {}).length ? (
-        <div data-flash="error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+        <div data-flash="error" role="alert" className=" bg-danger-soft px-3 py-2 text-sm text-danger">
           {state.error}
         </div>
       ) : state.error ? (
-        <div data-flash="error" role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+        <div data-flash="error" role="alert" className=" bg-danger-soft px-3 py-2 text-sm text-danger">
           Please fix the highlighted field. Everything you typed is still here.
         </div>
       ) : null}

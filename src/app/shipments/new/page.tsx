@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { and, eq, isNull } from "drizzle-orm";
-import { Button, Card, Field, Flash, Input, Notice, Page, Select, Textarea } from "@/components/ui";
+import { Button, Card, Field, FilterBar, Flash, Input, Notice, Page, Select, Textarea } from "@/components/ui";
 import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
@@ -44,107 +44,113 @@ export default async function NewShipmentPage({ searchParams }: { searchParams: 
   const today = todayIso();
 
   return (
-    <Page title="New shipment" subtitle="A draft first: lines are added on the shipment page, and the number is assigned at confirmation (5.3).">
-      <Flash {...flash} />
-      <form className="flex flex-wrap items-end gap-2" role="search">
-        <input type="hidden" name="type" value={type} />
-        {locationId ? <input type="hidden" name="locationId" value={locationId} /> : null}
-        <Field label="Narrow the account list">
-          <Input name="q" defaultValue={q ?? ""} placeholder="Trade name or city" />
-        </Field>
-        <Button variant="secondary" small>
-          Narrow
-        </Button>
-        <span className="text-xs text-muted">
-          Type:{" "}
+    <Page
+      title="New shipment"
+      subtitle="A draft first: lines are added on the shipment page, and the number is assigned at confirmation (5.3)."
+      wide={false}
+      actions={
+        <span className="flex items-center gap-3 text-sm">
+          <span className="text-xs text-ink-3">Type</span>
           {SHIPMENT_TYPES.map((t) => (
-            <Link key={t} href={`/shipments/new?type=${t}${locationId ? `&locationId=${locationId}` : ""}`} className={`mr-2 underline ${t === type ? "font-semibold" : ""}`}>
+            <Link key={t} href={`/shipments/new?type=${t}${locationId ? `&locationId=${locationId}` : ""}`} className={`${t === type ? "font-semibold text-navy underline underline-offset-4" : "text-ink-2 hover:text-navy"}`}>
               {t} {TYPE_LABEL[t]}
             </Link>
           ))}
         </span>
-      </form>
+      }
+    >
+      <Flash {...flash} />
+      <FilterBar>
+        <input type="hidden" name="type" value={type} />
+        {locationId ? <input type="hidden" name="locationId" value={locationId} /> : null}
+        <Input name="q" defaultValue={q ?? ""} placeholder="Narrow the account list: trade name or city" aria-label="Narrow the account list" className="w-80" />
+        <Button variant="secondary" small>
+          Narrow
+        </Button>
+      </FilterBar>
 
-      <form action={createShipmentAction} className="space-y-4">
+      <form action={createShipmentAction} className="space-y-8">
         <Card title="Route">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Type" hint="D delivery (will-call pickup is D with the pickup box ticked), T transfer between origins, S samples (NC invoice, never charged). Switch with the links above.">
+          <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
+            <Field label="Type" hint="Will-call pickup is D with the box ticked; S is never charged (NC invoice).">
               <input type="hidden" name="type" value={type} />
-              <div className="flex min-h-11 items-center text-sm font-medium">
-                {type} · {TYPE_LABEL[type]}
+              <div className="flex h-9 items-center text-sm font-medium">
+                {type} {TYPE_LABEL[type]}
               </div>
             </Field>
-            <Field label="Origin" hint="Origins with a code can be confirmed; a code is required for the number (2.2).">
+            <Field label="Origin" hint="A code is required for the number (2.2).">
               <Select name="originWarehouseId" required defaultValue={prefilled?.loc.warehouseOverrideId ?? ""}>
                 <option value="" disabled>
-                  Origin…
+                  Origin
                 </option>
                 {sortedOrigins.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.originCode ? `${o.originCode} · ` : "(no code) · "}
+                    {o.originCode ? `${o.originCode} ` : "(no code) "}
                     {o.name}
-                    {o.kind === "brewery" ? " · brewery" : ""}
+                    {o.kind === "brewery" ? ", brewery" : ""}
                   </option>
                 ))}
               </Select>
             </Field>
-            <Field label={type === "T" ? "Destination account (not used for a transfer)" : "Destination account"} hint="Kind and served-by in brackets. A direct shipment to a distributor-served account needs an override reason (2.6).">
-              <Select name="destinationLocationId" defaultValue={locationId ?? ""} disabled={type === "T"}>
-                <option value="">{type === "S" ? "No account (person or event below)" : "Account…"}</option>
-                {markets.map((m) => {
-                  const inMarket = locations.filter((l) => l.loc.marketId === m.id);
-                  if (!inMarket.length) return null;
-                  return (
-                    <optgroup key={m.id} label={m.name}>
-                      {inMarket.map(({ loc, address }) => (
-                        <option key={loc.id} value={loc.id}>
-                          {loc.tradeName}
-                          {address ? ` · ${address.city}` : ""} ({KIND_LABEL[loc.kind] ?? loc.kind}
-                          {loc.servedByLocationId ? `, served by ${nameOf.get(loc.servedByLocationId) ?? "distributor"}` : ""}
-                          {loc.status === "inactive" ? ", inactive" : ""})
-                        </option>
-                      ))}
-                    </optgroup>
-                  );
-                })}
-              </Select>
+            <Field label="Scheduled date" hint="The number uses origin and scheduled date; a later actual date never renumbers (5.12).">
+              <Input name="scheduledDate" type="date" required defaultValue={today} />
             </Field>
+            <div className="sm:col-span-2">
+              <Field label={type === "T" ? "Destination account (not used for a transfer)" : "Destination account"} hint="Kind and served-by in brackets. A direct shipment to a distributor-served account needs an override reason (2.6).">
+                <Select name="destinationLocationId" defaultValue={locationId ?? ""} disabled={type === "T"}>
+                  <option value="">{type === "S" ? "No account (person or event below)" : "Account"}</option>
+                  {markets.map((m) => {
+                    const inMarket = locations.filter((l) => l.loc.marketId === m.id);
+                    if (!inMarket.length) return null;
+                    return (
+                      <optgroup key={m.id} label={m.name}>
+                        {inMarket.map(({ loc, address }) => (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.tradeName}
+                            {address ? `, ${address.city}` : ""} ({KIND_LABEL[loc.kind] ?? loc.kind}
+                            {loc.servedByLocationId ? `, served by ${nameOf.get(loc.servedByLocationId) ?? "distributor"}` : ""}
+                            {loc.status === "inactive" ? ", inactive" : ""})
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </Select>
+              </Field>
+            </div>
             {type === "T" ? (
               <Field label="Destination origin (transfer)">
                 <Select name="destinationWarehouseId" required defaultValue="">
                   <option value="" disabled>
-                    Origin…
+                    Origin
                   </option>
                   {sortedOrigins.map((o) => (
                     <option key={o.id} value={o.id}>
-                      {o.originCode ? `${o.originCode} · ` : ""}
+                      {o.originCode ? `${o.originCode} ` : ""}
                       {o.name}
                     </option>
                   ))}
                 </Select>
               </Field>
             ) : type === "S" ? (
-              <Field label="Or a person / event (samples without an account)">
+              <Field label="Or a person / event">
                 <Input name="destinationText" placeholder="e.g. Beer festival, Oakland, booth 12" />
               </Field>
             ) : (
               <Field label="Will-call" hint="Legacy P documents are deliveries picked up at the origin (5.5).">
-                <label className="flex min-h-11 items-center gap-2 text-sm">
+                <label className="flex h-9 items-center gap-2 text-sm">
                   <input type="checkbox" name="pickup" defaultChecked={prefilled?.loc.fulfilment === "pickup"} /> Picked up at the origin
                 </label>
               </Field>
             )}
             {type === "S" ? (
               <Field label="Will-call">
-                <label className="flex min-h-11 items-center gap-2 text-sm">
+                <label className="flex h-9 items-center gap-2 text-sm">
                   <input type="checkbox" name="pickup" /> Picked up at the origin
                 </label>
               </Field>
             ) : null}
-            <Field label="Scheduled date" hint="The number uses origin and scheduled date; moving the actual date later never renumbers (5.12).">
-              <Input name="scheduledDate" type="date" required defaultValue={today} />
-            </Field>
-            <Field label="Driver" hint="Employees with a Driver / Service grant; the driver sees only assigned stops.">
+            <Field label="Driver" hint="The driver sees only assigned stops.">
               <Select name="driverEmployeeId" defaultValue="">
                 <option value="">Unassigned</option>
                 {drivers.map((e) => (
@@ -154,23 +160,27 @@ export default async function NewShipmentPage({ searchParams }: { searchParams: 
                 ))}
               </Select>
             </Field>
-            <Field label="Override reason" hint="Required when the account is served by a distributor and this shipment goes direct (2.6).">
-              <Input name="overrideReason" placeholder="e.g. Distributor out of stock; owner approved direct drop" />
-            </Field>
+            <div className="sm:col-span-2">
+              <Field label="Override reason" hint="Required when the account is served by a distributor and this shipment goes direct (2.6).">
+                <Input name="overrideReason" placeholder="e.g. Distributor out of stock; owner approved direct drop" />
+              </Field>
+            </div>
           </div>
           {prefilled?.loc.servedByLocationId && prefilled.loc.kind !== "distributor" ? (
-            <Notice tone="warn" title="Served account:">
-              {prefilled.loc.tradeName} is served by {nameOf.get(prefilled.loc.servedByLocationId) ?? "a distributor"}. A direct delivery needs an override reason before confirmation.
-            </Notice>
+            <div className="mt-4">
+              <Notice tone="warn" title="Served account.">
+                {prefilled.loc.tradeName} is served by {nameOf.get(prefilled.loc.servedByLocationId) ?? "a distributor"}. A direct delivery needs an override reason before confirmation.
+              </Notice>
+            </div>
           ) : null}
           {openOrders.length ? (
-            <div className="mt-3">
-              <div className="mb-1 text-sm font-medium">Link open orders (optional)</div>
-              <div className="grid gap-1 sm:grid-cols-2">
+            <div className="mt-4">
+              <div className="mb-1 text-[12px] font-medium text-ink-2">Link open orders (optional)</div>
+              <div className="grid gap-1 sm:grid-cols-3">
                 {openOrders.map(({ order }) => (
-                  <label key={order.id} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1 text-sm">
+                  <label key={order.id} className="flex items-center gap-2 border-b border-rule-soft py-1 text-sm">
                     <input type="checkbox" name="orderIds" value={order.id} /> {order.orderNumber}
-                    <span className="text-xs text-muted">{order.demandState.replace(/_/g, " ")}</span>
+                    <span className="text-xs text-ink-3">{order.demandState.replace(/_/g, " ")}</span>
                   </label>
                 ))}
               </div>
@@ -178,13 +188,16 @@ export default async function NewShipmentPage({ searchParams }: { searchParams: 
           ) : null}
         </Card>
 
-        <Card title="Logistics (all optional; editable after confirmation)">
-          <div className="grid gap-3 sm:grid-cols-2">
+        <Card title="Logistics (optional; editable after confirmation)">
+          <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
             <Field label="PO numbers" hint="Comma separated; one shipment can cover several POs (5.2).">
               <Input name="poNumbers" placeholder="PO-1234, PO-1235" />
             </Field>
             <Field label="Appointment">
               <Input name="appointment" placeholder="e.g. Tue 10:00 to 11:00, dock 4" />
+            </Field>
+            <Field label="Delivery window (retail)">
+              <Input name="deliveryWindow" placeholder="e.g. before 2 pm" />
             </Field>
             <Field label="Carrier">
               <Input name="carrier" />
@@ -192,35 +205,38 @@ export default async function NewShipmentPage({ searchParams }: { searchParams: 
             <Field label="Carrier phone">
               <Input name="carrierPhone" />
             </Field>
+            <Field label="Freight class">
+              <Input name="freightClass" placeholder="e.g. 65" />
+            </Field>
             <Field label="Seal number">
               <Input name="sealNumber" />
             </Field>
             <Field label="Trailer number">
               <Input name="trailerNumber" />
             </Field>
-            <Field label="Pallet count" hint="Computed from pallet fractions when blank; editable (5.9).">
-              <Input name="palletCount" type="number" min={0} step={1} />
+            <Field label="Pallet count" hint="Editable (5.9).">
+              <Input name="palletCount" type="number" min={0} step={1} className="text-right" />
             </Field>
-            <Field label="Pallet build">
-              <Input name="palletBuild" placeholder="e.g. 2 pallets: 40 cs each, kegs loose" />
-            </Field>
-            <Field label="Freight class">
-              <Input name="freightClass" placeholder="e.g. 65" />
-            </Field>
-            <Field label="Delivery window (retail)">
-              <Input name="deliveryWindow" placeholder="e.g. before 2 pm" />
-            </Field>
-            <Field label="Receiving instructions (retail)">
-              <Textarea name="receivingInstructions" rows={2} />
-            </Field>
-            <Field label="Notes">
-              <Textarea name="notes" rows={2} />
-            </Field>
+            <div className="sm:col-span-3">
+              <Field label="Pallet build">
+                <Input name="palletBuild" placeholder="e.g. 2 pallets: 40 cs each, kegs loose" />
+              </Field>
+            </div>
+            <div className="sm:col-span-3">
+              <Field label="Receiving instructions (retail)">
+                <Textarea name="receivingInstructions" rows={2} />
+              </Field>
+            </div>
+            <div className="sm:col-span-3">
+              <Field label="Notes">
+                <Textarea name="notes" rows={2} />
+              </Field>
+            </div>
           </div>
         </Card>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2 border-t border-rule pt-4">
           <Button>Create draft</Button>
-          <Button href="/shipments" variant="secondary">
+          <Button href="/shipments" variant="ghost">
             Cancel
           </Button>
         </div>

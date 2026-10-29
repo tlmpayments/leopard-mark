@@ -689,10 +689,12 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   if (numberMatch) ok(`number assigned: ${numberMatch[1]}`);
   else fail("confirmation did not report an EBB-D-YYMMDD-SEQ number");
   const shipmentNumber = numberMatch?.[1] ?? "";
+  await page.getByRole("tab", { name: /Documents/ }).click();
   await expectText(page, /Bill of lading/, "BOL stored");
   await expectText(page, /Picking ticket/, "picking ticket stored");
   await expectText(page, /INV draft/, "invoice draft created at confirmation (7.4)");
-  await expectText(page, /CAN-12C: 5/, "stock allocated at the origin");
+  await page.getByRole("tab", { name: /Allocations/ }).click();
+  await expectText(page, /CAN-12C\s+5/, "stock allocated at the origin");
   await shot(page, "j12-03-confirmed");
 
   j.step("BOL and picking ticket render as PDF for the signed-in user");
@@ -707,16 +709,19 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   else fail(`pull sheet did not render (status ${pull.status()})`);
 
   j.step("deliver: office sets the actual date and the empties collected; invoice issued dated the actual date");
+  await page.locator("summary", { hasText: /^Deliver$/ }).click();
   await page.fill('input[name="actualDate"]', today);
   await page.fill('input[name="halfIn"]', "1");
   await act(page, () => page.getByRole("button", { name: "Mark delivered" }).click());
   await expectText(page, /Delivered .*invoice updated/, "delivery recorded with keg and invoice effects");
+  await page.getByRole("tab", { name: /Documents/ }).click();
   const bodyAfterDeliver = await page.locator("body").innerText();
   const invMatch = bodyAfterDeliver.match(/\b(INV\d{5})\b/);
   if (invMatch) ok(`invoice numbered ${invMatch[1]} (INV + yy + seq)`);
   else fail("no INV number shown after delivery");
+  await page.getByRole("tab", { name: /Allocations/ }).click();
   await expectText(page, /1 × 1\/2 bbl, 0 × 1\/6 bbl/, "empties collected recorded on the stop");
-  await expectNoText(page, /Confirm \(assign number\)|Mark delivered/, "no further state actions once delivered");
+  await expectNoText(page, /Confirm \(assign number\)|Mark delivered|Void shipment/, "no further state actions once delivered");
   await shot(page, "j12-04-delivered");
 
   j.step("persisted: invoice list, invoice PDF, keg balance, shipment list");
@@ -746,7 +751,7 @@ let orderedLabels = []; // product labels ordered in journey 1 (journey 2 change
   const sales = await session("Sam Sales");
   await sales.page.goto(shipmentUrl);
   if (shipmentNumber) await expectText(sales.page, new RegExp(shipmentNumber), "Sales (NC) can view the NC shipment");
-  await expectNoText(sales.page, /Void shipment|Regenerate \(next revision\)/, "Sales has no state-changing controls");
+  await expectNoText(sales.page, /Void shipment|Regenerate \(next revision\)|Mark delivered/, "Sales has no state-changing controls");
   await sales.ctx.close();
   const driver = await session("Dee Driver", true);
   await driver.page.goto(shipmentUrl);

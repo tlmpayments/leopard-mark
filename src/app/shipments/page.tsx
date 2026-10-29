@@ -1,12 +1,13 @@
 import Link from "next/link";
-import { Badge, Button, Card, Field, Flash, Input, Page, Select, StatusBadge, Table, fmtDay } from "@/components/ui";
+import { Button, FilterBar, Flash, Input, Page, Select, StatusBadge, Struck, Table, fmtDay } from "@/components/ui";
 import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import { listOrigins } from "@/lib/domain/origins/service";
 import { listShipments, type ShipmentStatus, type ShipmentType } from "@/lib/domain/shipments/service";
-import { SHIPMENT_STATUSES, SHIPMENT_TYPES, TYPE_LABEL, isDriverOnly, shipmentNumber, todayIso } from "./labels";
+import { LIST_WIDTHS } from "@/components/widths";
+import { SHIPMENT_STATUSES, SHIPMENT_TYPES, TYPE_LABEL, isDriverOnly, todayIso } from "./labels";
 
 const PAGE = 100;
 
@@ -49,26 +50,50 @@ export default async function ShipmentsPage({ searchParams }: { searchParams: Se
   };
   const driverOnly = isDriverOnly(actor);
   const today = todayIso();
+  // The day print (one origin, one scheduled date) takes the origin and the from-date of the current filter.
+  const printOrigin = origin && origins.some((o) => o.id === origin && o.active) ? origin : null;
+  const printDate = from ?? today;
+  const printHref = (kind: "all" | "pull_sheet") => (printOrigin ? `/shipments/print?origin=${printOrigin}&date=${printDate}&kind=${kind}` : null);
 
   return (
     <Page
       title="Shipments"
-      subtitle={driverOnly ? "Stops assigned to you." : "One record per shipment: it carries the number, the dates, the account and the lots, and drives the documents, the invoice, the ledger and the keg balance."}
-      actions={can(actor, "shipment.manage") ? <Button href="/shipments/new">New shipment</Button> : null}
+      subtitle={driverOnly ? "Stops assigned to you." : "One record per shipment: number, dates, account and lots; it drives the documents, the invoice, the ledger and the keg balance."}
+      actions={
+        <>
+          {!driverOnly && printHref("all") ? (
+            <>
+              <Button href={printHref("pull_sheet")!} variant="secondary" small>
+                Pull sheet {fmtDay(printDate)} (PDF)
+              </Button>
+              <Button href={printHref("all")!} variant="secondary" small>
+                Day documents (PDF)
+              </Button>
+            </>
+          ) : !driverOnly ? (
+            <span className="text-xs text-ink-3">Day print: filter by origin and from-date.</span>
+          ) : null}
+          {can(actor, "shipment.manage") ? (
+            <Button href="/shipments/new" small>
+              New shipment
+            </Button>
+          ) : null}
+        </>
+      }
     >
       <Flash {...flash} />
-      <form className="grid gap-2 sm:grid-cols-6" role="search">
-        <Select name="origin" defaultValue={origin ?? ""} aria-label="Origin">
+      <FilterBar>
+        <Select name="origin" defaultValue={origin ?? ""} aria-label="Origin" className="w-auto min-w-40">
           <option value="">All origins</option>
           {origins.map((o) => (
             <option key={o.id} value={o.id}>
-              {o.originCode ? `${o.originCode} · ` : ""}
+              {o.originCode ? `${o.originCode} ` : ""}
               {o.name}
               {o.active ? "" : " (inactive)"}
             </option>
           ))}
         </Select>
-        <Select name="status" defaultValue={status ?? ""} aria-label="Status">
+        <Select name="status" defaultValue={status ?? ""} aria-label="Status" className="w-auto">
           <option value="">Any status</option>
           {SHIPMENT_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -76,90 +101,61 @@ export default async function ShipmentsPage({ searchParams }: { searchParams: Se
             </option>
           ))}
         </Select>
-        <Select name="type" defaultValue={type ?? ""} aria-label="Type">
+        <Select name="type" defaultValue={type ?? ""} aria-label="Type" className="w-auto">
           <option value="">Any type</option>
           {SHIPMENT_TYPES.map((t) => (
             <option key={t} value={t}>
-              {t} · {TYPE_LABEL[t]}
+              {t} {TYPE_LABEL[t]}
             </option>
           ))}
         </Select>
-        <Input name="from" type="date" defaultValue={from ?? ""} aria-label="Scheduled from" />
-        <Input name="to" type="date" defaultValue={to ?? ""} aria-label="Scheduled to" />
-        <div className="flex gap-2">
-          <Input name="q" placeholder="Number or destination" defaultValue={q ?? ""} aria-label="Search" />
-          <Button variant="secondary">Filter</Button>
-        </div>
+        <Input name="from" type="date" defaultValue={from ?? ""} aria-label="Scheduled from" className="w-auto" />
+        <span className="text-xs text-ink-3">to</span>
+        <Input name="to" type="date" defaultValue={to ?? ""} aria-label="Scheduled to" className="w-auto" />
+        <Input name="q" placeholder="Number or destination" defaultValue={q ?? ""} aria-label="Search" className="w-48" />
         {destination ? <input type="hidden" name="destination" value={destination} /> : null}
-        <label className="flex items-center gap-2 text-sm sm:col-span-6">
-          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Include imported history (BOL Maker Log)
+        <label className="flex items-center gap-1.5 text-[13px] text-ink-2">
+          <input type="checkbox" name="legacy" value="1" defaultChecked={legacy} /> Imported history
         </label>
-      </form>
+        <Button variant="secondary" small>
+          Filter
+        </Button>
+      </FilterBar>
 
-      <Card>
+      <div>
         <Table
           caption="Shipments"
           head={["Number", "Type", "Scheduled", "Actual", "Origin", "Destination", "Status"]}
+          widths={[LIST_WIDTHS.number, LIST_WIDTHS.type, LIST_WIDTHS.date, LIST_WIDTHS.date, LIST_WIDTHS.code, undefined, LIST_WIDTHS.status]}
+          empty="No shipments match this filter."
           rows={shown.map(({ s, origin: o, destination: dest }) => [
-            <Link key="n" href={`/shipments/${s.id}`} className="font-medium hover:underline">
-              {shipmentNumber(s)}
-              {s.legacy ? <Badge tone="neutral"> legacy</Badge> : null}
-              {s.pickup ? <span className="ml-1 text-xs text-muted">will-call</span> : null}
+            <Link key="n" href={`/shipments/${s.id}`} className="whitespace-nowrap font-medium text-navy hover:underline">
+              <Struck when={s.status === "voided"}>{s.number ?? "draft"}</Struck>
+              {s.legacy ? <span className="ml-1.5 text-[11px] text-ink-3">legacy</span> : null}
+              {s.pickup ? <span className="ml-1.5 text-[11px] text-ink-3">will-call</span> : null}
+              {s.revision > 0 ? <span className="ml-1.5 text-[11px] text-ink-3">R{s.revision}</span> : null}
             </Link>,
-            <span key="t" title={TYPE_LABEL[s.type]}>
-              {s.type} <span className="text-xs text-muted">{TYPE_LABEL[s.type]}</span>
+            <span key="t" title={TYPE_LABEL[s.type]} className="whitespace-nowrap">
+              {s.type} <span className="text-ink-3">{TYPE_LABEL[s.type]}</span>
             </span>,
-            fmtDay(s.scheduledDate),
-            fmtDay(s.actualDate),
-            o.originCode ? `${o.originCode} · ${o.name}` : o.name,
-            dest?.tradeName ?? (s.destinationWarehouseId ? (originName.get(s.destinationWarehouseId) ?? "origin") : (s.destinationText ?? "—")),
-            <span key="s" className="flex items-center gap-1">
-              <StatusBadge value={s.status} />
-              {s.revision > 0 ? <Badge tone="info">R{s.revision}</Badge> : null}
+            <span key="sd" className="whitespace-nowrap">{fmtDay(s.scheduledDate)}</span>,
+            <span key="ad" className="whitespace-nowrap">{fmtDay(s.actualDate)}</span>,
+            <span key="o" title={o.name} className="whitespace-nowrap">
+              {o.originCode ?? o.name}
             </span>,
+            <span key="d" className="block max-w-[32ch] truncate" title={dest?.tradeName ?? undefined}>
+              {dest?.tradeName ?? (s.destinationWarehouseId ? (originName.get(s.destinationWarehouseId) ?? "origin") : (s.destinationText ?? "—"))}
+            </span>,
+            <StatusBadge key="s" value={s.status} />,
           ])}
         />
         {(page > 1 || hasMore) && (
           <nav className="mt-3 flex justify-between text-sm" aria-label="Pagination">
-            {page > 1 ? <Link href={link(page - 1)} className="text-accent hover:underline">Previous</Link> : <span />}
-            {hasMore ? <Link href={link(page + 1)} className="text-accent hover:underline">Next</Link> : <span />}
+            {page > 1 ? <Link href={link(page - 1)} className="text-navy hover:underline">Previous</Link> : <span />}
+            {hasMore ? <Link href={link(page + 1)} className="text-navy hover:underline">Next</Link> : <span />}
           </nav>
         )}
-      </Card>
-
-      {!driverOnly ? (
-        <Card title="Day print (one origin, one scheduled date)">
-          <form action="/shipments/print" method="get" target="_blank" className="grid gap-2 sm:grid-cols-4">
-            <Field label="Origin">
-              <Select name="origin" required defaultValue={origin ?? ""}>
-                <option value="" disabled>
-                  Origin…
-                </option>
-                {origins
-                  .filter((o) => o.active)
-                  .map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.originCode ? `${o.originCode} · ` : ""}
-                      {o.name}
-                    </option>
-                  ))}
-              </Select>
-            </Field>
-            <Field label="Scheduled date">
-              <Input name="date" type="date" required defaultValue={from ?? today} />
-            </Field>
-            <div className="flex items-end gap-2 sm:col-span-2">
-              <Button variant="secondary" name="kind" value="all">
-                All documents (PDF)
-              </Button>
-              <Button variant="secondary" name="kind" value="pull_sheet">
-                Pull sheet only (PDF)
-              </Button>
-            </div>
-          </form>
-          <p className="mt-1 text-xs text-muted">The warehouse gets one master pull sheet per origin per day; the driver one BOL per stop (5.2). Confirmed, staged, out and delivered shipments are included.</p>
-        </Card>
-      ) : null}
+      </div>
     </Page>
   );
 }

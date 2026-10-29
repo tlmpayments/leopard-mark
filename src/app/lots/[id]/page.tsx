@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
-import { Badge, Button, Card, Field, Flash, Input, KV, Notice, Page, StatusBadge, Table, fmtDate, fmtDay } from "@/components/ui";
+import { Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, StatusBadge, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
+import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -35,96 +36,126 @@ export default async function LotPage({ params, searchParams }: { params: Promis
   const canManage = can(actor, "lot.manage");
   const brand = BRAND_CODES.find((b) => b.code === lot.brandCode);
 
+  const quantitiesTab = (
+    <>
+      <Table
+        head={["SKU", "Product", "Qty"]}
+        widths={[LIST_WIDTHS.code, undefined, LIST_WIDTHS.qty]}
+        align={["left", "left", "right"]}
+        empty="No quantities recorded yet."
+        rows={quantities.map((q) => [<Code key="c">{q.code}</Code>, q.name, String(q.qty)])}
+      />
+      {canManage && !lot.legacyCode ? (
+        <details className="mt-4" open={!lot.quantitiesKnown}>
+          <summary className="cursor-pointer text-sm text-navy">{lot.quantitiesKnown ? "Correct quantities" : "Confirm quantities from the host's sheet"}</summary>
+          <form action={confirmLotQuantitiesAction} className="mt-3 max-w-2xl space-y-3">
+            <input type="hidden" name="lotId" value={lot.id} />
+            <table className="w-full text-[13px]">
+              <tbody>
+                {forForm.map((s) => (
+                  <tr key={s.id} className="border-b border-rule-soft">
+                    <td className="py-1 pr-2">
+                      <Code>{s.code}</Code>
+                    </td>
+                    <td className="py-1 pr-2">
+                      {s.brand} {s.name}
+                    </td>
+                    <td className="w-28 py-1 text-right">
+                      <Input name={`qty:${s.id}`} type="number" min={0} step={1} inputMode="numeric" className="h-8 w-24 text-right" defaultValue={qtyOf.get(s.id) ?? ""} aria-label={`${s.code} quantity`} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Field label="Note">
+              <Input name="note" placeholder="e.g. Host packaging sheet received 2026-10-30" />
+            </Field>
+            <Button small>Confirm quantities</Button>
+            <p className="text-xs text-ink-3">Replaces the quantities on this lot and resolves the open exception (4.6). Blank SKUs are left off.</p>
+          </form>
+        </details>
+      ) : null}
+    </>
+  );
+
+  const shipmentsTab = (
+    <Table
+      head={["Shipment", "Type", "Scheduled", "Status", "SKU", "Qty"]}
+      widths={[LIST_WIDTHS.number, LIST_WIDTHS.type, LIST_WIDTHS.date, LIST_WIDTHS.status, LIST_WIDTHS.code, LIST_WIDTHS.qty]}
+      align={["left", "left", "left", "left", "left", "right"]}
+      empty="Not on any shipment yet."
+      rows={usedOn.map((u, i) => [
+        <Link key={i} href={`/shipments/${u.s.id}`} className="font-medium text-navy hover:underline">
+          {shipmentNumber(u.s)}
+        </Link>,
+        u.s.type,
+        fmtDay(u.s.scheduledDate),
+        <StatusBadge key="s" value={u.s.status} />,
+        u.skuCode ? <Code key="k">{u.skuCode}</Code> : "—",
+        String(u.qty),
+      ])}
+    />
+  );
+
   return (
-    <Page
-      title={`Lot ${lot.lotCode}`}
-      subtitle={
-        <span className="flex flex-wrap items-center gap-2">
+    <RecordPage
+      number={lot.lotCode}
+      status={lot.quantitiesKnown ? <span className="font-semibold text-navy">Quantities known</span> : <span className="text-ink-2">Quantities unconfirmed</span>}
+      meta={
+        <>
+          <span>{facility?.name ?? "—"}</span>
           <span>
-            {facility?.name ?? "—"} · {lot.brandCode}
-            {brand ? ` ${brand.name}` : ""} · packaged {fmtDay(lot.packagingDate)}
+            {lot.brandCode}
+            {brand ? ` ${brand.name}` : ""}
           </span>
-          {lot.quantitiesKnown ? <Badge tone="good">quantities known</Badge> : <Badge tone="warn">quantities unconfirmed</Badge>}
-          {lot.legacyCode ? <Badge tone="neutral">history only</Badge> : null}
-        </span>
-      }
-      actions={
-        <Button href="/lots" variant="secondary">
-          All lots
-        </Button>
+          <span>packaged {fmtDay(lot.packagingDate)}</span>
+          {lot.legacyCode ? <span className="text-ink-3">history only</span> : null}
+        </>
       }
     >
       <Flash {...flash} />
       {lot.legacyCode ? <Notice tone="info">Dotted legacy lot {lot.legacyCode}: imported history, never offered on a shipment line (1.7).</Notice> : null}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <Columns>
         <Card title="Lot">
           <KV
             items={[
-              ["Lot code", <span key="c" className="font-mono">{lot.lotCode}</span>],
-              ["Facility", facility ? `${facility.lotFacilityCode ? facility.lotFacilityCode + " · " : ""}${facility.name}` : "—"],
-              ["Brand", `${lot.brandCode}${brand ? ` · ${brand.name}` : ""}`],
+              ["Lot code", <Code key="c">{lot.lotCode}</Code>],
+              ["Facility", facility ? `${facility.lotFacilityCode ? facility.lotFacilityCode + " " : ""}${facility.name}` : "—"],
+              ["Brand", `${lot.brandCode}${brand ? ` ${brand.name}` : ""}`],
               ["Packaging date", fmtDay(lot.packagingDate)],
               ["Run", lot.runCode],
               ["Source", lot.source.replace(/_/g, " ")],
-              ["Batch", batch ? <Link key="b" href={`/batches?focus=${batch.id}`} className="underline">{batch.batchNumber}</Link> : "—"],
+              ["Batch", batch ? <Link key="b" href={`/batches?focus=${batch.id}`} className="text-navy hover:underline">{batch.batchNumber}</Link> : "—"],
               ["Recorded", fmtDate(lot.createdAt)],
-              ["Notes", lot.notes ? <span key="n" className="whitespace-pre-line">{lot.notes}</span> : "—"],
             ]}
           />
+        </Card>
+        <Card title="Batch and notes">
           {batch ? (
-            <div className="mt-3 border-t border-line pt-3 text-sm">
-              <div className="text-xs uppercase tracking-wide text-muted">Batch</div>
-              {batch.batchNumber} · <StatusBadge value={batch.status} /> {batch.brewDate ? `· brewed ${fmtDay(batch.brewDate)}` : ""} {batch.vesselSize ? `· ${batch.vesselSize}` : ""}
-              {batch.breweryBatchNumber ? <span className="block text-xs text-muted">Brewery batch number: {batch.breweryBatchNumber}</span> : null}
-            </div>
-          ) : null}
+            <KV
+              items={[
+                ["Batch", batch.batchNumber],
+                ["Status", <StatusBadge key="s" value={batch.status} />],
+                ["Brewed", batch.brewDate ? fmtDay(batch.brewDate) : "—"],
+                ["Vessel", batch.vesselSize ?? "—"],
+                ["Brewery batch number", batch.breweryBatchNumber ?? "—"],
+              ]}
+            />
+          ) : (
+            <Empty>No batch linked.</Empty>
+          )}
+          <div className="mt-4 text-sm">
+            <div className="text-[11px] uppercase tracking-[0.08em] text-ink-3">Notes</div>
+            <div className="whitespace-pre-line">{lot.notes ?? "—"}</div>
+          </div>
         </Card>
-        <Card title="Quantities packaged">
-          <Table head={["SKU", "Product", "Qty"]} rows={quantities.map((q) => [<span key="c" className="font-mono text-xs">{q.code}</span>, q.name, String(q.qty)])} />
-          {canManage && !lot.legacyCode ? (
-            <details className="mt-3" open={!lot.quantitiesKnown}>
-              <summary className="cursor-pointer text-sm text-accent">{lot.quantitiesKnown ? "Correct quantities" : "Confirm quantities from the host's sheet"}</summary>
-              <form action={confirmLotQuantitiesAction} className="mt-2 space-y-2">
-                <input type="hidden" name="lotId" value={lot.id} />
-                <div className="grid gap-2">
-                  {forForm.map((s) => (
-                    <label key={s.id} className="flex items-center justify-between gap-2 rounded-lg border border-line px-2 py-1">
-                      <span className="text-sm">
-                        <span className="font-mono text-xs">{s.code}</span> {s.brand} {s.name}
-                      </span>
-                      <Input name={`qty:${s.id}`} type="number" min={0} step={1} inputMode="numeric" className="w-24" defaultValue={qtyOf.get(s.id) ?? ""} aria-label={`${s.code} quantity`} />
-                    </label>
-                  ))}
-                </div>
-                <Field label="Note">
-                  <Input name="note" placeholder="e.g. Host packaging sheet received 2026-10-30" />
-                </Field>
-                <Button small>Confirm quantities</Button>
-                <p className="text-xs text-muted">Replaces the quantities on this lot and resolves the open exception (4.6). Blank SKUs are left off.</p>
-              </form>
-            </details>
-          ) : null}
-        </Card>
-      </div>
-      <Card title="Shipments using this lot">
-        {usedOn.length === 0 ? (
-          <p className="text-sm text-muted">Not on any shipment yet.</p>
-        ) : (
-          <Table
-            head={["Shipment", "Type", "Scheduled", "Status", "SKU", "Qty"]}
-            rows={usedOn.map((u, i) => [
-              <Link key={i} href={`/shipments/${u.s.id}`} className="underline">
-                {shipmentNumber(u.s)}
-              </Link>,
-              u.s.type,
-              fmtDay(u.s.scheduledDate),
-              <StatusBadge key="s" value={u.s.status} />,
-              u.skuCode ?? "—",
-              String(u.qty),
-            ])}
-          />
-        )}
-      </Card>
-    </Page>
+      </Columns>
+      <Tabs
+        tabs={[
+          { id: "quantities", label: "Quantities packaged", count: quantities.length, content: quantitiesTab },
+          { id: "shipments", label: "Shipments using this lot", count: usedOn.length, content: shipmentsTab },
+        ]}
+      />
+    </RecordPage>
   );
 }

@@ -28,7 +28,7 @@ export function TimelineCard({ result, basePath, kind, tz, title = "Activity" }:
     <Card id="activity" title={title}>
       <nav aria-label="Activity filter" className="mb-2 flex flex-wrap gap-1 text-xs">
         {KINDS.map((k) => (
-          <Link key={k.key} href={withParams({ kind: k.key || undefined })} aria-current={(kind ?? "") === k.key ? "page" : undefined} className={`rounded-full px-2 py-1 ${(kind ?? "") === k.key ? "bg-accent text-white" : "bg-line/60"}`}>
+          <Link key={k.key} href={withParams({ kind: k.key || undefined })} aria-current={(kind ?? "") === k.key ? "page" : undefined} className={` px-2 py-1 ${(kind ?? "") === k.key ? "bg-accent text-white" : "bg-line/60"}`}>
             {k.label}
           </Link>
         ))}
@@ -64,7 +64,7 @@ export function TimelineCard({ result, basePath, kind, tz, title = "Activity" }:
       {result.nextCursor ? (
         <div className="mt-2 text-right">
           <Link href={withParams({ kind, before: result.nextCursor })} className="text-sm text-accent hover:underline">
-            Older activity →
+            Older activity
           </Link>
         </div>
       ) : null}

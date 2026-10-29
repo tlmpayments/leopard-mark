@@ -94,7 +94,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
           />
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {markets.map((m) => (
-              <details key={m.id} className="rounded-lg border border-line p-2">
+              <details key={m.id} className="border-t border-rule pt-2">
                 <summary className="cursor-pointer text-sm">
                   Edit {m.code} · {m.name}
                 </summary>
@@ -152,7 +152,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
           <>
             <div className="mt-3 grid gap-3">
               {warehouses.map((w) => (
-                <details key={w.id} className="rounded-lg border border-line p-2">
+                <details key={w.id} className="border-t border-rule pt-2">
                   <summary className="cursor-pointer text-sm">
                     Edit {w.originCode ? `${w.originCode} · ` : ""}
                     {w.name}
@@ -267,7 +267,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                 </details>
               ))}
             </div>
-            <details className="mt-3 rounded-lg border border-dashed border-line p-2">
+            <details className="mt-3 border-t border-rule p-2">
               <summary className="cursor-pointer text-sm text-accent">Add an origin (brewery, warehouse or cold storage; market optional)</summary>
               <form action={createOriginAction} className="mt-2 grid gap-2 sm:grid-cols-6">
                 <Input name="name" required placeholder="Name" aria-label="Name" />

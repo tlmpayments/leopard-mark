@@ -76,8 +76,8 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
         )}
         {(page > 1 || hasMore) && (
           <nav className="mt-3 flex justify-between text-sm" aria-label="Pagination">
-            {page > 1 ? <Link href={link(page - 1)} className="text-accent hover:underline">← Previous</Link> : <span />}
-            {hasMore ? <Link href={link(page + 1)} className="text-accent hover:underline">Next →</Link> : <span />}
+            {page > 1 ? <Link href={link(page - 1)} className="text-accent hover:underline">Previous</Link> : <span />}
+            {hasMore ? <Link href={link(page + 1)} className="text-accent hover:underline">Next</Link> : <span />}
           </nav>
         )}
       </Card>

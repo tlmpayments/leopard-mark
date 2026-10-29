@@ -36,7 +36,7 @@ export default async function MicroStarPage({ searchParams }: { searchParams: Se
       title="MicroStar outbound report"
       subtitle="Kegs shipped per distributor or per brewery for a month, counts only, no serials (8.6)."
       actions={
-        <a href={csvHref} className="inline-flex min-h-11 items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90">
+        <a href={csvHref} className="inline-flex min-h-11 items-center justify-center bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90">
           Download CSV
         </a>
       }

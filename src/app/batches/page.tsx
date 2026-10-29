@@ -53,7 +53,7 @@ export default async function BatchesPage({ searchParams }: { searchParams: Sear
             {batches.map((b) => {
               const batchLots = lots.filter((l) => l.batchId === b.id);
               return (
-                <li key={b.id} id={b.id} className={`py-3 ${focus === b.id ? "rounded-lg bg-info-soft px-2" : ""}`}>
+                <li key={b.id} id={b.id} className={`py-3 ${focus === b.id ? " bg-info-soft px-2" : ""}`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm">
                       <span className="font-mono font-medium">{b.batchNumber}</span> · {facilityName.get(b.facilityWarehouseId) ?? "—"} · {b.brandCode}

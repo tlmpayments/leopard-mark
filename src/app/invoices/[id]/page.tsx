@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { Badge, Button, Card, Empty, Field, Flash, Input, KV, Notice, Page, Select, StatusBadge, Table, fmtDate, fmtDay } from "@/components/ui";
+import { ActionPanel, Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, Select, StatusBadge, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
+import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -44,25 +45,114 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
     candidates = pool.filter((p) => !takenIds.has(p.s.id));
   }
 
+  const invoiceTab = (
+    <>
+      <Table
+        caption="Invoice lines"
+        head={["#", "Kind", "Description", "Lot", "Qty", "Unit", "Total"]}
+        widths={["2.5rem", "5rem", undefined, LIST_WIDTHS.number, LIST_WIDTHS.qty, LIST_WIDTHS.money, LIST_WIDTHS.money]}
+        align={["right", "left", "left", "left", "right", "right", "right"]}
+        empty="No lines; they are computed from the shipments at issue."
+        rows={lines.map((l) => [
+          String(l.lineNo),
+          LINE_KIND[l.kind] ?? l.kind,
+          l.description,
+          l.lotCode ? <Code key="c">{l.lotCode}</Code> : "—",
+          l.kind === "info" ? "" : String(l.qty),
+          l.kind === "info" ? "" : formatCents(l.unitPriceCents),
+          l.kind === "info" ? "" : formatCents(l.lineTotalCents),
+        ])}
+      />
+      <dl className="ml-auto mt-3 grid w-72 grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm">
+        <dt className="text-ink-2">Subtotal</dt>
+        <dd className="text-right tabular-nums">{formatCents(inv.subtotalCents)}</dd>
+        <dt className="text-ink-2">Keg deposit</dt>
+        <dd className="text-right tabular-nums">{formatCents(inv.depositCents)}</dd>
+        <dt className="border-t border-rule pt-1 font-semibold">Total</dt>
+        <dd className="border-t border-rule pt-1 text-right font-semibold tabular-nums">{formatCents(inv.totalCents)}</dd>
+      </dl>
+      {inv.status === "draft" ? <p className="mt-2 text-xs text-ink-3">Draft lines are recomputed from the shipments at issue: prices captured at confirmation, deposit per the market rule or the account&apos;s deposit mode (3.10), MicroStar information lines for distributors (7.8).</p> : null}
+    </>
+  );
+
+  const documentsTab =
+    documents.length === 0 ? (
+      <Empty>The invoice document is stored at issue; a draft previews live from the PDF link above.</Empty>
+    ) : (
+      <ul className="divide-y divide-rule-soft text-sm">
+        {documents.map((doc) => (
+          <li key={doc.id} className="flex items-center justify-between py-2">
+            <span>
+              Invoice <span className="font-display tabular-nums">{inv.number}</span> {doc.revision > 0 ? <span className="ml-1.5 text-[11px] text-ink-3">R{doc.revision}</span> : null}
+              <span className="block text-xs text-ink-3">
+                {fmtDate(doc.createdAt)}
+                {doc.hasPdf ? "" : ", rendered on request"}
+              </span>
+            </span>
+            {documents[0]?.id === doc.id ? (
+              <a href={`/invoices/${inv.id}/pdf`} target="_blank" rel="noopener" className="text-navy hover:underline">
+                Open PDF
+              </a>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    );
+
   return (
-    <Page
-      title={inv.number ?? `${inv.series} draft`}
-      subtitle={
-        <span className="flex flex-wrap items-center gap-2">
-          <span>{location ? location.tradeName : "No account"}</span>
-          <StatusBadge value={inv.status} />
-          <Badge>{inv.series === "NC" ? "NC · samples, no charge" : "INV"}</Badge>
-          {inv.legacy ? <Badge>Sales tab history{inv.legacyStatus ? `: ${inv.legacyStatus}` : ""}</Badge> : null}
-        </span>
+    <RecordPage
+      number={inv.number ?? `${inv.series} draft`}
+      status={<StatusBadge value={inv.status} />}
+      meta={
+        <>
+          <span>{location ? <Link href={`/locations/${location.id}`} className="text-navy hover:underline">{location.tradeName}</Link> : "No account"}</span>
+          <span className="text-ink-3">{inv.series === "NC" ? "NC, samples, no charge" : "INV"}</span>
+          {inv.legacy ? <span className="text-ink-3">Sales tab history{inv.legacyStatus ? `: ${inv.legacyStatus}` : ""}</span> : null}
+          {inv.invoiceDate ? <span>dated {fmtDay(inv.invoiceDate)}</span> : null}
+          <span className="tabular-nums">{formatCents(inv.totalCents)}</span>
+        </>
       }
       actions={
         <>
-          <a href={`/invoices/${inv.id}/pdf`} target="_blank" rel="noopener" className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-medium hover:bg-background">
+          <Button href={`/invoices/${inv.id}/pdf`} variant="secondary">
             {inv.status === "draft" ? "Preview PDF (draft)" : "Invoice PDF"}
-          </a>
-          <Button href="/invoices" variant="secondary">
-            All invoices
           </Button>
+          {inv.status === "draft" && canIssue ? (
+            <ActionPanel label={`Issue ${inv.series}`} variant="primary">
+              <form action={issueInvoiceAction} className="space-y-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Field label="Invoice date" hint="Normally the actual delivery or pickup date; delivery issues the draft on its own (7.4).">
+                  <Input name="invoiceDate" type="date" required defaultValue={shipments.find((s) => s.actualDate)?.actualDate ?? today} />
+                </Field>
+                <Button small>Issue {inv.series}</Button>
+              </form>
+            </ActionPanel>
+          ) : null}
+          {inv.status === "issued" && canIssue ? (
+            <ActionPanel label="Mark paid" variant="primary">
+              <form action={markPaidAction} className="space-y-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Field label="Note" hint="How it was paid, reference (collection stays outside the system, 7.5).">
+                  <Input name="note" placeholder="e.g. ACH 2026-11-20 ref 1234" />
+                </Field>
+                <Button small>Mark paid</Button>
+              </form>
+            </ActionPanel>
+          ) : null}
+          {canVoid && inv.status !== "void" && inv.status !== "paid" ? (
+            <ActionPanel label="Void" variant="danger">
+              <form action={voidInvoiceAction} className="space-y-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Field label="Reason (required)">
+                  <Input name="reason" required />
+                </Field>
+                <Button small variant="danger">
+                  Void invoice
+                </Button>
+                <p className="text-xs text-ink-3">The number is kept as a gap; a paid invoice is never voided (issue a credit instead).</p>
+              </form>
+            </ActionPanel>
+          ) : null}
         </>
       }
     >
@@ -72,19 +162,16 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           {inv.voidReason} ({fmtDate(inv.voidedAt)})
         </Notice>
       ) : null}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <Columns>
         <Card title="Invoice">
           <KV
             items={[
               ["Number", inv.number ?? "assigned when issued"],
-              ["Account", location ? <Link key="l" href={`/locations/${location.id}`} className="underline">{location.tradeName}</Link> : "—"],
+              ["Account", location ? <Link key="l" href={`/locations/${location.id}`} className="text-navy hover:underline">{location.tradeName}</Link> : "—"],
               ["Invoice date", fmtDay(inv.invoiceDate)],
               ["Due date", fmtDay(inv.dueDate)],
               ["Terms", inv.termsDays != null ? `Net ${inv.termsDays}` : "market rule at issue"],
               ["FOB", inv.fobWording ?? "—"],
-              ["Subtotal", formatCents(inv.subtotalCents)],
-              ["Deposit", formatCents(inv.depositCents)],
-              ["Total", <strong key="t">{formatCents(inv.totalCents)}</strong>],
               ["Issued", inv.issuedAt ? fmtDate(inv.issuedAt) : "—"],
               ["Paid", inv.paidAt ? fmtDate(inv.paidAt) : "—"],
               ["Notes", inv.notes ? <span key="n" className="whitespace-pre-line">{inv.notes}</span> : "—"],
@@ -95,17 +182,17 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           {shipments.length === 0 ? (
             <Empty>No shipment linked.</Empty>
           ) : (
-            <ul className="divide-y divide-line text-sm">
+            <ul className="divide-y divide-rule-soft text-sm">
               {shipments.map((s) => (
-                <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <li key={s.id} className="flex flex-wrap items-baseline justify-between gap-2 py-2">
                   <span>
-                    <Link href={`/shipments/${s.id}`} className="underline">
+                    <Link href={`/shipments/${s.id}`} className="font-display text-navy hover:underline">
                       {shipmentNumber(s)}
                     </Link>{" "}
-                    <span className="text-xs text-muted">
-                      {s.type} {TYPE_LABEL[s.type]} · scheduled {fmtDay(s.scheduledDate)}
-                      {s.actualDate ? ` · delivered ${fmtDay(s.actualDate)}` : ""}
-                      {s.poNumbers?.length ? ` · PO ${s.poNumbers.join(", ")}` : ""}
+                    <span className="text-xs text-ink-3">
+                      {s.type} {TYPE_LABEL[s.type]}, scheduled {fmtDay(s.scheduledDate)}
+                      {s.actualDate ? `, delivered ${fmtDay(s.actualDate)}` : ""}
+                      {s.poNumbers?.length ? `, PO ${s.poNumbers.join(", ")}` : ""}
                     </span>
                   </span>
                   <StatusBadge value={s.status} />
@@ -115,19 +202,19 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           )}
           {inv.status === "draft" && canIssue ? (
             <details className="mt-3">
-              <summary className="cursor-pointer text-sm text-accent">Add a shipment to this draft (same account, same week, 7.2)</summary>
+              <summary className="cursor-pointer text-sm text-navy">Add a shipment to this draft (same account, same week, 7.2)</summary>
               {candidates.length === 0 ? (
-                <p className="mt-1 text-xs text-muted">No other confirmed or delivered shipment of this account is free to join.</p>
+                <p className="mt-1 text-xs text-ink-3">No other confirmed or delivered shipment of this account is free to join.</p>
               ) : (
                 <form action={addShipmentAction} className="mt-2 flex flex-wrap gap-2">
                   <input type="hidden" name="invoiceId" value={inv.id} />
                   <Select name="shipmentId" required defaultValue="" className="max-w-md" aria-label="Shipment">
                     <option value="" disabled>
-                      Shipment…
+                      Shipment
                     </option>
                     {candidates.map(({ s }) => (
                       <option key={s.id} value={s.id}>
-                        {shipmentNumber(s)} · {fmtDay(s.scheduledDate)} · {s.status}
+                        {shipmentNumber(s)} {fmtDay(s.scheduledDate)} {s.status}
                       </option>
                     ))}
                   </Select>
@@ -139,91 +226,13 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
             </details>
           ) : null}
         </Card>
-      </div>
-
-      <Card title="Lines">
-        <Table
-          caption="Invoice lines"
-          head={["#", "Kind", "Description", "Lot", "Qty", "Unit", "Total"]}
-          rows={lines.map((l) => [
-            String(l.lineNo),
-            LINE_KIND[l.kind] ?? l.kind,
-            l.description,
-            l.lotCode ?? "—",
-            l.kind === "info" ? "" : String(l.qty),
-            l.kind === "info" ? "" : formatCents(l.unitPriceCents),
-            l.kind === "info" ? "" : formatCents(l.lineTotalCents),
-          ])}
-        />
-        {inv.status === "draft" ? <p className="mt-2 text-xs text-muted">Draft lines are recomputed from the shipments at issue: prices captured at confirmation, deposit per the market rule or the account&apos;s deposit mode (3.10), MicroStar information lines for distributors (7.8).</p> : null}
-      </Card>
-
-      {(canIssue || canVoid) && inv.status !== "void" && inv.status !== "paid" ? (
-        <Card title="Actions">
-          <div className="grid gap-4 md:grid-cols-3">
-            {inv.status === "draft" && canIssue ? (
-              <form action={issueInvoiceAction} className="space-y-2 rounded-lg border border-line p-3">
-                <div className="text-sm font-medium">Issue now</div>
-                <input type="hidden" name="invoiceId" value={inv.id} />
-                <Field label="Invoice date" hint="Normally the actual delivery or pickup date; delivery issues the draft on its own (7.4).">
-                  <Input name="invoiceDate" type="date" required defaultValue={shipments.find((s) => s.actualDate)?.actualDate ?? today} />
-                </Field>
-                <Button small>Issue {inv.series}</Button>
-              </form>
-            ) : null}
-            {inv.status === "issued" && canIssue ? (
-              <form action={markPaidAction} className="space-y-2 rounded-lg border border-line p-3">
-                <div className="text-sm font-medium">Mark paid</div>
-                <input type="hidden" name="invoiceId" value={inv.id} />
-                <Field label="Note" hint="How it was paid, reference (collection stays outside fv-ops, 7.5).">
-                  <Input name="note" placeholder="e.g. ACH 2026-11-20 ref 1234" />
-                </Field>
-                <Button small variant="secondary">
-                  Mark paid
-                </Button>
-              </form>
-            ) : null}
-            {canVoid ? (
-              <form action={voidInvoiceAction} className="space-y-2 rounded-lg border border-line p-3">
-                <div className="text-sm font-medium">Void</div>
-                <input type="hidden" name="invoiceId" value={inv.id} />
-                <Field label="Reason (required)">
-                  <Input name="reason" required />
-                </Field>
-                <Button small variant="danger">
-                  Void invoice
-                </Button>
-                <p className="text-xs text-muted">The number is kept as a gap; a paid invoice is never voided (issue a credit instead).</p>
-              </form>
-            ) : null}
-          </div>
-        </Card>
-      ) : null}
-
-      <Card title="Documents">
-        {documents.length === 0 ? (
-          <Empty>The invoice document is stored at issue; a draft previews live from the PDF link above.</Empty>
-        ) : (
-          <ul className="divide-y divide-line text-sm">
-            {documents.map((doc) => (
-              <li key={doc.id} className="flex items-center justify-between py-2">
-                <span>
-                  Invoice {inv.number} {doc.revision > 0 ? <Badge tone="info">R{doc.revision}</Badge> : null}
-                  <span className="block text-xs text-muted">
-                    {fmtDate(doc.createdAt)}
-                    {doc.hasPdf ? "" : " · rendered on request"}
-                  </span>
-                </span>
-                {documents[0]?.id === doc.id ? (
-                  <a href={`/invoices/${inv.id}/pdf`} target="_blank" rel="noopener" className="text-accent underline">
-                    Open PDF
-                  </a>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-    </Page>
+      </Columns>
+      <Tabs
+        tabs={[
+          { id: "lines", label: "Lines", count: lines.length, content: invoiceTab },
+          { id: "documents", label: "Documents", count: documents.length, content: documentsTab },
+        ]}
+      />
+    </RecordPage>
   );
 }
