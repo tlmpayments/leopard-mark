@@ -11,6 +11,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -68,6 +69,22 @@ export const holdKindEnum = pgEnum("hold_kind", [
   "admin_manual",
 ]);
 
+/** Account kinds (2.4). Warehouses and hosts are origins too; the account row exists for history and billing. */
+export const accountKindEnum = pgEnum("account_kind", [
+  "retail",
+  "distributor",
+  "warehouse",
+  "host",
+  "internal",
+  "individual",
+]);
+
+/** Keg deposit treatment for the account (3.10): the market rule, per keg, one floating deposit, or none. */
+export const depositModeEnum = pgEnum("deposit_mode", ["market_default", "per_keg", "floating", "none"]);
+
+/** How goods reach the account (2.5): delivered, or picked up at the origin (will-call / distributor pickup). */
+export const fulfilmentEnum = pgEnum("fulfilment", ["delivery", "pickup"]);
+
 export const customerParent = pgTable("customer_parent", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -96,6 +113,22 @@ export const customerLocation = pgTable(
     currentRepEmployeeId: uuid("current_rep_employee_id"),
     /** Admin warehouse override (O19); NULL = market primary warehouse. */
     warehouseOverrideId: uuid("warehouse_override_id"),
+    kind: accountKindEnum("kind").notNull().default("retail"),
+    /** Distributor that serves this account; NULL = served direct. A direct shipment to a served account needs an override reason (2.6). */
+    servedByLocationId: uuid("served_by_location_id"),
+    /** ACC- id from the Sheet, kept as a searchable reference (1.2). */
+    legacyAccountId: text("legacy_account_id"),
+    /** Sheet region (sub-list under the market, 2.1). */
+    region: text("region"),
+    /** Blank inherits the market rule (7.4). */
+    termsDaysOverride: integer("terms_days_override"),
+    depositMode: depositModeEnum("deposit_mode").notNull().default("market_default"),
+    depositCentsOverride: integer("deposit_cents_override"),
+    fulfilment: fulfilmentEnum("fulfilment").notNull().default("delivery"),
+    appointmentRequired: boolean("appointment_required"),
+    palletRule: text("pallet_rule"),
+    receivingRequirements: text("receiving_requirements"),
+    firstDeliveryOn: text("first_delivery_on"),
     createdByEmployeeId: uuid("created_by_employee_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

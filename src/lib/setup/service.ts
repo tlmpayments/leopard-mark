@@ -10,6 +10,7 @@ import { setEmployeePin } from "@/lib/domain/employees/credentials";
 import { demoModeEnabled, envPresent } from "@/lib/env";
 import { BusinessError } from "@/lib/errors";
 import { seedGates } from "@/lib/integrations/gates";
+import { seedShipmentDefaults } from "@/lib/domain/settings/service";
 import { seedDecisionRegister } from "@/lib/policy/policy";
 
 /**
@@ -95,6 +96,7 @@ export async function applyMigrations(db: Db): Promise<{ before: number | null; 
   }
   await seedDecisionRegister(db);
   await seedGates(db);
+  await seedShipmentDefaults(db);
   const after = await appliedMigrations(db);
   await db.insert(schema.auditEvent).values({ actorKind: "system", action: "setup.migrate", subjectType: "database", subjectId: "migrations", prior: { applied: before }, current: { applied: after } });
   return { before, after };

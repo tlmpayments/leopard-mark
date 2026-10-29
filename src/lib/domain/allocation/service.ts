@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import type { Actor } from "@/lib/authz/actor";
 import { authorize } from "@/lib/authz/authorize";
@@ -50,10 +50,16 @@ export async function availability(db: DbOrTx, warehouseId: string, skuId: strin
     .select()
     .from(schema.stockPosition)
     .where(and(eq(schema.stockPosition.warehouseId, warehouseId), eq(schema.stockPosition.skuId, skuId)));
-  const [{ reserved }] = await db
+  const [{ reserved: orderReserved }] = await db
     .select({ reserved: sql<number>`coalesce(sum(${schema.reservation.reservedQty}), 0)::int` })
     .from(schema.reservation)
     .where(and(eq(schema.reservation.warehouseId, warehouseId), eq(schema.reservation.skuId, skuId), eq(schema.reservation.state, "reserved")));
+  // Confirmed shipments hold stock at the origin until delivery or void (SHIPMENTS_SPEC §2, acceptance 3).
+  const [{ allocated }] = await db
+    .select({ allocated: sql<number>`coalesce(sum(${schema.shipmentAllocation.qty}), 0)::int` })
+    .from(schema.shipmentAllocation)
+    .where(and(eq(schema.shipmentAllocation.warehouseId, warehouseId), eq(schema.shipmentAllocation.skuId, skuId), isNull(schema.shipmentAllocation.releasedAt)));
+  const reserved = orderReserved + allocated;
   const onHand = pos?.onHandQty ?? 0;
   return {
     warehouseId,
@@ -77,7 +83,13 @@ export async function warehouseAvailability(db: DbOrTx, warehouseId: string) {
     .from(schema.reservation)
     .where(and(eq(schema.reservation.warehouseId, warehouseId), eq(schema.reservation.state, "reserved")))
     .groupBy(schema.reservation.skuId);
+  const allocatedRows = await db
+    .select({ skuId: schema.shipmentAllocation.skuId, allocated: sql<number>`coalesce(sum(${schema.shipmentAllocation.qty}), 0)::int` })
+    .from(schema.shipmentAllocation)
+    .where(and(eq(schema.shipmentAllocation.warehouseId, warehouseId), isNull(schema.shipmentAllocation.releasedAt)))
+    .groupBy(schema.shipmentAllocation.skuId);
   const reservedBySku = new Map(reservedRows.map((r) => [r.skuId, r.reserved]));
+  for (const a of allocatedRows) reservedBySku.set(a.skuId, (reservedBySku.get(a.skuId) ?? 0) + a.allocated);
   return positions.map((p) => {
     const reserved = reservedBySku.get(p.skuId) ?? 0;
     return { ...p, reservedQty: reserved, availableQty: Math.max(0, p.onHandQty - reserved), deficitQty: Math.max(0, reserved - p.onHandQty) };
@@ -328,6 +340,8 @@ export const MOVEMENT_SEMANTICS: Record<StockMovementKind, { direction: "increas
   transfer_in: { direction: "internal", label: "Transfer in", quantityLabel: "" },
   load: { direction: "internal", label: "Loaded (phase 2)", quantityLabel: "" },
   route_return: { direction: "internal", label: "Route return (phase 2)", quantityLabel: "" },
+  shipment_out: { direction: "internal", label: "Shipment delivered", quantityLabel: "" },
+  count: { direction: "internal", label: "Physical count applied", quantityLabel: "" },
 };
 
 /**

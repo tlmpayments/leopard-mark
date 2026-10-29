@@ -73,7 +73,7 @@ run("AC37 — upgrade from the previous revision", () => {
     const [legacyPending] = (await pool.query("select id from provider_reference where status = 'pending' limit 1")).rows;
     await pool.query("update provider_reference set status = 'established', provider_id = 'cus_legacy_test' where id = $1", [legacyPending.id]);
     await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(4);
+    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(5);
     expect((await pool.query("select count(*)::int as n from customer_order")).rows[0].n).toBe(before.orders);
     expect((await pool.query("select count(*)::int as n from audit_event")).rows[0].n).toBe(before.audit);
     // 0003 adds the sign-in credential table; upgraded employees have no PIN until one is set (nothing is invented).
@@ -94,7 +94,7 @@ run("AC37 — upgrade from the previous revision", () => {
     expect((await pool.query("select data_type from information_schema.columns where table_name='job' and column_name='status'")).rows[0].data_type).toBe("text");
     // Re-running the migrator is a no-op (idempotent journal).
     await migrate(db as never, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(4);
+    expect((await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations")).rows[0].n).toBe(5);
     // Upgraded data works with the current services: the seeded NC Sales rep places an order at a seeded account.
     const [salesIdentity] = await db.select().from(schema.employeeIdentity).where(eq(schema.employeeIdentity.email, "sales-nc@demo.local"));
     const sales = (await loadActor(db, salesIdentity.employeeId))!;

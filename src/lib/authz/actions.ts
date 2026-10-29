@@ -70,6 +70,27 @@ export const ACTIONS = {
   "report.view": ["admin", "accounting", "sales"],
   // --- field (phase 2) ---
   "field.view_assigned": ["driver_service", "admin"],
+  // --- shipments, lots, documents, invoices, kegs, counts (docs/SHIPMENTS_SPEC.md §3; "back office" = admin, 9.4) ---
+  "shipment.view": ["admin", "accounting", "sales", "driver_service"],
+  "shipment.manage": ["admin"],
+  "shipment.confirm": ["admin"],
+  "shipment.deliver": ["admin"],
+  "shipment.void": ["admin"],
+  "shipment.receive": ["admin"],
+  "lot.view": ["admin", "accounting", "sales"],
+  "lot.manage": ["admin"],
+  "invoice.view": ["admin", "accounting", "sales"],
+  "invoice.issue": ["admin", "accounting"],
+  "invoice.void": ["admin", "accounting"],
+  "keg.view": ["admin", "accounting", "sales"],
+  "keg.record": ["admin"],
+  "count.record": ["admin"],
+  /** Company settings (shipper block, office address, footers, NMFC): Owner only (6.2). */
+  "settings.manage": [],
+  "import.dry_run": ["admin"],
+  /** Applying an import to production: Owner only (10.3). */
+  "import.apply": [],
+  "report.export": ["admin", "accounting"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Action = keyof typeof ACTIONS;

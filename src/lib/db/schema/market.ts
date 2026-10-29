@@ -39,7 +39,14 @@ export const stockMovementKindEnum = pgEnum("stock_movement_kind", [
   "damage",
   "load",
   "route_return",
+  /** Shipment delivered: stock leaves the origin (SHIPMENTS_SPEC §2). */
+  "shipment_out",
+  /** Physical count applied: brings on hand to the counted total (8.1). */
+  "count",
 ]);
+
+/** Origin kinds (2.4, 2.2): a brewery is also a lot facility; warehouses and cold storage hold stock only. */
+export const originKindEnum = pgEnum("origin_kind", ["brewery", "warehouse", "cold_storage"]);
 
 export const market = pgTable("market", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -59,18 +66,29 @@ export const market = pgTable("market", {
   sellerContextNote: text("seller_context_note"),
   /** IG07: Slack destinations remain unselected until chosen. */
   slackRouting: jsonb("slack_routing").$type<Record<string, string>>(),
+  /** Billing rules are a market rule, not a global one (7.4, 3.10). */
+  termsDays: integer("terms_days").notNull().default(30),
+  retailKegDepositCents: integer("retail_keg_deposit_cents").notNull().default(3500),
+  distributorKegDepositCents: integer("distributor_keg_deposit_cents").notNull().default(0),
+  /** Cash on delivery market (a future Texas rule); false everywhere today. */
+  cod: boolean("cod").notNull().default(false),
+  /** Sheet regions become a sub-list under the market (2.1). */
+  regionList: text("region_list").array(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
 
+/**
+ * Origins: warehouses, cold storage and host breweries (2.2, 2.4). A brewery is
+ * also a lot facility (lot_facility_code 01–07). An origin may exist without a
+ * market (Prost, Real Ale) — market_id is nullable since 0004_shipments.
+ */
 export const warehouse = pgTable(
   "warehouse",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    marketId: uuid("market_id")
-      .notNull()
-      .references(() => market.id),
+    marketId: uuid("market_id").references(() => market.id),
     name: text("name").notNull(),
     addressText: text("address_text"),
     /** One primary warehouse per market is a permitted starting structure (O19). */
@@ -78,6 +96,24 @@ export const warehouse = pgTable(
     /** Existing fulfillment partner contact; no new warehouse role (R23). */
     fulfillmentContact: text("fulfillment_contact"),
     active: boolean("active").notNull().default(true),
+    /** Three-letter BOL origin code (EBB, EWD, WLA, RAD, BWD, PRO, RTB, ALE, JAB, RAL). Required to confirm a shipment. */
+    originCode: text("origin_code").unique(),
+    /** Two-digit lot facility code for breweries (01 East Brother … 07 Real Ale). */
+    lotFacilityCode: text("lot_facility_code"),
+    kind: originKindEnum("kind").notNull().default("warehouse"),
+    appointmentRequired: boolean("appointment_required"),
+    loadingDock: boolean("loading_dock"),
+    liftgateRequired: boolean("liftgate_required"),
+    /** Free-form hours by weekday, e.g. {"Mon":"8am-4pm"}; optional (2.11). */
+    hours: jsonb("hours").$type<Record<string, string>>(),
+    shippingContactName: text("shipping_contact_name"),
+    shippingContactEmail: text("shipping_contact_email"),
+    shippingContactPhone: text("shipping_contact_phone"),
+    addressLine1: text("address_line1"),
+    addressLine2: text("address_line2"),
+    addressCity: text("address_city"),
+    addressState: text("address_state"),
+    addressPostalCode: text("address_postal_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -98,10 +134,63 @@ export const sku = pgTable("sku", {
   kegsPerUnit: integer("kegs_per_unit").notNull().default(0),
   weightLb: numeric("weight_lb", { precision: 8, scale: 2 }),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
+  /** UPCs and pallet fraction print on the distributor template and size the pallet count (3.7). */
+  upcCase: text("upc_case"),
+  upcRetail: text("upc_retail"),
+  upcUnit: text("upc_unit"),
+  palletFraction: numeric("pallet_fraction", { precision: 6, scale: 4 }),
+  /** Position 4 of the code: recipe variant (C Clasico, 0 base recipe) (3.1). */
+  recipeVariant: text("recipe_variant"),
+  /** Internal lot age / best-by per package class; null until the owner supplies day counts (4.8). Never printed. */
+  shelfLifeDays: integer("shelf_life_days"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
+
+/** Legacy and dotted codes resolve to the active SKU; searchable, never selectable (3.3, 1.7). */
+export const skuAlias = pgTable("sku_alias", {
+  alias: text("alias").primaryKey(),
+  skuId: uuid("sku_id")
+    .notNull()
+    .references(() => sku.id),
+  note: text("note"),
+});
+
+/** POS items ship on a line without a lot, a price or a ledger effect (3.6, 8.8). */
+export const posItem = pgTable("pos_item", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Per-account price exception with a reason and approval (3.9, 7.10). */
+export const priceOverride = pgTable(
+  "price_override",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    locationId: uuid("location_id").notNull(),
+    skuId: uuid("sku_id")
+      .notNull()
+      .references(() => sku.id),
+    priceCents: integer("price_cents").notNull(),
+    reason: text("reason").notNull(),
+    approvedByEmployeeId: uuid("approved_by_employee_id"),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    effectiveTo: timestamp("effective_to", { withTimezone: true }),
+    createdByEmployeeId: uuid("created_by_employee_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("price_override_lookup_idx").on(t.locationId, t.skuId, t.effectiveFrom)],
+);
 
 /** Fixed market price per SKU with effective dating; history is retained. */
 export const marketPrice = pgTable(
@@ -179,6 +268,9 @@ export const stockMovement = pgTable(
     referenceId: text("reference_id"),
     evidence: text("evidence"),
     actorEmployeeId: uuid("actor_employee_id"),
+    /** Lot the movement concerns, when known (traceability first; per-lot balances later — 4.1). */
+    lotId: uuid("lot_id"),
+    shipmentId: uuid("shipment_id"),
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("stock_movement_lookup_idx").on(t.warehouseId, t.skuId, t.at)],

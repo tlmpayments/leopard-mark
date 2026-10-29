@@ -16,6 +16,7 @@ import { demoModeEnabled, isDeployment } from "@/lib/env";
 import { recordSampleWithdrawal } from "@/lib/domain/samples/service";
 import { createStandingArrangement } from "@/lib/domain/standing/service";
 import { seedGates } from "@/lib/integrations/gates";
+import { seedShipmentDefaults } from "@/lib/domain/settings/service";
 import { runDueJobs } from "@/lib/jobs/queue";
 import { seedDecisionRegister } from "@/lib/policy/policy";
 import "@/lib/integrations/stripe/adapter"; // registers job handlers
@@ -61,6 +62,7 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
   if (already) return { seeded: false };
   await seedDecisionRegister(db);
   await seedGates(db);
+  await seedShipmentDefaults(db);
 
   // Every seeded person signs in with the same demo PIN (already chosen, so no forced change) — local demo only.
   const demoPinHash = await hashPin(DEMO_PIN);

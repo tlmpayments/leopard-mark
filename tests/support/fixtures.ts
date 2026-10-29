@@ -7,6 +7,7 @@ import { createLocation, type CreateLocationInput } from "@/lib/domain/customers
 import { grantRole, loadActor } from "@/lib/domain/employees/service";
 import { createMarket, createWarehouse } from "@/lib/domain/markets/service";
 import { seedGates } from "@/lib/integrations/gates";
+import { seedShipmentDefaults } from "@/lib/domain/settings/service";
 import { seedDecisionRegister } from "@/lib/policy/policy";
 
 /**
@@ -50,6 +51,7 @@ export async function makeEmployee(db: Db, by: Actor, name: string, email: strin
 export async function buildFixture(db: Db): Promise<Fixture> {
   await seedDecisionRegister(db);
   await seedGates(db);
+  await seedShipmentDefaults(db);
   const owner = await bootstrapOwner(db);
   const market = await createMarket(db, owner, { code: "NC", name: "NorCal / Bay Area" });
   const market2 = await createMarket(db, owner, { code: "MA", name: "Massachusetts" });

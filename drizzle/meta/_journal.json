@@ -29,6 +29,13 @@
       "when": 1793220840208,
       "tag": "0003_pin_signin",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793230952661,
+      "tag": "0004_shipments",
+      "breakpoints": true
     }
   ]
 }

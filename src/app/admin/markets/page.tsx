@@ -15,7 +15,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
   const markets = await visibleMarkets(d, actor, ["owner", "admin"]);
   const marketIds = new Set(markets.map((m) => m.id));
   const [allWarehouses, skus] = await Promise.all([listWarehouses(d), listSkus(d)]);
-  const warehouses = allWarehouses.filter((w) => marketIds.has(w.marketId));
+  const warehouses = allWarehouses.filter((w) => (w.marketId ? marketIds.has(w.marketId) : actor.grants.some((g) => g.role === "owner")));
   const stock = await Promise.all(warehouses.map(async (w) => ({ w, rows: await warehouseAvailability(d, w.id) })));
   const skuName = (id: string) => {
     const s = skus.find((x) => x.id === id);

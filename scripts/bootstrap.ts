@@ -4,6 +4,7 @@ import { SYSTEM_ACTOR } from "../src/lib/authz/actor";
 import * as schema from "../src/lib/db/schema";
 import { currentCredential, setEmployeePin } from "../src/lib/domain/employees/credentials";
 import { seedGates } from "../src/lib/integrations/gates";
+import { seedShipmentDefaults } from "../src/lib/domain/settings/service";
 import { seedDecisionRegister } from "../src/lib/policy/policy";
 import { scriptDb } from "./_db";
 
@@ -24,6 +25,7 @@ async function main() {
   await migrate();
   await seedDecisionRegister(db);
   await seedGates(db);
+  await seedShipmentDefaults(db);
   const email = process.env.OWNER_EMAIL?.trim().toLowerCase();
   if (email) {
     const [existing] = await db.select().from(schema.employeeIdentity).where(and(eq(schema.employeeIdentity.email, email), eq(schema.employeeIdentity.current, true))).limit(1);
