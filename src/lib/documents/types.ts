@@ -104,5 +104,24 @@ export interface InvoiceSnapshot {
 
 export type AnySnapshot = ShipmentSnapshot | InvoiceSnapshot;
 
-/** Implemented in src/lib/documents/render.tsx (PDF agent). Returns PDF bytes for a snapshot. */
-export type Renderer = (snapshot: AnySnapshot | { kind: "pickup_pack"; bol: ShipmentSnapshot; invoice: InvoiceSnapshot | null } | { kind: "batch"; documents: AnySnapshot[] }) => Promise<Buffer>;
+/**
+ * The warehouse's master pull for one origin and scheduled date (5.2, §4 "Pull sheet"): every confirmed shipment
+ * aggregated by SKU and lot, plus the per-stop list. Built by the batch-print route from `pullSheet()`; it is not
+ * stored as a shipment_document because it belongs to the day, not to one shipment.
+ */
+export interface PullSheetSnapshot {
+  version: 1;
+  kind: "pull_sheet_day";
+  origin: string;
+  originCode?: string | null;
+  scheduledDate: string;
+  aggregate: Array<{ skuCode: string; description: string; lotCode: string | null; qty: number }>;
+  stops: Array<{ number: string | null; destinationName: string; lines: Array<{ skuCode: string; lotCode: string | null; qty: number }> }>;
+  generatedAt?: string;
+  generatedBy?: string;
+}
+
+/** Implemented in src/lib/documents/pdf.tsx (@react-pdf/renderer). Returns PDF bytes for a snapshot. */
+export type Renderer = (
+  snapshot: AnySnapshot | PullSheetSnapshot | { kind: "pickup_pack"; bol: ShipmentSnapshot; invoice: InvoiceSnapshot | null } | { kind: "batch"; documents: AnySnapshot[] },
+) => Promise<Buffer>;

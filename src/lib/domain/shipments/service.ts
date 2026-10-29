@@ -5,6 +5,7 @@
  * the ledger movement and the keg balance. Numbers are assigned once, at confirmation, from a per-origin, per-scheduled-
  * date counter and never change; a void keeps the number; a regenerated document carries a revision mark.
  */
+import "@/lib/documents";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import { authorize } from "@/lib/authz/authorize";

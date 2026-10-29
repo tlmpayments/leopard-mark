@@ -6,6 +6,7 @@
  * actual delivery or pickup date, with terms from the account override or the market rule. Sending and collection
  * stay manual (7.5 is open).
  */
+import "@/lib/documents";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import { authorize } from "@/lib/authz/authorize";
