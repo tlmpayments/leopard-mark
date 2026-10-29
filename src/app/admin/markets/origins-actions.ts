@@ -49,6 +49,10 @@ export async function updateOriginAction(form: FormData) {
       fulfillmentContact: opt(form, "fulfillmentContact"),
       pullSheetEmail: opt(form, "pullSheetEmail"),
       pullSheetSendTime: opt(form, "pullSheetSendTime"),
+      orderCutoff: opt(form, "orderCutoff"),
+      leadDays: opt(form, "leadDays") ? num(form, "leadDays") : 1,
+      deliveryDays: form.getAll("deliveryDays").filter((v): v is string => typeof v === "string"),
+      maxDaysOnHand: opt(form, "maxDaysOnHand") ? num(form, "maxDaysOnHand") : null,
     });
     return "Origin saved";
   });

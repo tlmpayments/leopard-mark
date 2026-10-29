@@ -253,6 +253,25 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                     <Field label="Pull sheet send time" hint="HH:MM, local to the market; sends are off until the company switch is on.">
                       <Input name="pullSheetSendTime" type="time" defaultValue={w.pullSheetSendTime ?? ""} />
                     </Field>
+                    <Field label="Order cutoff (Pacific)" hint="Latest time an order can reach this origin; changes after it are logged as exceptions.">
+                      <Input name="orderCutoff" type="time" defaultValue={w.orderCutoff ?? ""} />
+                    </Field>
+                    <Field label="Lead days" hint="Days between the cutoff and the ship date (1 = next day).">
+                      <Input name="leadDays" type="number" min={0} max={30} defaultValue={w.leadDays} />
+                    </Field>
+                    <Field label="Most days on hand" hint="Warn before beer has sat here this long (Jack's Abby 10). Blank = no limit.">
+                      <Input name="maxDaysOnHand" type="number" min={1} max={365} defaultValue={w.maxDaysOnHand ?? ""} />
+                    </Field>
+                    <div className="sm:col-span-3">
+                      <div className="mb-1 text-sm font-medium">Ships or delivers on (blank = weekdays)</div>
+                      <div className="flex flex-wrap gap-3 text-sm">
+                        {WEEKDAYS.map((day) => (
+                          <label key={day} className="flex items-center gap-1">
+                            <input type="checkbox" name="deliveryDays" value={day} defaultChecked={(w.deliveryDays ?? []).includes(day)} /> {day}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                     <Field label="Address line 1">
                       <Input name="addressLine1" defaultValue={w.addressLine1 ?? ""} />
                     </Field>

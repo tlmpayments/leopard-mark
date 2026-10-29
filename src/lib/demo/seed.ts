@@ -137,6 +137,18 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
   // MA gets Cantinesca only (illustrates market-scoped catalogs).
   await setMarketPrice(db, admin, { marketId: ma.id, skuId: can12.id, priceCents: 3800, reason: "demo seed SAMPLE price" });
   await setMarketPrice(db, admin, { marketId: ma.id, skuId: canSix.id, priceCents: 9900, reason: "demo seed SAMPLE price" });
+  // Distributor prices (R2-41): a distributor never falls back to the retail price, so each market a distributor buys in gets its own.
+  const distributorPrices: Array<[typeof can12, number]> = [
+    [can12, 2200],
+    [can24, 2600],
+    [canSix, 6200],
+    [canHalf, 12800],
+    [sun12, 2400],
+    [sunSix, 6600],
+  ];
+  for (const m of [nc, la]) for (const [s, cents] of distributorPrices) await setMarketPrice(db, admin, { marketId: m.id, skuId: s.id, tier: "distributor", priceCents: cents, reason: "demo seed SAMPLE distributor price" });
+  await setMarketPrice(db, admin, { marketId: ma.id, skuId: can12.id, tier: "distributor", priceCents: 2347, reason: "demo seed SAMPLE distributor price" });
+  await setMarketPrice(db, admin, { marketId: ma.id, skuId: canSix.id, tier: "distributor", priceCents: 4435, reason: "demo seed SAMPLE distributor price" });
 
   // --- batches and lots (R2-26, R2-22): brewed at the host, packaged into lots; stock posts at the brewery (R2-37) ---
   const batchCnt = await createBatch(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "CNT", brewDate: "2026-10-01", barrels: 30, status: "in_progress", notes: "Demo batch" });

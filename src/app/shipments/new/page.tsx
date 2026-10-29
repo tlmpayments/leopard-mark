@@ -6,7 +6,7 @@ import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
 import { listOrigins, originLabel } from "@/lib/domain/origins/service";
-import { TYPE_LABEL, todayIso } from "../labels";
+import { CARRIERS, TYPE_LABEL, todayIso } from "../labels";
 import { createShipmentAction } from "./actions";
 
 /** Transfers only (R2-1): a delivery or samples shipment is drafted by its order. */
@@ -97,8 +97,13 @@ export default async function NewShipmentPage({ searchParams }: { searchParams: 
             <Field label="Appointment">
               <Input name="appointment" placeholder="e.g. Tue 10:00 to 11:00, dock 4" />
             </Field>
-            <Field label="Carrier">
-              <Input name="carrier" />
+            <Field label="Carrier" hint="Pick one or type another.">
+              <Input name="carrier" list="carrier-options" />
+              <datalist id="carrier-options">
+                {CARRIERS.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
             </Field>
             <Field label="Carrier phone">
               <Input name="carrierPhone" />

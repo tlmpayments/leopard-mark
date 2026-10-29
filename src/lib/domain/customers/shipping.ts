@@ -60,7 +60,30 @@ export interface AccountShippingPatch {
   depositTakenOn?: string | null;
   depositSettledOn?: string | null;
   depositSettlementNote?: string | null;
+  /** Round 3: the driver may leave the delivery without a signature (printed on the delivery receipt). */
+  deliverWithoutSignature?: boolean;
+  /** Round 3: notes printed on every invoice to this account (distributor terms, FOB, keg statement). */
+  invoiceNotes?: string | null;
+  /** Round 3 freight to a distributor: none, a freight lane per pallet plus fuel, or fixed per-unit charges. */
+  freightMode?: FreightMode;
+  freightLaneCode?: string | null;
+  freightPerUnit?: Record<string, number> | null;
+  freightMinPallets?: number | null;
 }
+
+export type FreightMode = "none" | "lane" | "per_unit";
+export const FREIGHT_MODE_LABEL: Record<FreightMode, string> = {
+  none: "No freight charged",
+  lane: "Freight lane, per pallet plus fuel surcharge",
+  per_unit: "Fixed per-unit delivery charge (fuel included)",
+};
+/** Package kinds a per-unit delivery charge can be set for, with their labels. */
+export const PER_UNIT_KINDS: ReadonlyArray<{ kind: string; label: string }> = [
+  { kind: "keg_half", label: "1/2 bbl keg" },
+  { kind: "keg_sixtel", label: "1/6 bbl keg" },
+  { kind: "case_12oz_can", label: "12 oz case" },
+  { kind: "case_24oz_can", label: "24 oz case" },
+];
 
 export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId: string, patch: AccountShippingPatch) {
   const [prior] = await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, locationId));
@@ -122,6 +145,33 @@ export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId
     set[k] = v || null;
   }
   if (patch.depositSettlementNote !== undefined) set.depositSettlementNote = patch.depositSettlementNote?.trim() || null;
+  if (patch.deliverWithoutSignature !== undefined) set.deliverWithoutSignature = patch.deliverWithoutSignature;
+  if (patch.invoiceNotes !== undefined) set.invoiceNotes = patch.invoiceNotes?.trim() || null;
+  if (patch.freightMode !== undefined) {
+    if (!["none", "lane", "per_unit"].includes(patch.freightMode)) throw new BusinessError("Freight is none, a lane or per unit", { field: "freightMode" });
+    set.freightMode = patch.freightMode;
+  }
+  if (patch.freightLaneCode !== undefined) {
+    const code = patch.freightLaneCode?.trim().toUpperCase() || null;
+    if (code) {
+      const [lane] = await db.select().from(schema.freightLane).where(eq(schema.freightLane.code, code));
+      if (!lane) throw new BusinessError(`Freight lane ${code} not found; add it under Settings first`, { field: "freightLaneCode" });
+    }
+    set.freightLaneCode = code;
+  }
+  if (patch.freightPerUnit !== undefined) {
+    const rates = Object.fromEntries(Object.entries(patch.freightPerUnit ?? {}).filter(([, v]) => v != null && v > 0));
+    for (const v of Object.values(rates)) if (!Number.isInteger(v)) throw new BusinessError("Per-unit charges are whole cents", { field: "freightPerUnit" });
+    set.freightPerUnit = Object.keys(rates).length ? rates : null;
+  }
+  if (patch.freightMinPallets !== undefined) {
+    const v = patch.freightMinPallets;
+    if (v != null && (!Number.isInteger(v) || v < 1 || v > 30)) throw new BusinessError("Minimum pallets is a whole number from 1 to 30", { field: "freightMinPallets" });
+    set.freightMinPallets = v ?? null;
+  }
+  const mode = set.freightMode ?? prior.freightMode;
+  if (mode === "lane" && !(set.freightLaneCode !== undefined ? set.freightLaneCode : prior.freightLaneCode)) throw new BusinessError("Choose the freight lane", { field: "freightLaneCode" });
+  if (mode === "per_unit" && !(set.freightPerUnit !== undefined ? set.freightPerUnit : prior.freightPerUnit)) throw new BusinessError("Enter at least one per-unit delivery charge", { field: "freightPerUnit" });
   if (set.depositSettledOn && !(set.depositTakenCents ?? prior.depositTakenCents)) throw new BusinessError("Record the deposit taken before settling it", { field: "depositSettledOn" });
   if (Object.keys(set).length === 0) throw new BusinessError("Nothing to change");
   set.updatedAt = new Date();

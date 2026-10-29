@@ -282,6 +282,21 @@ section 11.2 to 11.7, the decision-register entries for the October 28 policy an
 (R2-24). The end-of-day pull sheet's email transport is not built: the company switch is off by default and a
 switched-on send waits with a case rather than sending.
 
+Round 3 (October 29 answers) is built on branch `round3` with migration `0006_round3` (schema plus the data from
+the item forms, the sample invoices INV26351, INV26352 and INV26373, and the transportation rate chart):
+distributor and retail price tiers per market; pass-through freight on distributor invoices (CT and Eastern MA
+lanes per pallet plus a 43% fuel line; Martignetti fixed per unit, fuel included, warn below 5 pallets); printed
+invoice notes per distributor, with the keg statement in the notes rather than a line; order cutoffs, lead days and
+delivery days per origin, the confirm date defaulting to the next ship date, and changes after the cutoff logged as
+exceptions; the second-delivery payment-setup warning; hourly sweeps for overdue invoices (retail at $500 or more,
+any distributor) and for beer near an origin's days-on-hand limit (Jack's Abby, 10 days); POS items charged and
+cost-tracked, and account spend (POS plus sample cost); the weekly count schedule; the carrier picklist; leave
+without signature on the delivery receipt; CT net 15; sixtels 20 to a pallet; Dichello renamed Mancini Beverage;
+Real Ale added as origin REA (placeholder code, no market). Invoices are still sent by hand. Tests:
+`tests/scenarios/round3.test.ts`. Still deferred from the question list: split shipments (R2-39), intake
+auto-ingest (R2-42), the Express Wine Delivery cover warning, the approval queue, keg count at the stop, signed BOL
+upload, the CA sales-by-format report, the samples write-off report and route optimisation.
+
 Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
 phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution
 view beyond assigned stops, proof of delivery, line cleaning / service (10.7), credits and collections, host

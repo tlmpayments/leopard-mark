@@ -54,6 +54,9 @@ export async function seedShipmentDefaults(db: DbOrTx): Promise<void> {
   for (const p of POS_ITEMS) {
     await db.insert(schema.posItem).values(p).onConflictDoNothing();
   }
+  for (const l of FREIGHT_LANES) {
+    await db.insert(schema.freightLane).values(l).onConflictDoNothing();
+  }
 }
 
 export type CompanySettings = typeof schema.companySettings.$inferSelect;
@@ -88,6 +91,8 @@ export type SettingsPatch = Partial<
     | "printRemitTo"
     | "remitTo"
     | "autoSendPullSheets"
+    | "fuelSurchargePct"
+    | "collectionsThresholdCents"
   >
 >;
 
@@ -98,6 +103,14 @@ export async function updateCompanySettings(db: DbOrTx, actor: Actor, patch: Set
   if (patch.legalName !== undefined && !patch.legalName.trim()) throw new BusinessError("Legal name is required", { field: "legalName" });
   if (patch.dba !== undefined && !patch.dba.trim()) throw new BusinessError("DBA is required", { field: "dba" });
   if (patch.nmfcStatus !== undefined && !["proposed", "approved"].includes(patch.nmfcStatus)) throw new BusinessError("NMFC status must be proposed or approved", { field: "nmfcStatus" });
+  if (patch.fuelSurchargePct !== undefined) {
+    const pct = Number(patch.fuelSurchargePct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 200) throw new BusinessError("Fuel surcharge is a percentage from 0 to 200", { field: "fuelSurchargePct" });
+    patch = { ...patch, fuelSurchargePct: pct.toFixed(2) };
+  }
+  if (patch.collectionsThresholdCents !== undefined && (!Number.isInteger(patch.collectionsThresholdCents) || patch.collectionsThresholdCents < 0)) {
+    throw new BusinessError("The collections threshold must be zero or more dollars", { field: "collectionsThresholdCents" });
+  }
   const [row] = await db
     .update(schema.companySettings)
     .set({ ...patch, updatedByEmployeeId: actor.employeeId, updatedAt: new Date() })
@@ -118,17 +131,52 @@ export async function listPosItems(db: DbOrTx, opts: { includeInactive?: boolean
   return opts.includeInactive ? rows : rows.filter((r) => r.active);
 }
 
-export async function upsertPosItem(db: DbOrTx, actor: Actor, input: { code: string; name: string; active?: boolean }) {
+/**
+ * POS items (3.6). Round 3: a POS item can carry a price, charged on the invoice like a product line (never on a
+ * no-charge invoice), and a unit cost, which counts toward the account's spend whether or not it is charged.
+ */
+export async function upsertPosItem(db: DbOrTx, actor: Actor, input: { code: string; name: string; active?: boolean; priceCents?: number | null; unitCostCents?: number | null }) {
   authorize(actor, "catalog.manage");
   const code = input.code.trim().toUpperCase();
   const name = input.name.trim();
   if (!code || !name) throw new BusinessError("Code and name are required");
+  for (const [k, v] of [["priceCents", input.priceCents], ["unitCostCents", input.unitCostCents]] as const) {
+    if (v != null && (!Number.isInteger(v) || v < 0)) throw new BusinessError("Prices and costs are zero or more dollars", { field: k });
+  }
+  const values = { name, active: input.active ?? true, priceCents: input.priceCents ?? null, unitCostCents: input.unitCostCents ?? null };
   const [row] = await db
     .insert(schema.posItem)
-    .values({ code, name, active: input.active ?? true })
-    .onConflictDoUpdate({ target: schema.posItem.code, set: { name, active: input.active ?? true } })
+    .values({ code, ...values })
+    .onConflictDoUpdate({ target: schema.posItem.code, set: values })
     .returning();
-  await recordAudit(db, actor, { action: "pos_item.upsert", subjectType: "pos_item", subjectId: row.id, current: { code, name, active: input.active ?? true } });
+  await recordAudit(db, actor, { action: "pos_item.upsert", subjectType: "pos_item", subjectId: row.id, current: { code, ...values } });
+  return row;
+}
+
+export type FreightLane = typeof schema.freightLane.$inferSelect;
+
+/** Freight lanes for pass-through freight to distributors (R2-52), from the transportation rate chart. */
+export const FREIGHT_LANES: ReadonlyArray<Omit<FreightLane, "active" | "updatedAt">> = [
+  { code: "CT", name: "To CT distributors (from Radford or Jack's Abby)", minCents: 8900, tier2to4Cents: 7800, tier5to8Cents: 7200, truckloadCents: 67500 },
+  { code: "MA-EAST", name: "To Eastern MA distributors (from Radford or Jack's Abby)", minCents: 7500, tier2to4Cents: 6900, tier5to8Cents: 6500, truckloadCents: 51500 },
+];
+
+export async function listFreightLanes(db: DbOrTx): Promise<FreightLane[]> {
+  return db.select().from(schema.freightLane).orderBy(schema.freightLane.code);
+}
+
+export async function upsertFreightLane(db: DbOrTx, actor: Actor, input: Omit<FreightLane, "updatedAt" | "active"> & { active?: boolean }) {
+  authorize(actor, "settings.manage");
+  const code = input.code.trim().toUpperCase();
+  if (!/^[A-Z0-9-]{2,16}$/.test(code)) throw new BusinessError("Lane code is 2 to 16 letters, digits or dashes", { field: "code" });
+  if (!input.name.trim()) throw new BusinessError("Lane name is required", { field: "name" });
+  for (const k of ["minCents", "tier2to4Cents", "tier5to8Cents", "truckloadCents"] as const) {
+    if (!Number.isInteger(input[k]) || input[k] < 0) throw new BusinessError("Every rate is zero or more dollars", { field: k });
+  }
+  const values = { name: input.name.trim(), minCents: input.minCents, tier2to4Cents: input.tier2to4Cents, tier5to8Cents: input.tier5to8Cents, truckloadCents: input.truckloadCents, active: input.active ?? true, updatedAt: new Date() };
+  const [prior] = await db.select().from(schema.freightLane).where(eq(schema.freightLane.code, code));
+  const [row] = await db.insert(schema.freightLane).values({ code, ...values }).onConflictDoUpdate({ target: schema.freightLane.code, set: values }).returning();
+  await recordAudit(db, actor, { action: "freight_lane.upsert", subjectType: "freight_lane", subjectId: code, prior: prior ? { ...prior } : undefined, current: { code, ...values } });
   return row;
 }
 

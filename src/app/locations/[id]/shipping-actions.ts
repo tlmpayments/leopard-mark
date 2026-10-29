@@ -2,7 +2,7 @@
 
 import { num, opt, runAction, str } from "@/lib/actions/helpers";
 import { endPriceOverride, setPriceOverride } from "@/lib/domain/catalog/service";
-import { updateAccountShipping, type AccountKind, type DepositMode, type Fulfilment, type PayBy } from "@/lib/domain/customers/shipping";
+import { PER_UNIT_KINDS, updateAccountShipping, type AccountKind, type DepositMode, type FreightMode, type Fulfilment, type PayBy } from "@/lib/domain/customers/shipping";
 
 export async function updateAccountShippingAction(form: FormData) {
   const id = str(form, "locationId");
@@ -25,8 +25,30 @@ export async function updateAccountShippingAction(form: FormData) {
       firstDeliveryOn: opt(form, "firstDeliveryOn"),
       payBy: (opt(form, "payBy") as PayBy | null) ?? null,
       invoiceOnReceipt: form.get("invoiceOnReceipt") === "on",
+      deliverWithoutSignature: form.get("deliverWithoutSignature") === "on",
     });
     return "Shipping and billing attributes saved";
+  });
+}
+
+/** Round 3: freight and printed invoice notes for a distributor account. */
+export async function updateAccountFreightAction(form: FormData) {
+  const id = str(form, "locationId");
+  return runAction(`/locations/${id}`, async ({ db, actor }) => {
+    const perUnit: Record<string, number> = {};
+    for (const { kind } of PER_UNIT_KINDS) {
+      const raw = str(form, `perUnit:${kind}`).replace(/[$,\s]/g, "");
+      if (raw) perUnit[kind] = Math.round(Number(raw) * 100);
+    }
+    const minPallets = opt(form, "freightMinPallets");
+    await updateAccountShipping(db, actor, id, {
+      freightMode: (str(form, "freightMode") || "none") as FreightMode,
+      freightLaneCode: opt(form, "freightLaneCode"),
+      freightPerUnit: Object.keys(perUnit).length ? perUnit : null,
+      freightMinPallets: minPallets ? Number(minPallets) : null,
+      invoiceNotes: opt(form, "invoiceNotes"),
+    });
+    return "Freight and invoice notes saved; new invoices use them from now on";
   });
 }
 

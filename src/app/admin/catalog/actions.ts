@@ -13,7 +13,10 @@ export async function updateSkuDetailsAction(form: FormData) {
     if (pallet && !(Number(pallet) > 0 && Number(pallet) <= 1)) throw new BusinessError("Pallet fraction is the share of a pallet one selling unit takes (0 to 1, for example 0.0125 for 80 cases per pallet)", { field: "palletFraction" });
     const weight = opt(form, "weightLb");
     if (weight && !(Number(weight) >= 0)) throw new BusinessError("Weight must be a number of pounds", { field: "weightLb" });
+    const cost = opt(form, "unitCost");
+    if (cost && !(Number(cost) >= 0)) throw new BusinessError("Unit cost must be a dollar amount", { field: "unitCost" });
     await updateSkuDetails(db, actor, skuId, {
+      unitCostCents: cost ? Math.round(Number(cost) * 100) : null,
       weightLb: weight,
       upcCase: opt(form, "upcCase"),
       upcRetail: opt(form, "upcRetail"),

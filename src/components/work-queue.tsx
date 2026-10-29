@@ -29,6 +29,11 @@ export const CATEGORY_LABEL: Record<string, string> = {
   standing_generation_failed: "Standing order failed",
   custody_reconciliation: "Custody to reconcile",
   provider_handoff_failed: "Provider job failed",
+  payment_setup_missing: "Payment setup before second delivery",
+  freight_below_minimum: "Below the freight pallet minimum",
+  order_change_after_cutoff: "Changed after the cutoff",
+  collections_overdue: "Overdue invoices",
+  origin_stock_aging: "Stock aging at origin",
 };
 
 export interface QueueParams {

@@ -62,6 +62,8 @@ export interface ShipmentSnapshot {
   nmfc: { keg: string | null; can: string | null; status: string } | null;
   deliveryWindow: string | null;
   receivingInstructions: string | null;
+  /** Round 3: the account allows the driver to leave the delivery without a signature. */
+  leaveWithoutSignature?: boolean;
   notes: string | null;
   lines: SnapshotLine[];
   totals: { kegs: number; cases: number; units: number; weightLb: number; halfKegs: number; sixtelKegs: number };
@@ -74,7 +76,7 @@ export interface ShipmentSnapshot {
 
 export interface InvoiceSnapshotLine {
   lineNo: number;
-  kind: "beer" | "deposit" | "pos" | "info";
+  kind: "beer" | "deposit" | "pos" | "info" | "freight";
   description: string;
   lotCode: string | null;
   qty: number;
@@ -103,8 +105,12 @@ export interface InvoiceSnapshot {
   lines: InvoiceSnapshotLine[];
   subtotalCents: number;
   depositCents: number;
+  /** Round 3: freight and fuel surcharge to a distributor (R2-52); absent on older snapshots. */
+  freightCents?: number;
   totalCents: number;
   notes: string | null;
+  /** Round 3: the account's invoice notes, one per line (pricing basis, excise, freight, kegs, terms). */
+  printedNotes?: string[];
   generatedAt: string;
   generatedBy: string;
 }

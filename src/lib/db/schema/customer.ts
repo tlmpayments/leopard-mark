@@ -144,6 +144,20 @@ export const customerLocation = pgTable(
     repEmployeeId: uuid("rep_employee_id"),
     /** The market's samples house account (R2-27): kind internal, no license, no terms. */
     samplesHouse: boolean("samples_house").notNull().default(false),
+    /**
+     * Round 3, distributor invoices: notes printed on every invoice to this account (pricing basis, excise, freight,
+     * the keg note, terms), one per line. The keg-deposit statement lives here, never as an invoice line.
+     */
+    invoiceNotes: text("invoice_notes"),
+    /** Freight on invoices (R2-52): none | lane (per pallet from a freight lane, plus fuel surcharge) | per_unit (fixed per unit, fuel included). */
+    freightMode: text("freight_mode").$type<"none" | "lane" | "per_unit">().notNull().default("none"),
+    freightLaneCode: text("freight_lane_code"),
+    /** Per-unit freight by package kind in cents, e.g. {"keg_half":1100,"keg_sixtel":500,"case_12oz_can":100}. */
+    freightPerUnit: jsonb("freight_per_unit").$type<Record<string, number>>(),
+    /** Minimum pallets per shipment agreed with the distributor (Martignetti: 5); a smaller shipment opens a warning. */
+    freightMinPallets: integer("freight_min_pallets"),
+    /** R2-57: the driver may leave the delivery without a signature (back door, cooler). Off by default. */
+    deliverWithoutSignature: boolean("deliver_without_signature").notNull().default(false),
     createdByEmployeeId: uuid("created_by_employee_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

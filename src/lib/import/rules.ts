@@ -40,7 +40,7 @@ export const ORIGIN_RULES: ReadonlyArray<OriginRule> = [
   { key: "P_NY_Garnerville", name: "Round Table Brewing", originCode: "RTB", lotFacilityCode: "04", kind: "brewery", marketCode: "CT", isPrimary: false, active: true, note: "Brewery, lot facility 04; placed in Connecticut (NY has no market)" },
   { key: "P_CA_San Diego", name: "AleSmith Brewing", originCode: "ALE", lotFacilityCode: "05", kind: "brewery", marketCode: "SOCAL", isPrimary: false, active: true, note: "Brewery, lot facility 05" },
   { key: "P_MA_Framingham", name: "Jack's Abby Brewing", originCode: "JAB", lotFacilityCode: "06", kind: "brewery", marketCode: "MA", isPrimary: false, active: true, note: "Brewery, lot facility 06; Radford is the MA primary warehouse (2.3)" },
-  { key: "P_TX_Blanco", name: "Real Ale Brewing", originCode: "RAL", lotFacilityCode: "07", kind: "brewery", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 07; no market covers Texas (2.2)" },
+  { key: "P_TX_Blanco", name: "Real Ale Brewing", originCode: "REA", lotFacilityCode: "07", kind: "brewery", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 07; no market covers Texas (2.2)" },
   { key: "W_CA_Windsor 01", name: "Express Wine Delivery", originCode: "EWD", lotFacilityCode: null, kind: "warehouse", marketCode: "NORCAL-SD", isPrimary: true, active: true, note: "North Bay primary warehouse" },
   { key: "W_CA_Wilmington 01", name: "Balmuth & Co.", originCode: "WLA", lotFacilityCode: null, kind: "warehouse", marketCode: "SOCAL", isPrimary: true, active: true, note: "SoCal primary warehouse" },
   { key: "W_CA_Benecia 01", name: "SC Warehouses (Benicia)", originCode: null, lotFacilityCode: null, kind: "warehouse", marketCode: "NORCAL-SD", isPrimary: false, active: false, note: "Inactive pending question 2.3" },
@@ -73,7 +73,7 @@ export const ORIGIN_NAME_HINTS: ReadonlyArray<{ contains: string; originCode: st
   { contains: "ale smith", originCode: "ALE" },
   { contains: "jack's abby", originCode: "JAB" },
   { contains: "jacks abby", originCode: "JAB" },
-  { contains: "real ale", originCode: "RAL" },
+  { contains: "real ale", originCode: "REA" },
 ];
 
 /** Document-number prefixes that are not origin codes but name an origin all the same. */

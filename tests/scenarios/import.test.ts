@@ -179,7 +179,7 @@ describe("TLM Master File import — synthetic workbook", () => {
     expect(byCode.get("JAB")!.appointmentRequired).toBe(true);
     expect(byCode.get("JAB")!.addressPostalCode).toBe("01702");
     expect(byCode.get("PRO")!.marketId).toBeNull();
-    expect(byCode.get("RAL")!.marketId).toBeNull();
+    expect(byCode.get("REA")!.marketId).toBeNull();
     expect(origins.filter((o) => !o.active).map((o) => o.name).sort()).toEqual(["Envision Cold Storage (San Francisco)", "SC Warehouses (Benicia)"]);
     const [norcalD] = await db.select().from(schema.market).where(eq(schema.market.code, "NORCAL-D"));
     expect(norcalD.id).toBe(ids.market("NORCAL-D"));

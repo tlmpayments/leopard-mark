@@ -13,7 +13,7 @@ import { lotPickerOptions } from "@/lib/domain/lots/service";
 import { originLabel } from "@/lib/domain/origins/service";
 import { getShipment } from "@/lib/domain/shipments/service";
 import { listPosItems } from "@/lib/domain/settings/service";
-import { TYPE_LABEL, isDriverOnly, todayIso } from "../labels";
+import { CARRIERS, TYPE_LABEL, isDriverOnly, todayIso } from "../labels";
 import { confirmAction, correctDeliveryAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, stageAction, voidAction } from "./actions";
 
 const DOC_LABEL: Record<string, string> = { bol: "Bill of lading", picking_ticket: "Picking ticket", pickup_pack: "Pickup pack", delivery_pack: "Delivery pack", pull_sheet: "Pull sheet", invoice: "Invoice" };
@@ -450,8 +450,13 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
       <Field label="Appointment">
         <Input name="appointment" defaultValue={s.appointment ?? ""} />
       </Field>
-      <Field label="Carrier">
-        <Input name="carrier" defaultValue={s.carrier ?? ""} />
+      <Field label="Carrier" hint="Pick one or type another.">
+        <Input name="carrier" list="carrier-options" defaultValue={s.carrier ?? ""} />
+        <datalist id="carrier-options">
+          {CARRIERS.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
       </Field>
       <Field label="Carrier phone">
         <Input name="carrierPhone" defaultValue={s.carrierPhone ?? ""} />

@@ -7,12 +7,13 @@ import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
-import { KEG_DEPOSIT_CENTS, MINIMUM_DELIVERY_CENTS, marketCatalog } from "@/lib/domain/catalog/service";
+import { KEG_DEPOSIT_CENTS, MINIMUM_DELIVERY_CENTS, marketCatalog, priceTierForKind } from "@/lib/domain/catalog/service";
 import { getLocation, isSamplesRecipient, listLocations, samplesRecipients } from "@/lib/domain/customers/service";
 import { skuBrandActive } from "@/lib/domain/lots/service";
 import { primaryWarehouse } from "@/lib/domain/markets/service";
 import { OFFICE_ORDER_SOURCES, ORDER_SOURCE_LABEL, repeatLastOrderPreview, repeatOrderPreview } from "@/lib/domain/orders/service";
 import { originLabel } from "@/lib/domain/origins/service";
+import { cutoffHint, originCutoff } from "@/lib/domain/cutoff/service";
 import { evaluateLocationReadiness } from "@/lib/domain/readiness/service";
 import { getPolicy } from "@/lib/policy/policy";
 import { todayIso } from "../../shipments/labels";
@@ -73,13 +74,14 @@ export default async function NewOrderPage({ searchParams }: { searchParams: Sea
   }
   const loc = detail.location;
   const [catalog, readiness, preview, d11, origin] = await Promise.all([
-    marketCatalog(d, loc.marketId),
+    marketCatalog(d, loc.marketId, { tier: priceTierForKind(loc.kind) }),
     evaluateLocationReadiness(d, locationId),
     repeat === "1" ? repeatLastOrderPreview(d, locationId) : repeat ? repeatOrderPreview(d, repeat) : Promise.resolve(null),
     getPolicy<{ value_basis?: string }>(d, "D11", { marketId: loc.marketId }),
     loc.warehouseOverrideId ? d.select().from(schema.warehouse).where(eq(schema.warehouse.id, loc.warehouseOverrideId)).then((r) => r[0] ?? null) : primaryWarehouse(d, loc.marketId),
   ]);
   const source = preview?.sourceOrder && preview.sourceOrder.locationId === locationId ? preview : null;
+  const cutoff = origin ? await originCutoff(d, origin.id) : null;
   const blockers = readiness.conditions.filter((c) => c.status !== "satisfied");
   const items: OrderFormCatalogItem[] = catalog
     .filter((c) => skuBrandActive(c.sku))
@@ -127,6 +129,7 @@ export default async function NewOrderPage({ searchParams }: { searchParams: Sea
         samplesRecipient={samplesRecipient}
         pickupDefault={loc.fulfilment === "pickup"}
         routeDays={detail.market?.routeDays ?? []}
+        cutoffHint={cutoff ? cutoffHint(cutoff) : null}
         repeatOf={source ? { orderNumber: source.sourceOrder!.orderNumber, notes: source.sourceOrder!.notes, skipped: source.lines.filter((l) => !l.orderable).map((l) => ({ skuName: l.skuName, change: l.change })) } : null}
         submissionKey={randomUUID()}
         todayIso={todayIso()}
