@@ -1,13 +1,17 @@
 /**
  * PDF renderer for shipment and invoice documents (docs/SHIPMENTS_SPEC.md §4).
  *
- * Every template is a pure function of its snapshot: nothing here reads the database, the clock or the network. The
- * built-in Helvetica family is the only font (no downloads), pages are US Letter with half-inch margins, and the
- * module registers itself with `src/lib/documents/render.ts` at load so the domain services store PDF bytes alongside
- * the snapshot at confirmation (6.7). Arrow characters never reach the page; "to" is written instead.
+ * Every template is a pure function of its snapshot: nothing here reads the database, the clock or the network. Pages
+ * are US Letter with half-inch margins, set in the company's two typefaces (Rubik for everything, Merriweather for the
+ * title, the number and the section labels; see fonts.ts) in one colour, Leopard Navy, with black ink on white paper
+ * and hairline rules instead of boxes. The module registers itself with `src/lib/documents/render.ts` at load so the
+ * domain services store PDF bytes alongside the snapshot at confirmation (6.7). Arrow characters never reach the
+ * page; "to" is written instead.
  */
 import React from "react";
-import { Document, Font, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { Document, Font, Page, Path, StyleSheet, Svg, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { CREST_HEIGHT, CREST_PATHS, CREST_VIEWBOX, CREST_WIDTH } from "./crest";
+import { registerDocumentFonts } from "./fonts";
 import { registerRenderer } from "./render";
 import type { AnySnapshot, InvoiceSnapshot, InvoiceSnapshotLine, PartyBlock, PullSheetSnapshot, ShipmentSnapshot, SnapshotLine } from "./types";
 
@@ -103,55 +107,60 @@ function typeLabel(type: ShipmentSnapshot["type"]): string {
 // Styles
 // ---------------------------------------------------------------------------
 
-const INK = "#111111";
-const MUTED = "#555555";
+const INK = "#000000";
+const NAVY = "#243167";
+const MUTED = "#5c5c5c"; // black at an opacity on white paper; never a hue
 const RULE = "#9a9a9a";
-const LIGHT_RULE = "#d0d0d0";
-const STAMP = "#b00020";
+const LIGHT_RULE = "#d6d6d6";
+
+const DISPLAY = { fontFamily: "Merriweather" } as const;
 
 const styles = StyleSheet.create({
   // No lineHeight on the page: with one set, @react-pdf/renderer 4.9 drops every `render`-prop Text (page numbers).
-  page: { paddingTop: 36, paddingHorizontal: 36, paddingBottom: 54, fontFamily: "Helvetica", fontSize: 9, color: INK },
-  bold: { fontFamily: "Helvetica-Bold" },
-  italic: { fontFamily: "Helvetica-Oblique" },
+  // Tabular lining figures everywhere so quantities and money line up in every column.
+  page: { paddingTop: 36, paddingHorizontal: 36, paddingBottom: 54, fontFamily: "Rubik", fontSize: 9, color: INK, fontFeatureSettings: ["tnum", "lnum"] },
+  bold: { fontWeight: 700 },
+  medium: { fontWeight: 500 },
+  italic: { fontStyle: "italic" },
   muted: { color: MUTED },
   small: { fontSize: 7.5 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", borderBottomWidth: 1.5, borderBottomColor: INK, paddingBottom: 8, marginBottom: 10 },
-  shipperBlock: { width: "55%" },
-  shipperName: { fontFamily: "Helvetica-Bold", fontSize: 12 },
-  titleBlock: { width: "43%", alignItems: "flex-end" },
-  title: { fontFamily: "Helvetica-Bold", fontSize: 18, letterSpacing: 1 },
-  docNumber: { fontFamily: "Helvetica-Bold", fontSize: 12, marginTop: 2 },
-  banner: { borderWidth: 1.5, borderColor: INK, paddingVertical: 4, paddingHorizontal: 8, marginBottom: 8, alignSelf: "flex-start" },
-  bannerText: { fontFamily: "Helvetica-Bold", fontSize: 10, letterSpacing: 0.5 },
-  twoCol: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  partyBox: { width: "49%", borderWidth: 1, borderColor: RULE, padding: 6 },
-  label: { fontSize: 6.5, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 1 },
-  partyName: { fontFamily: "Helvetica-Bold", fontSize: 10 },
-  fields: { flexDirection: "row", flexWrap: "wrap", borderWidth: 1, borderColor: RULE, marginBottom: 8 },
-  field: { paddingVertical: 4, paddingHorizontal: 6, borderBottomWidth: 0.5, borderBottomColor: LIGHT_RULE },
-  sectionTitle: { fontFamily: "Helvetica-Bold", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 6, marginBottom: 3 },
-  table: { borderWidth: 1, borderColor: RULE, marginBottom: 8 },
-  thRow: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: INK, backgroundColor: "#f0f0f0" },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", borderBottomWidth: 0.75, borderBottomColor: INK, paddingBottom: 10, marginBottom: 12 },
+  shipperBlock: { width: "58%", flexDirection: "row", alignItems: "flex-start" },
+  shipperText: { marginLeft: 10 },
+  shipperName: { fontWeight: 700, fontSize: 10.5, marginBottom: 1 },
+  titleBlock: { width: "40%", alignItems: "flex-end" },
+  title: { ...DISPLAY, fontWeight: 700, fontSize: 17, letterSpacing: 2, color: NAVY, textTransform: "uppercase" },
+  docNumber: { ...DISPLAY, fontWeight: 700, fontSize: 15, letterSpacing: 0.4, color: NAVY, marginTop: 3 },
+  banner: { borderBottomWidth: 0.5, borderBottomColor: INK, paddingBottom: 3, marginBottom: 10, alignSelf: "flex-start" },
+  bannerText: { ...DISPLAY, fontWeight: 700, fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase" },
+  twoCol: { flexDirection: "row", justifyContent: "space-between", marginBottom: 10 },
+  partyBox: { width: "48%", borderTopWidth: 0.5, borderTopColor: RULE, paddingTop: 5 },
+  label: { ...DISPLAY, fontSize: 6.5, color: MUTED, textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 2 },
+  partyName: { fontWeight: 700, fontSize: 10 },
+  fields: { flexDirection: "row", flexWrap: "wrap", borderTopWidth: 0.5, borderTopColor: RULE, marginBottom: 10 },
+  field: { paddingVertical: 4, paddingRight: 8, borderBottomWidth: 0.5, borderBottomColor: LIGHT_RULE },
+  sectionTitle: { ...DISPLAY, fontWeight: 700, fontSize: 7.5, textTransform: "uppercase", letterSpacing: 1.3, color: MUTED, marginTop: 8, marginBottom: 3, paddingBottom: 2, borderBottomWidth: 0.5, borderBottomColor: RULE },
+  table: { marginBottom: 10 },
+  thRow: { flexDirection: "row", borderBottomWidth: 0.75, borderBottomColor: INK },
   tdRow: { flexDirection: "row", borderBottomWidth: 0.5, borderBottomColor: LIGHT_RULE },
-  totalsRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: INK, backgroundColor: "#f7f7f7" },
-  cell: { paddingVertical: 3, paddingHorizontal: 3, fontSize: 8 },
-  th: { fontFamily: "Helvetica-Bold", fontSize: 7.5, textTransform: "uppercase", letterSpacing: 0.3 },
-  tick: { width: 9, height: 9, borderWidth: 1, borderColor: INK, marginTop: 1 },
-  fixedLine: { fontFamily: "Helvetica-Bold", fontSize: 9, marginBottom: 2 },
-  footerText: { fontSize: 7.5, color: MUTED, marginTop: 8, borderTopWidth: 0.5, borderTopColor: LIGHT_RULE, paddingTop: 4 },
-  sigRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 18 },
+  totalsRow: { flexDirection: "row", borderTopWidth: 0.75, borderTopColor: INK },
+  cell: { paddingVertical: 3.5, paddingHorizontal: 3, fontSize: 8 },
+  th: { ...DISPLAY, fontWeight: 700, fontSize: 6.5, textTransform: "uppercase", letterSpacing: 0.8, color: MUTED },
+  tick: { width: 9, height: 9, borderWidth: 0.75, borderColor: INK, marginTop: 1 },
+  fixedLine: { fontWeight: 500, fontSize: 9, marginBottom: 2 },
+  footerText: { fontSize: 7.5, color: MUTED, marginTop: 10, borderTopWidth: 0.5, borderTopColor: LIGHT_RULE, paddingTop: 4 },
+  sigRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 20 },
   sigBlock: { width: "47%" },
-  sigLine: { borderBottomWidth: 1, borderBottomColor: INK, height: 22, marginBottom: 2 },
+  sigLine: { borderBottomWidth: 0.75, borderBottomColor: INK, height: 22, marginBottom: 2 },
   sigCaption: { fontSize: 7.5, color: MUTED },
-  pageFooter: { position: "absolute", bottom: 22, left: 36, right: 36, flexDirection: "row", justifyContent: "space-between", fontSize: 7, color: MUTED },
+  pageFooter: { position: "absolute", bottom: 22, left: 36, right: 36, flexDirection: "row", justifyContent: "space-between", fontSize: 7, color: MUTED, borderTopWidth: 0.5, borderTopColor: LIGHT_RULE, paddingTop: 4 },
   stampWrap: { position: "absolute", top: 290, left: 0, right: 0, alignItems: "center" },
-  stamp: { transform: "rotate(-22deg)", borderWidth: 5, borderColor: STAMP, paddingVertical: 4, paddingHorizontal: 28, opacity: 0.45 },
-  stampText: { fontFamily: "Helvetica-Bold", fontSize: 86, color: STAMP, letterSpacing: 10 },
+  stamp: { transform: "rotate(-22deg)", borderWidth: 4, borderColor: NAVY, paddingVertical: 4, paddingHorizontal: 28, opacity: 0.35 },
+  stampText: { ...DISPLAY, fontWeight: 900, fontSize: 86, color: NAVY, letterSpacing: 10 },
   kegBox: { flexDirection: "row", alignItems: "center", marginRight: 24 },
-  kegCount: { width: 44, height: 24, borderWidth: 1, borderColor: INK, marginLeft: 6, justifyContent: "center", alignItems: "center" },
-  kegCountText: { fontFamily: "Helvetica-Bold", fontSize: 12 },
-  stopHeader: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#f0f0f0", borderWidth: 1, borderColor: RULE, paddingVertical: 3, paddingHorizontal: 5, marginTop: 6 },
+  kegCount: { width: 44, height: 24, borderBottomWidth: 0.75, borderBottomColor: INK, marginLeft: 6, justifyContent: "flex-end", alignItems: "center" },
+  kegCountText: { fontWeight: 700, fontSize: 12 },
+  stopHeader: { flexDirection: "row", justifyContent: "space-between", borderBottomWidth: 0.75, borderBottomColor: INK, paddingVertical: 3, marginTop: 8 },
   ack: { fontSize: 8, marginTop: 10, marginBottom: 2 },
 });
 
@@ -177,20 +186,35 @@ interface IssuerBlock {
   phone?: string | null;
 }
 
+/** The crest, navy on the paper, set to the height of the shipper block's first two lines. */
+function Crest({ height }: { height: number }) {
+  const width = (height * CREST_WIDTH) / CREST_HEIGHT;
+  return (
+    <Svg viewBox={CREST_VIEWBOX} width={width} height={height}>
+      {CREST_PATHS.map((d, i) => (
+        <Path key={i} d={d} fill={NAVY} />
+      ))}
+    </Svg>
+  );
+}
+
 function Header({ issuer, title, subtitle, number, meta }: { issuer: IssuerBlock; title: string; subtitle?: string | null; number: string; meta?: string[] }) {
   const dba = text(issuer.dba, "");
   const legal = text(issuer.legalName, "");
-  // Shipper = legal name plus dba as posted with CA ABC (6.1).
+  // Shipper = legal name plus dba as posted with CA ABC (6.1); the wording is company-settings data.
   const shipperLine = dba && dba !== legal ? (legal ? `${legal} dba ${dba}` : dba) : legal || dba;
   return (
     <View style={styles.headerRow}>
       <View style={styles.shipperBlock}>
-        <Text style={styles.shipperName}>{shipperLine}</Text>
-        {issuer.lines.map((l, i) => (
-          <Text key={i}>{text(l, "")}</Text>
-        ))}
-        {issuer.phone ? <Text>{text(issuer.phone)}</Text> : null}
-        <Text>{text(issuer.arEmail, "")}</Text>
+        <Crest height={40} />
+        <View style={styles.shipperText}>
+          <Text style={styles.shipperName}>{shipperLine}</Text>
+          {issuer.lines.map((l, i) => (
+            <Text key={i}>{text(l, "")}</Text>
+          ))}
+          {issuer.phone ? <Text>{text(issuer.phone)}</Text> : null}
+          <Text>{text(issuer.arEmail, "")}</Text>
+        </View>
       </View>
       <View style={styles.titleBlock}>
         <Text style={styles.title}>{title}</Text>
@@ -379,22 +403,22 @@ function BillOfLading({ s }: { s: ShipmentSnapshot }) {
   const stamp = stampFor(s);
   const title = s.type === "T" ? "TRANSFER BILL OF LADING" : "BILL OF LADING";
   const columns: Array<Column<SnapshotLine>> = [
-    { label: "#", width: 16, render: (l) => String(l.lineNo) },
-    { label: "SKU", width: 78, render: (l) => text(l.skuCode) },
+    { label: "#", width: 14, render: (l) => String(l.lineNo) },
+    { label: "SKU", width: 64, render: (l) => text(l.skuCode) },
     { label: "Description", render: (l) => text(l.description) },
-    { label: "Package", width: 72, render: (l) => text(l.packageLabel) },
-    { label: "Case UPC", width: 72, render: (l) => text(l.upcCase) },
-    { label: "Lot", width: 66, render: (l) => text(l.lotCode) },
-    { label: "Qty", width: 28, align: "right", render: (l) => formatQty(l.qty) },
-    { label: "Unit lb", width: 38, align: "right", render: (l) => formatWeight(l.unitWeightLb) },
-    { label: "Total lb", width: 48, align: "right", render: (l) => formatWeight(l.totalWeightLb) },
+    { label: "Package", width: 68, render: (l) => text(l.packageLabel) },
+    { label: "Case UPC", width: 82, render: (l) => text(l.upcCase) },
+    { label: "Lot", width: 74, render: (l) => text(l.lotCode) },
+    { label: "Qty", width: 30, align: "right", render: (l) => formatQty(l.qty) },
+    { label: "Unit lb", width: 42, align: "right", render: (l) => formatWeight(l.unitWeightLb) },
+    { label: "Total lb", width: 52, align: "right", render: (l) => formatWeight(l.totalWeightLb) },
   ];
   const totals = (
     <>
       <View style={[styles.cell, { flex: 1 }]}>
         <Text style={styles.bold}>Totals: {shipmentTotals(s)}</Text>
       </View>
-      <View style={[styles.cell, { width: 86, textAlign: "right" }]}>
+      <View style={[styles.cell, { width: 94, textAlign: "right" }]}>
         <Text style={styles.bold}>{formatWeight(s.totals.weightLb)} lb</Text>
       </View>
     </>
@@ -405,7 +429,7 @@ function BillOfLading({ s }: { s: ShipmentSnapshot }) {
       <Header issuer={s.shipper} title={title} number={number} subtitle={typeLabel(s.type)} meta={s.revision > 0 ? [`Revision ${s.revision} of ${text(s.number)}`] : []} />
       {s.pickup ? (
         <View style={styles.banner}>
-          <Text style={styles.bannerText}>WILL CALL {EM_DASH} picked up at origin</Text>
+          <Text style={styles.bannerText}>Will call, picked up at origin</Text>
         </View>
       ) : null}
       <View style={styles.twoCol}>
@@ -471,7 +495,7 @@ function DeliveryReceipt({ s }: { s: ShipmentSnapshot }) {
       <Header issuer={s.shipper} title="DELIVERY RECEIPT" number={number} subtitle={typeLabel(s.type)} meta={s.revision > 0 ? [`Revision ${s.revision} of ${text(s.number)}`] : []} />
       {s.pickup ? (
         <View style={styles.banner}>
-          <Text style={styles.bannerText}>WILL CALL {EM_DASH} picked up at origin</Text>
+          <Text style={styles.bannerText}>Will call, picked up at origin</Text>
         </View>
       ) : null}
       <View style={styles.twoCol}>
@@ -540,7 +564,7 @@ function PickingTicket({ s, title }: { s: ShipmentSnapshot; title: "PICKING TICK
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.title}>{title}</Text>
-          <Text style={styles.muted}>{typeLabel(s.type)}{s.pickup ? ` ${EM_DASH} will call, picked up at origin` : ""}</Text>
+          <Text style={styles.muted}>{typeLabel(s.type)}{s.pickup ? ", will call, picked up at origin" : ""}</Text>
         </View>
         <View style={{ alignItems: "flex-end" }}>
           <Text style={styles.docNumber}>{number}</Text>
@@ -603,8 +627,9 @@ function PullSheetDay({ p }: { p: PullSheetSnapshot }) {
           <Text style={styles.title}>PULL SHEET</Text>
           <Text style={styles.muted}>Master pull for one origin and scheduled date; one picking ticket per stop follows.</Text>
         </View>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={styles.docNumber}>{originLabel}</Text>
+        <View style={{ alignItems: "flex-end", maxWidth: "45%" }}>
+          <Text style={styles.docNumber}>{p.originCode ? text(p.originCode) : text(p.origin)}</Text>
+          {p.originCode ? <Text style={{ textAlign: "right" }}>{text(p.origin)}</Text> : null}
           <Text>{formatDate(p.scheduledDate)}</Text>
         </View>
       </View>
@@ -616,11 +641,11 @@ function PullSheetDay({ p }: { p: PullSheetSnapshot }) {
         <View key={i} wrap={false}>
           <View style={styles.stopHeader}>
             <Text style={styles.bold}>
-              Stop {i + 1} {EM_DASH} {text(stop.number, "draft")}
+              Stop {i + 1}, {text(stop.number, "draft")}
             </Text>
             <Text>{text(stop.destinationName)}</Text>
           </View>
-          <View style={[styles.table, { borderTopWidth: 0, marginBottom: 2 }]}>
+          <View style={[styles.table, { marginBottom: 2 }]}>
             {stop.lines.map((l, li) => (
               <View key={li} style={styles.tdRow}>
                 <View style={[styles.cell, { width: 18 }]}>
@@ -780,8 +805,9 @@ function documentTitle(docs: SingleDocument[]): string {
 export async function renderDocument(input: RenderInput): Promise<Buffer> {
   const docs = flatten(input);
   if (docs.length === 0) throw new Error("Nothing to render");
+  registerDocumentFonts();
   const element = (
-    <Document title={documentTitle(docs)} creator="Leopard Mark Ops" producer="Leopard Mark Ops" language="en-US">
+    <Document title={documentTitle(docs)} creator="The Leopard Mark" producer="The Leopard Mark" language="en-US">
       {docs.map((d, i) => (
         <React.Fragment key={i}>{pagesFor(d)}</React.Fragment>
       ))}
