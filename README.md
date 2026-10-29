@@ -114,7 +114,7 @@ npm run check                                     # typecheck + lint + the PGlit
 npm test                                          # 137 passed, 12 skipped (16 test files passed, the 3 real-Postgres files skipped; the skips are that suite and the real-workbook import, see below)
 TEST_DATABASE_URL=postgres://… npm run test:pg    # 11 real-Postgres tests: races (AC07/08/10/11/12/22/23/28), setup page, populated-database upgrade (AC37)
 TLM_WORKBOOK_PATH=/path/to/export.xlsx npm test   # also runs the import against a real workbook export (owner's machine only; the file never enters the repo)
-npm run demo && npm run test:ui                   # 12 role browser journeys with screenshots + timings (tests/ui/README.md)
+npm run demo && npm run test:ui                   # 13 role browser journeys with screenshots + timings (tests/ui/README.md)
 npm run test:ui:golive                            # go-live path on a production build against an empty Postgres (/setup → Owner → sign-in)
 DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a populated database before applying migration 0002
 ```
@@ -132,7 +132,7 @@ PGlite suite takes a couple of minutes because the document tests render real PD
 | `npm run check` | typecheck + lint + tests + production build |
 | `npm test` | 137 business-scenario tests on PGlite (AT01–AT13, AT61/AT62, AT79/AT80, REV-01–18 regressions, environment guards, PIN sign-in, presentation/timezone/error masking, shipments acceptance 1–9, document rendering and routes, workbook import); 12 tests are skipped without `TEST_DATABASE_URL` / `TLM_WORKBOOK_PATH` |
 | `npm run test:pg` | real-Postgres concurrency, setup-page and upgrade tests (`TEST_DATABASE_URL`) |
-| `npm run test:ui` | 12 role browser journeys against the running demo (`SHOTS_DIR` for screenshots) |
+| `npm run test:ui` | 13 role browser journeys against the running demo (`SHOTS_DIR` for screenshots) |
 | `npm run test:ui:golive` | `/setup` → migrations → first Owner → sign-in on a production build (`BASE_URL`, `SETUP_TOKEN`) |
 | `npm run db:generate` | generate a new SQL migration after editing `src/lib/db/schema/*` |
 | `npm run db:migrate` | apply migrations to `DATABASE_URL` (forward-only; 0002 runs a preflight and aborts with a diagnostic on invalid data) |

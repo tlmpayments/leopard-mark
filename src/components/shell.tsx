@@ -4,7 +4,7 @@ import type { Actor } from "@/lib/authz/actor";
 import { ROLE_LABEL, actorRoles } from "@/lib/authz/actor";
 import { can } from "@/lib/authz/authorize";
 import { appEnv, configurationProblems, demoModeEnabled, devAuthBypassEnabled } from "@/lib/env";
-import { GroupNav, NavLinks, PrimaryNav } from "./client";
+import { GroupNav, NavLinks, PrimaryNav, type NavSection } from "./client";
 
 interface NavItem {
   href: string;
@@ -12,8 +12,6 @@ interface NavItem {
   show: boolean;
   /** Frequent mobile destinations appear in the bottom bar; everything else is under More. */
   frequent?: boolean;
-  /** Primary items stand in the shell's one line; the rest sit under Admin on a second line. */
-  primary?: boolean;
 }
 
 export function navFor(actor: Actor): NavItem[] {
@@ -22,11 +20,11 @@ export function navFor(actor: Actor): NavItem[] {
   const isSalesOnly = roles.every((r) => r === "sales");
   return [
     { href: "/", label: "Home", show: true, frequent: true },
-    { href: "/shipments", label: "Shipments", show: can(actor, "shipment.view"), frequent: !isSalesOnly, primary: true },
-    { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField, primary: true },
-    { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField, primary: true },
-    { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField, primary: true },
-    { href: "/field", label: "My route", show: roles.includes("driver_service"), frequent: true, primary: true },
+    { href: "/shipments", label: "Shipments", show: can(actor, "shipment.view"), frequent: !isSalesOnly },
+    { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField },
+    { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField },
+    { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField },
+    { href: "/field", label: "My route", show: roles.includes("driver_service"), frequent: true },
     { href: "/locations", label: "Accounts", show: can(actor, "location.view") && !isField, frequent: true },
     { href: "/orders", label: "Orders", show: can(actor, "order.view") && !isField, frequent: true },
     { href: "/admin", label: "Command center", show: can(actor, "exception.view") && (can(actor, "exception.manage") || can(actor, "allocation.resolve")), frequent: !isSalesOnly },
@@ -44,9 +42,46 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/finance", label: "Finance", show: can(actor, "finance.view") },
     { href: "/owner/decisions", label: "Decisions", show: can(actor, "decision.view") },
     { href: "/integrations", label: "Integrations", show: can(actor, "integration.view") },
-    { href: "/reports/microstar", label: "Reports", show: can(actor, "report.export"), primary: true },
+    { href: "/reports/microstar", label: "Reports", show: can(actor, "report.export") },
     { href: "/search", label: "Search", show: true, frequent: isSalesOnly || isField },
   ].filter((n) => n.show);
+}
+
+/**
+ * The primary row. The rule: what Sales or the back office opens most days stands in the row; what is set up
+ * once and rarely revisited sits under Admin. Each section lists its pages in order; a page appears only when
+ * navFor (the person's permissions) already shows it, and a section appears only when it holds at least one
+ * page. `also` lists other path prefixes that belong to a page, so its section stays current there.
+ */
+const SECTIONS: Array<{ key: string; label: string; pages: Array<{ href: string; also?: string[] }> }> = [
+  { key: "accounts", label: "Accounts", pages: [{ href: "/locations" }] },
+  { key: "orders", label: "Orders", pages: [{ href: "/orders" }, { href: "/samples" }, { href: "/admin/intake" }] },
+  { key: "shipments", label: "Shipments", pages: [{ href: "/shipments" }] },
+  { key: "stock", label: "Stock", pages: [{ href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
+  { key: "invoices", label: "Invoices", pages: [{ href: "/invoices" }, { href: "/finance" }] },
+  { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }] },
+  { key: "exceptions", label: "Exceptions", pages: [{ href: "/admin" }, { href: "/admin/exceptions" }, { href: "/admin/notices" }] },
+  { key: "reports", label: "Reports", pages: [{ href: "/reports/microstar", also: ["/reports"] }] },
+  {
+    key: "admin",
+    label: "Admin",
+    pages: [{ href: "/admin/employees" }, { href: "/admin/settings" }, { href: "/admin/catalog" }, { href: "/products" }, { href: "/owner/decisions" }, { href: "/integrations" }, { href: "/admin/import" }],
+  },
+];
+
+/**
+ * The sections this person sees in the row. Permissions decide the pages (navFor); on top of that a Sales-only
+ * person sees the selling sections and no Stock or Admin, and a Driver/Service-only person sees Shipments (their
+ * assigned stops) only. Every permitted page stays reachable by its URL and from the More menu.
+ */
+export function sectionsFor(actor: Actor): NavSection[] {
+  const roles = actorRoles(actor);
+  const isField = roles.length === 1 && roles[0] === "driver_service";
+  const isSalesOnly = roles.every((r) => r === "sales");
+  const label = new Map(navFor(actor).map((n) => [n.href, n.label]));
+  return SECTIONS.filter((s) => (isField ? s.key === "shipments" : isSalesOnly ? s.key !== "stock" && s.key !== "admin" : true))
+    .map((s) => ({ key: s.key, label: s.label, pages: s.pages.filter((p) => label.has(p.href)).map((p) => ({ href: p.href, label: label.get(p.href)!, also: p.also })) }))
+    .filter((s) => s.pages.length > 0);
 }
 
 /**
@@ -73,13 +108,7 @@ export function Shell({ actor, children }: { actor: Actor | null; children: Reac
   const demo = demoModeEnabled();
   const problems = configurationProblems();
   const frequent = nav.filter((n) => n.frequent).slice(0, 4);
-  const primary = nav.filter((n) => n.primary && n.href !== "/reports/microstar");
-  const reports = nav.find((n) => n.href === "/reports/microstar");
-  const adminItems = nav.filter((n) => !n.primary && n.href !== "/" && n.href !== "/search");
-  const line: Array<{ href: string; label: string; also?: string[] }> = [...primary.map((n) => ({ href: n.href, label: n.label }))];
-  if (adminItems.length) line.push({ href: adminItems[0].href, label: "Admin", also: adminItems.map((n) => n.href) });
-  if (reports) line.push({ href: reports.href, label: reports.label });
-  const groups = adminItems.length ? [{ href: adminItems[0].href, label: "Admin", items: adminItems.map((n) => ({ href: n.href, label: n.label })) }] : [];
+  const sections = actor ? sectionsFor(actor) : [];
   const roleLabel = actor ? actorRoles(actor).map((r) => ROLE_LABEL[r]).join(", ") : "";
 
   return (
@@ -88,11 +117,11 @@ export function Shell({ actor, children }: { actor: Actor | null; children: Reac
         Skip to content
       </a>
       <header className="border-b border-rule">
-        <div className="mx-auto flex h-[70px] max-w-[1400px] items-center gap-12 px-4 sm:px-8">
+        <div className="mx-auto flex h-[70px] max-w-[1400px] items-center gap-8 px-4 sm:px-8 xl:gap-12">
           <Marks />
-          {actor ? <PrimaryNav items={line} /> : null}
+          {actor ? <PrimaryNav sections={sections} /> : null}
           {actor ? (
-            <div className="ml-auto flex items-center gap-5 text-xs">
+            <div className="ml-auto flex shrink-0 items-center gap-5 text-xs">
               <Link href="/search" className="hidden text-ink-2 hover:text-navy sm:inline">
                 Search
               </Link>
@@ -108,7 +137,7 @@ export function Shell({ actor, children }: { actor: Actor | null; children: Reac
             </div>
           ) : null}
         </div>
-        {actor ? <GroupNav groups={groups} /> : null}
+        {actor ? <GroupNav sections={sections} /> : null}
       </header>
       {demo ? (
         <div className="border-b border-rule-soft px-4 py-1.5 text-center text-xs text-ink-2 sm:px-8" role="status">

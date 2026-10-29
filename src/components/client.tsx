@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 
 /**
@@ -28,18 +28,17 @@ export function SubmitButton({ children, className, name, value, disabled, ariaL
 export interface NavItem {
   href: string;
   label: string;
-  /** Other paths that count as this item being current (a group's members). */
+  /** Other path prefixes that belong to this page (Batches belongs to Lots). */
   also?: string[];
 }
 
 function useIsCurrent() {
   const pathname = usePathname();
-  const one = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
-  return (href: string, also?: string[]) => one(href) || (also ?? []).some(one);
+  return (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
 }
 
-/** Navigation with the current route marked (aria-current). "row" is the shell's primary line; "bar" the phone's bottom bar; "sidebar" a vertical list (menu page). */
-export function NavLinks({ items, variant }: { items: NavItem[]; variant: "sidebar" | "bar" | "row" | "subrow" }) {
+/** Navigation with the current route marked (aria-current): "bar" is the phone's bottom bar, "sidebar" a vertical list. */
+export function NavLinks({ items, variant }: { items: NavItem[]; variant: "sidebar" | "bar" }) {
   const isCurrent = useIsCurrent();
   if (variant === "bar") {
     return (
@@ -48,26 +47,6 @@ export function NavLinks({ items, variant }: { items: NavItem[]; variant: "sideb
           const current = isCurrent(n.href);
           return (
             <Link key={n.href} href={n.href} aria-current={current ? "page" : undefined} className={`flex min-h-11 flex-1 items-center justify-center px-1 text-center text-xs ${current ? "font-semibold text-navy" : "text-ink-2"}`}>
-              {n.label}
-            </Link>
-          );
-        })}
-      </>
-    );
-  }
-  if (variant === "row" || variant === "subrow") {
-    const row = variant === "row";
-    return (
-      <>
-        {items.map((n) => {
-          const current = isCurrent(n.href, n.also);
-          return (
-            <Link
-              key={n.href}
-              href={n.href}
-              aria-current={current ? "page" : undefined}
-              className={`relative inline-flex items-center whitespace-nowrap ${row ? "h-[70px] text-sm" : "h-9 text-[13px]"} ${current ? "font-semibold text-navy" : "text-ink-2 hover:text-ink"} ${current && row ? "after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-navy" : ""}`}
-            >
               {n.label}
             </Link>
           );
@@ -89,24 +68,75 @@ export function NavLinks({ items, variant }: { items: NavItem[]; variant: "sideb
   );
 }
 
-/** The shell's primary line. Groups are plain data from the server; GroupNav below shows the open group's second line. */
-export function PrimaryNav({ items }: { items: NavItem[] }) {
+/** A primary section of the shell and the pages it holds, already filtered to what the signed-in person may open. */
+export interface NavSection {
+  key: string;
+  label: string;
+  pages: NavItem[];
+}
+
+/**
+ * Which section and page the current path belongs to: the page whose path (or one of its `also` paths) is the
+ * longest prefix of the current path. Longest wins so /admin/markets lands on Markets & stock (Stock) and not on
+ * the Command center at /admin (Exceptions). A path outside every visible page (home, search, menu) has no section.
+ */
+function useActive(sections: NavSection[]): { section: NavSection | null; page: string | null } {
+  const pathname = usePathname();
+  let best: { section: NavSection; page: string; length: number } | null = null;
+  for (const section of sections) {
+    for (const page of section.pages) {
+      for (const p of [page.href, ...(page.also ?? [])]) {
+        if (p === "/") continue;
+        const hit = pathname === p || pathname.startsWith(`${p}/`);
+        if (hit && (!best || p.length > best.length)) best = { section, page: page.href, length: p.length };
+      }
+    }
+  }
+  return best ? { section: best.section, page: best.page } : { section: null, page: null };
+}
+
+const rowLink = (current: boolean) =>
+  `relative inline-flex h-[70px] shrink-0 items-center whitespace-nowrap text-sm ${current ? "font-semibold text-navy after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-navy" : "text-ink-2 hover:text-ink"}`;
+const subLink = (current: boolean) => `inline-flex h-9 items-center whitespace-nowrap text-[13px] ${current ? "font-semibold text-navy" : "text-ink-2 hover:text-ink"}`;
+
+/** The shell's primary line: one link per section (to the section's first page), the current section underlined. */
+export function PrimaryNav({ sections }: { sections: NavSection[] }) {
+  const { section: active } = useActive(sections);
+  const ref = useRef<HTMLElement>(null);
+  // On a window too narrow for the whole row, keep the current section in view.
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>("[aria-current]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active?.key]);
   return (
-    <nav aria-label="Main" className="hidden items-center gap-6 sm:flex">
-      <NavLinks items={items} variant="row" />
+    // Never wraps: on a narrow window the row scrolls sideways inside its own space instead of running under the person's name.
+    <nav ref={ref} aria-label="Main" className="hidden min-w-0 items-center gap-5 overflow-x-auto [scrollbar-width:none] sm:flex xl:gap-6 [&::-webkit-scrollbar]:hidden">
+      {sections.map((s) => {
+        const current = active?.key === s.key;
+        return (
+          <Link key={s.key} href={s.pages[0].href} aria-current={current ? "true" : undefined} className={rowLink(current)}>
+            {s.label}
+          </Link>
+        );
+      })}
     </nav>
   );
 }
 
-/** The second line under the bar: shown only while the current page belongs to one of the groups (Admin). */
-export function GroupNav({ groups }: { groups: Array<{ href: string; label: string; items: NavItem[] }> }) {
-  const isCurrent = useIsCurrent();
-  const open = groups.find((g) => g.items.some((n) => isCurrent(n.href)));
-  if (!open) return null;
+/** The second hairline line under the bar: the current section's pages, shown when that section holds more than one. */
+export function GroupNav({ sections }: { sections: NavSection[] }) {
+  const { section, page } = useActive(sections);
+  if (!section || section.pages.length < 2) return null;
   return (
-    <nav aria-label={open.label} className="hidden border-t border-rule-soft sm:block">
-      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 px-8">
-        <NavLinks items={open.items} variant="subrow" />
+    <nav aria-label={section.label} className="hidden border-t border-rule-soft sm:block">
+      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 px-4 sm:px-8">
+        {section.pages.map((n) => {
+          const current = n.href === page;
+          return (
+            <Link key={n.href} href={n.href} aria-current={current ? "page" : undefined} className={subLink(current)}>
+              {n.label}
+            </Link>
+          );
+        })}
       </div>
     </nav>
   );

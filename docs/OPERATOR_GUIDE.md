@@ -10,6 +10,27 @@ owner questions are still open and are left as plain fields or flagged exception
 part of 2.3.
 
 ## Where to look
+The row at the top of every page holds what Sales and the back office open most days; what is set up once and
+rarely revisited sits under Admin. Each section opens on its first page, and a second hairline row lists the
+section's pages while you are in it:
+
+| Section | Pages |
+|---|---|
+| Accounts | Accounts |
+| Orders | Orders, Samples, Email intake |
+| Shipments | Shipments |
+| Stock | Lots (and Batches), Stock counts, Markets & stock |
+| Invoices | Invoices, Finance |
+| Kegs | Kegs |
+| Exceptions | Command center, Exceptions, Notices |
+| Reports | MicroStar report |
+| Admin | Employees & access, Company settings, Catalog & prices, Products, Decisions, Integrations, Import from workbook |
+
+Each person sees only the pages their role permits, and a section with none of them is left out. A Sales rep's
+row is Accounts, Orders, Shipments, Invoices and Kegs; the other pages Sales may open (Lots, Products,
+Decisions) stay reachable by their links and from the More menu. A Driver's row is Shipments, which lists only
+the stops assigned to them. Every URL works as before; only the grouping changed.
+
 * **Home** — role-specific: Sales sees their accounts and open orders; Admin sees the work queue summary;
   Accounting sees payment setup work and notices; Driver/Service sees the stops assigned to them under
   *Shipments* and nothing else. Every page has *Search* (scoped to your market authority) and, on a phone, a
@@ -22,19 +43,19 @@ part of 2.3.
 * **Invoices** (Admin, Accounting; Sales view) — INV and NC invoices with status, PDF, mark paid and void.
 * **Kegs** (Admin, Accounting, Sales view) — keg balance per account by size, with the event history and the
   form for opening balances and adjustments.
-* **Admin: Markets & stock** — stock positions as before, plus the **origins editor** (origin code, lot facility
+* **Stock: Markets & stock** — stock positions as before, plus the **origins editor** (origin code, lot facility
   code, kind, address, hours, dock / liftgate / appointment, shipping contact) and the market billing rules
   (terms, keg deposits, COD, region list).
-* **Admin: Catalog** — SKU details for documents (UPCs, weights, pallet fraction, recipe variant, shelf life)
+* **Admin: Catalog & prices** — SKU details for documents (UPCs, weights, pallet fraction, recipe variant, shelf life)
   and the legacy code aliases.
 * **Account workspace, *Shipping & billing* card** — account kind, served-by distributor, legacy ACC- id,
   fulfilment (delivery or will-call pickup), appointment required, deposit mode and per-keg override, terms
   override, pallet rule, receiving requirements, and per-account price overrides with a reason.
-* **Admin: Stock counts** — count sheets per origin with lot codes; applying one sets on hand to the counted total.
+* **Stock: Stock counts** — count sheets per origin with lot codes; applying one sets on hand to the counted total.
 * **Admin: Company settings** (Owner only) — shipper block, office address, AR email, footers, fixed lines,
   NMFC, marking convention, remit-to, and the POS item list.
 * **Admin: Import from workbook** — upload the TLM Master File export, read the dry run, Owner applies.
-* **MicroStar report** (Admin, Accounting) — monthly outbound kegs per distributor or per brewery, on screen
+* **Reports: MicroStar report** (Admin, Accounting) — monthly outbound kegs per distributor or per brewery, on screen
   and as CSV.
 * **Account workspace** (`Accounts → account`) — the one place for an account: who, open orders, delivery
   readiness in plain words, what is waiting on whom, contacts and their authority, notices, license, payment,
@@ -50,7 +71,7 @@ part of 2.3.
   connection verified · capability demonstrated · authorized for live use. Plus job queue counts (queued,
   running, **waiting**, failed, done) and the notices queue link.
 
-## Stock: receipts, counts, damage, discrepancies (Admin → Markets & stock)
+## Stock: receipts, counts, damage, discrepancies (Stock: Markets & stock)
 Stock is evidence-backed, not a live WMS. Every movement needs an evidence source (who counted / which
 transfer sheet). Movement kinds have fixed meaning — the form cannot be used to smuggle a sign:
 
@@ -89,7 +110,7 @@ return or correct the same sample is refused with its current state.
   uncommitted order moves that order (FCFS at the destination; market, seller context and prices unchanged).
   An order with loaded units cannot be reassigned; a custody reconciliation case is opened instead.
 
-## Origins: codes, lot facility codes, kinds (Admin: Markets & stock, origins editor)
+## Origins: codes, lot facility codes, kinds (Stock: Markets & stock, origins editor)
 Every brewery, warehouse and cold store that ships is an **origin** (the `warehouse` record with extra fields).
 * **Origin code** — three letters, unique, typed in capitals: the confirmed codes are EBB East Brother, BWD
   Beachwood, PRO Prost, RTB Round Table, ALE AleSmith, JAB Jack's Abby, RAL Real Ale, EWD Express Wine Delivery,
@@ -109,7 +130,7 @@ Every brewery, warehouse and cold store that ships is an **origin** (the `wareho
   both CT distributors; the Envision / SC Warehouses part of 2.3 is open, so the import brings those two in
   **inactive** and without a code.
 
-## Lots and batches (Admin: Lots, Batches)
+## Lots and batches (Stock: Lots, Batches)
 * **Batch** (4.2, 4.10): facility (a brewery), brand code, batch number (unique, e.g. B01CNT26001), brew date,
   vessel, status (scheduled, in progress, complete, destroyed, cancelled). Destroyed or cancelled needs a reason
   and a date; the record is kept. A batch usually yields one lot; recording a packaging run against an
@@ -228,7 +249,7 @@ The sequence:
 * **MicroStar report** (8.6): choose a month and group by distributor (destination accounts of kind
   distributor) or by brewery (the shipment's origin); the same rows download as CSV.
 
-## Stock counts (Admin: Stock counts)
+## Stock counts (Stock: Stock counts)
 * A **count sheet** per origin (8.1, 8.2): date, who counted, a note, and lines of SKU, optional **lot code**
   and quantity. Lot codes are checked for shape (facility, brand, yymmdd, run). Several lines may name the same
   SKU with different lots.
@@ -285,7 +306,7 @@ Shared AP details are a **destination for invoices**, never payer authority. On 
 3. *Revoke current payer* when the person changes; a new assignment is a new decision with history.
 Repeating the request reuses the pending invitation — it never creates a second one.
 
-## Manual notices (Accounting/Admin → Notices)
+## Manual notices (Exceptions: Notices)
 Until D32/IG04 is selected the application never sends anything. Each business event records one notice
 intent (order received, payment setup invitation) with recipient, content and version. The **Notices** queue
 lists what is pending; the account/order pages show the same notices in place. A person:
@@ -297,11 +318,11 @@ lists what is pending; the account/order pages show the same notices in place. A
   recorded as sent until a recipient exists.
 Recording "sent" is staff evidence, not provider confirmation, and the page says so.
 
-## Sign-in PINs (Owner/Admin → Employees & access; everyone → Change PIN)
+## Sign-in PINs (Admin: Employees & access; everyone: Change PIN)
 * People sign in with their **company email + PIN**. A new person gets a **temporary PIN** from an Owner/Admin
   (at provisioning, or *Set PIN* under Manage) — tell it to them directly; it is never shown again. Their
   first sign-in goes straight to *Choose your PIN*; nothing else works until they have chosen one.
-* **Forgot PIN**: Owner/Admin → *Reset PIN* (a reason is recorded; every session of that person ends). An
+* **Forgot PIN**: Owner or Admin uses *Reset PIN* (a reason is recorded; every session of that person ends). An
   Admin can reset PINs only for non-Owners inside its markets; an Owner for anyone; nobody their own.
 * **Lockout**: five wrong attempts lock the PIN for 15 minutes (doubling on further failures); the person
   row shows *PIN locked until …*. A reset clears it.
@@ -312,7 +333,7 @@ Recording "sent" is staff evidence, not provider confirmation, and the page says
   in audit notes, logs, URLs or flash messages. Sign-ins and refusals are audited (`auth.sign_in`,
   `auth.refused`), as are sets/resets/changes (`credential.*`).
 
-## Employees: disable, offboard, reuse an email (Owner/Admin → Employees & access)
+## Employees: disable, offboard, reuse an email (Admin: Employees & access)
 * **Disable** stops all business use on the person's very next request (no re-login needed); the identity
   and grants stay for history. Also suspend the Google Workspace account separately if they had one.
 * **Offboard** (disables first if still enabled) retires the current identity (email and any Google subject), ends the sign-in PIN, revokes every grant
@@ -325,7 +346,7 @@ Recording "sent" is staff evidence, not provider confirmation, and the page says
 * Authority rules are enforced in the service, not the page: Owner grants are Owner-only, nobody can change
   their own grants, and a market-scoped Admin manages only their market.
 
-## Decisions (Owner → Decisions)
+## Decisions (Admin: Decisions; Owner selects)
 Each D/SD/T/IG record shows what remains open, what the application would do with a selection (typed fields
 from the register — no JSON), and the **effective policy by market** now. Selections are immutable rows with
 scope (all markets or chosen markets) and an effective date; a market-specific selection overrides the
@@ -392,7 +413,7 @@ npm run demo:reset           # wipe .fv-demo/ so the next start reseeds
 npm test                     # 137 passed, 12 skipped (16 test files passed, 3 skipped) on PGlite (real Postgres SQL in-process; no server; a couple of minutes, the document tests render real PDFs)
 TEST_DATABASE_URL=postgres://… npm run test:pg   # 11 real-Postgres tests: races, setup page, populated-database upgrade (disposable database!) — these are the skips above
 TLM_WORKBOOK_PATH=… npm test # also runs the import against a real workbook export (the twelfth skip); the file never enters the repository
-npm run test:ui              # 12 role browser journeys against the running demo (screenshots + timings); journey 12 covers origins, lots, shipments, documents, delivery, invoice and kegs
+npm run test:ui              # 13 role browser journeys against the running demo (screenshots + timings); journey 12 covers origins, lots, shipments, documents, delivery, invoice and kegs; journey 13 the navigation sections per role
 npm run test:ui:golive       # go-live path on a production build against an empty Postgres (see tests/ui/production-setup.mjs)
 npm run check                # typecheck + lint + tests + production build
 npm run db:migrate && npm run seed:dev && DEV_AUTH_BYPASS=true npm run dev   # real local Postgres with fixture sign-in
