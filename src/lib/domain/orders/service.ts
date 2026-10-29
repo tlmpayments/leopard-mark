@@ -852,6 +852,7 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
       reason,
       policyStatus: "applied",
     });
+    await syncDraftShipmentLine(tx, ord.id, orderLineId);
     await reassessOrder(tx, actor, ord.id);
     await recordAudit(tx, actor, {
       action: "order.amend_qty",
@@ -864,6 +865,33 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
     });
     return row;
   });
+}
+
+/**
+ * The order's unconfirmed draft shipment (R2-1) follows an amendment: its line for this order line takes what is now
+ * reserved; a line with nothing reserved comes off the draft. A confirmed shipment is never touched here.
+ */
+async function syncDraftShipmentLine(tx: Tx, orderId: string, orderLineId: string) {
+  const active = await activeShipmentForOrder(tx, orderId);
+  if (!active || active.status !== "draft") return;
+  const [res] = await tx
+    .select({ reserved: sql<number>`coalesce(sum(${schema.reservation.reservedQty}), 0)::int` })
+    .from(schema.reservation)
+    .where(and(eq(schema.reservation.orderLineId, orderLineId), eq(schema.reservation.state, "reserved")));
+  const reserved = res?.reserved ?? 0;
+  const [sl] = await tx.select().from(schema.shipmentLine).where(and(eq(schema.shipmentLine.shipmentId, active.id), eq(schema.shipmentLine.orderLineId, orderLineId)));
+  if (sl) {
+    if (reserved > 0) await tx.update(schema.shipmentLine).set({ qty: reserved }).where(eq(schema.shipmentLine.id, sl.id));
+    else await tx.delete(schema.shipmentLine).where(eq(schema.shipmentLine.id, sl.id));
+  } else if (reserved > 0) {
+    const [ol] = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.id, orderLineId));
+    const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId));
+    if (ol && ord?.warehouseId) {
+      const lot = await suggestLot(tx, ord.warehouseId, ol.skuId);
+      const [{ n }] = await tx.select({ n: sql<number>`coalesce(max(${schema.shipmentLine.lineNo}), 0)::int` }).from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, active.id));
+      await tx.insert(schema.shipmentLine).values({ shipmentId: active.id, lineNo: n + 1, skuId: ol.skuId, lotId: lot?.lotId ?? null, lotCode: lot?.lotCode ?? null, qty: reserved, orderLineId });
+    }
+  }
 }
 
 /**

@@ -24,7 +24,7 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField },
     { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField },
     { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField },
-    { href: "/field", label: "My route", show: roles.includes("driver_service"), frequent: true },
+    { href: "/field", label: "My stops", show: roles.includes("driver_service"), frequent: true },
     { href: "/locations", label: "Accounts", show: can(actor, "location.view") && !isField, frequent: true },
     { href: "/orders", label: "Orders", show: can(actor, "order.view") && !isField, frequent: true },
     { href: "/products", label: "Products", show: can(actor, "catalog.view") },

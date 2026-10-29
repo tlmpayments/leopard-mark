@@ -314,7 +314,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
       </Card>
 
       {stock.map(({ w, rows }) => (
-        <Card key={w.id} title={`Stock — ${w.name} (${markets.find((m) => m.id === w.marketId)?.code})`}>
+        <Card key={w.id} title={`Stock: ${originLabel(w)} (${markets.find((m) => m.id === w.marketId)?.code})`}>
           <Table
             head={["SKU", "On hand", "Reserved", "Available", "Shortfall", "Unavailable", "In transit", "Evidence"]}
             rows={rows.map((r) => [

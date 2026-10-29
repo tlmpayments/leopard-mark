@@ -109,7 +109,7 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
   await updateOrigin(db, owner, balmuth.id, { pullSheetEmail: "ops@balmuth.demo", pullSheetSendTime: "17:00", fulfillmentContact: "Balmuth receiving" });
   await createOrigin(db, owner, { name: "Jack's Abby Brewing", kind: "brewery", marketId: ma.id, originCode: "JAB", lotFacilityCode: "06", isPrimary: true, addressText: "Framingham, MA (demo)" });
 
-  const admin = await person("Daniel Back Office", "admin@demo.local", "admin", null, owner);
+  const admin = await person("Ada Admin", "admin@demo.local", "admin", null, owner); // the back-office role (R2-38)
   const accounting = await person("Al Accounting", "accounting@demo.local", "accounting", null, owner);
   const sales = await person("Sam Sales (NorCal)", "sales-nc@demo.local", "sales", nc.id, owner);
   const salesLa = await person("Lee Sales (SoCal)", "sales-la@demo.local", "sales", la.id, owner);
@@ -140,7 +140,7 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
 
   // --- batches and lots (R2-26, R2-22): brewed at the host, packaged into lots; stock posts at the brewery (R2-37) ---
   const batchCnt = await createBatch(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "CNT", brewDate: "2026-10-01", barrels: 30, status: "in_progress", notes: "Demo batch" });
-  const lotCnt = await recordPackagingReport(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "CNT", packagingDate: "2026-10-14", runCode: "1", batchId: batchCnt.id, quantities: [{ skuId: can12.id, qty: 60 }, { skuId: can24.id, qty: 20 }, { skuId: canSix.id, qty: 18 }, { skuId: canHalf.id, qty: 8 }] });
+  const lotCnt = await recordPackagingReport(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "CNT", packagingDate: "2026-10-14", runCode: "1", batchId: batchCnt.id, quantities: [{ skuId: can12.id, qty: 80 }, { skuId: can24.id, qty: 36 }, { skuId: canSix.id, qty: 30 }, { skuId: canHalf.id, qty: 16 }] });
   const batchSlg = await createBatch(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "SLG", brewDate: "2026-10-03", barrels: 30, status: "in_progress" });
   const lotSlg = await recordPackagingReport(db, admin, { facilityWarehouseId: eastBrother.id, brandCode: "SLG", packagingDate: "2026-10-15", runCode: "1", batchId: batchSlg.id, quantities: [{ skuId: sun12.id, qty: 40 }, { skuId: sunSix.id, qty: 6 }] });
   const batchBwd = await createBatch(db, admin, { facilityWarehouseId: beachwood.id, brandCode: "CNT", brewDate: "2026-10-05", barrels: 20, status: "in_progress" });
@@ -150,7 +150,7 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
   const opening = async (warehouseId: string, lotId: string, rows: Array<[typeof can12, number]>, where: string) => {
     for (const [s, qty] of rows) await recordStockMovement(db, admin, { warehouseId, skuId: s.id, kind: "opening", qtyDelta: qty, evidence: `demo seed opening count (${where} cut-over sheet)`, lotId });
   };
-  await opening(ewd.id, lotCnt.id, [[can12, 40], [can24, 18], [canSix, 12], [canHalf, 6]], "EWD");
+  await opening(ewd.id, lotCnt.id, [[can12, 60], [can24, 30], [canSix, 24], [canHalf, 14]], "EWD");
   await opening(ewd.id, lotSlg.id, [[sun12, 24], [sunSix, 2]], "EWD");
   await opening(balmuth.id, lotBwd.id, [[can12, 30], [canSix, 8]], "Balmuth");
   await opening(balmuth.id, lotSlg.id, [[sun12, 12]], "Balmuth");

@@ -183,10 +183,10 @@ export function OrderForm(props: OrderFormProps) {
                 .map((c) => {
                   const fieldError = state.fieldErrors?.[`qty:${c.skuId}`];
                   return (
-                    <li key={c.skuId} className="flex items-center justify-between gap-3 py-1.5">
+                    <li key={c.skuId} className="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3 py-1.5">
                       <div className="min-w-0">
-                        <label htmlFor={`qty-${c.skuId}`} className="block truncate text-sm text-ink">
-                          {c.name}
+                        <label htmlFor={`qty-${c.skuId}`} className="block text-sm text-ink">
+                          {c.brand} {c.name}
                         </label>
                         <div className="text-xs text-ink-3">
                           {c.sellingUnit}, {c.priceCents !== null ? cents(c.priceCents) : "no price"}
@@ -207,7 +207,7 @@ export function OrderForm(props: OrderFormProps) {
                         min={0}
                         step={1}
                         inputMode="numeric"
-                        className="w-24 text-right"
+                        className="text-right"
                         placeholder="0"
                         value={qty[c.skuId] ?? ""}
                         onChange={(e) => setQty({ ...qty, [c.skuId]: e.target.value })}

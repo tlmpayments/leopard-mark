@@ -17,13 +17,12 @@ section's pages while you are in it:
 | Section | Pages |
 |---|---|
 | Accounts | Accounts |
-| Orders | Orders, Samples, Email intake |
-| Shipments | Shipments |
+| Orders | Orders, Email intake (samples are orders now; the old Samples page is history, by URL) |
+| Shipments | Shipments (with End of day and New transfer) |
 | Stock | Lots (and Batches), Stock counts, Markets & stock |
 | Invoices | Invoices, Finance |
-| Kegs | Kegs |
-| Exceptions | Command center, Exceptions, Notices |
-| Reports | MicroStar report |
+| Kegs | Kegs, MicroStar report |
+| Exceptions | Exceptions (the Command center folded in), Notices |
 | Admin | Employees & access, Company settings, Catalog & prices, Products, Decisions, Integrations, Import from workbook |
 
 Each person sees only the pages their role permits, and a section with none of them is left out. A Sales rep's
@@ -32,12 +31,14 @@ Decisions) stay reachable by their links and from the More menu. A Driver's row 
 the stops assigned to them. Every URL works as before; only the grouping changed.
 
 * **Home** — role-specific: Sales sees their accounts and open orders; Admin sees the work queue summary;
-  Accounting sees payment setup work and notices; Driver/Service sees the stops assigned to them under
-  *Shipments* and nothing else. Every page has *Search* (scoped to your market authority) and, on a phone, a
+  Accounting sees payment setup work and notices; Driver/Service sees *My stops* (the stops assigned to them,
+  with *Mark delivered* on the phone) and nothing else. Every page has *Search* (scoped to your market authority) and, on a phone, a
   bottom bar with the frequent destinations plus **More** (every permitted destination and sign-out).
 * **Shipments** (Admin, Accounting, Sales view; Driver sees assigned stops) — list filtered by origin, date,
-  status and type; *New shipment* for a delivery (D), transfer (T) or sample (S); the shipment page carries the
-  lines, the state actions, the stored documents and the invoice link.
+  status and type; deliveries (D) and samples (S) are drafted by their orders, *New transfer* for stock between
+  origins (T); *End of day* for the warehouses' next-day pull sheets; the shipment page carries the lines, the
+  state actions (confirm with a date, deliver with per-line outcomes, correct, void with the order's fate), the
+  stored documents and the invoice link.
 * **Lots** (Admin, Accounting, Sales view) — the lot register; *New packaging report* records a run; *Batches*
   lists brews per facility.
 * **Invoices** (Admin, Accounting; Sales view) — INV and NC invoices with status, PDF, mark paid and void.
@@ -55,15 +56,14 @@ the stops assigned to them. Every URL works as before; only the grouping changed
 * **Admin: Company settings** (Owner only) — shipper block, office address, AR email, footers, fixed lines,
   NMFC, marking convention, remit-to, and the POS item list.
 * **Admin: Import from workbook** — upload the TLM Master File export, read the dry run, Owner applies.
-* **Reports: MicroStar report** (Admin, Accounting) — monthly outbound kegs per distributor or per brewery, on screen
-  and as CSV.
+* **Kegs: MicroStar report** (Admin, Accounting) — monthly outbound kegs per facility to each distributor with the
+  BOL, on screen and as CSV.
 * **Account workspace** (`Accounts → account`) — the one place for an account: who, open orders, delivery
   readiness in plain words, what is waiting on whom, contacts and their authority, notices, license, payment,
   holds, standing arrangements, and the **Activity** timeline (filterable, "Older activity" reaches all history).
-* **Command center** (Admin) — open work by category with age, owner role, next action and links to the
-  affected records; "not built yet" categories are listed explicitly so an absent number is never read as a
-  clean state.
-* **Exceptions** — every case carries cause, owner, next action, waiting party, review point, links and
+* **Exceptions** — the counts across the top (open cases, waiting, review date reached, notices to send, units
+  waiting for stock, open orders, provider work) with the work queue, active holds and recent orders; "not
+  built yet" categories are listed explicitly so an absent number is never read as a clean state. Every case carries cause, owner, next action, waiting party, review point, links and
   history. Cases resolve when their **cause** goes away (a receipt fills the shortage, a hold clears, a licence
   is verified) — resolving a case by hand is for cases whose cause was handled outside the application, and
   needs a note. A resolved case can be reopened with a reason; nothing is deleted.
@@ -98,6 +98,24 @@ opens a **custody reconciliation** case instead of inventing a warehouse receipt
 units exist. A sellable return restores stock once; a damaged return never does. The second attempt to
 return or correct the same sample is refused with its current state.
 
+## Orders (round 2): the office takes the order; the shipment comes with it
+* **New order**: pick the account (hosts and warehouses never appear; the *Samples recipients* group holds the
+  market's samples house and the reps' home addresses), then say how it came in (phone, text, email, Slack, rep,
+  PO), tick *No charge* for samples and *Will-call* for a pickup, enter PO numbers, the products (Sunlight Groove
+  and Cantinesca only), the requested date and, if you know it, the scheduled date. **Submit order** records the
+  order and drafts its D (or S) shipment from the market's warehouse with lots prefilled from what is on hand,
+  oldest first. **Submit and confirm shipment** also numbers it for the scheduled date and stores the BOL and
+  picking ticket, so the order page prints straight away. The $90 minimum applies to rep orders only (R2-6).
+* **Short stock (R2-5)**: when the warehouse cannot cover a line you see asked, on hand and short per line.
+  *Submit anyway* ships what is on hand (reason required) and keeps the rest as an open line; *Hold* keeps the
+  whole order unconfirmed with no shipment until you *Lift hold*. Both record who decided and why.
+* **The order page** shows the shipment: *Confirm shipment* with the date, then *BOL PDF* and *Picking ticket*;
+  *Create shipment* when a voided shipment left the order open; *Lift hold* on a held order. An amendment on an
+  open order resizes its unconfirmed draft. *Cancel* on an order with a draft voids the draft with it; a confirmed
+  shipment is voided from the shipment page first, where you choose whether the order returns to open or is
+  cancelled (R2-7).
+* **Transfers** (stock between origins) are the only shipments created from *Shipments, New transfer*.
+
 ## Orders: change requests, amendments, cancellation, warehouse
 * Sales records a **change request**; it has no effect on demand or allocation until Admin acts (D10/D12
   unselected). Admin applies a **quantity amendment** only when no price question arises: if the line's
@@ -129,6 +147,13 @@ Every brewery, warehouse and cold store that ships is an **origin** (the `wareho
 * Radford (31 Plymouth St, Mansfield, MA 02048) is the Massachusetts warehouse serving the MA distributor and
   both CT distributors; the Envision / SC Warehouses part of 2.3 is open, so the import brings those two in
   **inactive** and without a code.
+
+## Accounts (round 2)
+* The list defaults to **Active**; *Closed* and *All* on request. Accounts are Active or Closed (the old
+  *inactive* was retired by migration 0005). Hosts and warehouses are origins, never accounts. *Served by* shows
+  as a column and a filter.
+* A new account needs the trade name, a delivery address, one contact and the market; the license is checked
+  before the first retail delivery; everything else can follow.
 
 ## Lots and batches (Stock: Lots, Batches)
 * **Batch** (4.2, 4.10): facility (a brewery), brand code, batch number (unique, e.g. B01CNT26001), brew date,
@@ -209,6 +234,22 @@ The sequence:
   show in the list with *Include imported history*, carry the old numbers, never touch the ledger and cannot be
   edited.
 
+## Delivery outcomes, the driver's phone page and corrections (round 2)
+* **Deliver** asks, per beer line, what the account kept, refused and had damaged (kept + refused + damaged =
+  shipped), the empties collected and the actual date. Kept units leave the origin; refused units never left and
+  stay an open line on the order (re-reserved); damaged units are written off at the origin with the reason and
+  never invoiced. The invoice issues for the kept quantities.
+* **My stops** (the driver, on the phone): only the stops assigned to that driver, with the receiving notes and the
+  lines; *Mark delivered* records the same outcomes. A driver cannot deliver a stop assigned to someone else.
+* **Correct delivery** (office, on a delivered shipment): restate the per-line quantities with a reason; stock, the
+  keg balance and the invoice follow under the same numbers. Refused once the invoice is paid; issue a credit memo.
+* **Delivery pack**: the BOL, plus the invoice only for an account set to *Invoice on receipt* (that invoice is
+  issued at confirmation and re-dated at delivery). The pickup pack for will-call is unchanged.
+* **End of day** (Shipments, End of day): the master pull sheet per warehouse for the next day, aggregated by SKU
+  and lot with the stops beneath; *Download pull sheet* and *All documents for the day*. Auto-send by email is a
+  company switch (off by default) with the address and local time on the warehouse; the email transport is not
+  built, so a switched-on send waits and opens a case rather than pretending.
+
 ## Invoices (Accounting and Admin issue, mark paid and void; Sales view)
 * fv-ops owns the numbering (7.1, 7.3): **INV** for charged goods and **NC** for samples, both as series + two-digit
   year + sequence (`INV26376`, `NC26002` are the next numbers after the Sheet; the sequence widens past 999).
@@ -238,6 +279,15 @@ The sequence:
   payment with a provider. Legacy invoices from the Sales tab are listed with their Sheet status text and are
   read-only.
 
+## Credit memos, payment channel, price exceptions (round 2)
+* **Credit memo** on an issued or paid invoice: amount, date and reason, in its own CM series; Owner or back
+  office only; never above the invoice total; the invoice itself never changes. Voidable with a reason.
+* **Pays by** (Fintech, Stripe, check) is set on the account and copied onto each invoice at issue; paid is still
+  marked by hand. *Invoice on receipt* on the account adds the invoice to the delivery pack.
+* **Floating deposit on file**: one deposit per account (amount and date taken, settled on and note), no per-keg
+  deposit lines; kegs out and empties back are on the Kegs page.
+* **Price exceptions** need the Owner or back office, a reason and an end date; *End now* ends one early.
+
 ## Kegs (Admin records; Accounting and Sales view)
 * The balance per account and size is **counts only** (8.4): kegs out minus kegs in, for 1/2 bbl and 1/6 bbl.
   A delivered D or S shipment posts the keg lines as *out* and the empties collected at the stop as *in*
@@ -248,6 +298,15 @@ The sequence:
   adjustment.
 * **MicroStar report** (8.6): choose a month and group by distributor (destination accounts of kind
   distributor) or by brewery (the shipment's origin); the same rows download as CSV.
+
+## Batches, two-day packaging, MicroStar (round 2)
+* **New batch** when the beer goes in the tank: brand, barrels, facility, brew date; the number follows the
+  brewery's convention unless typed. The batches list shows barrels, packaged barrels and loss (displayed only).
+* **Packaging over two days**: record the lot on the first day; on the lot, *Add a packaging day* with the
+  quantities of the second day (or record a packaging report against the same batch). Same lot, same code; the
+  run digit changes only for a different brew.
+* **MicroStar report** (under Kegs): per facility per month, kegs out by size to each distributor with the BOL;
+  *Download CSV*. Returns are not tracked (MicroStar bills the distributor).
 
 ## Stock counts (Stock: Stock counts)
 * A **count sheet** per origin (8.1, 8.2): date, who counted, a note, and lines of SKU, optional **lot code**

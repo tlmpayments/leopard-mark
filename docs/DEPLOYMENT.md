@@ -269,3 +269,26 @@ those rows rather than duplicating them. After this revision deploys:
 7. **Open items** that remain open after this step and must not be guessed in data entry: 4.5 (packaging that
    spans two dates), 7.5 (sending and collection of invoices stay manual), the Envision / SC Warehouses part of
    2.3, and section 11 beyond 11.1 (on hold, not built). No step above sends an email or touches Stripe.
+
+## 15. Production follow-through for round 2 (migration `0005_round2`)
+
+1. **Snapshot** the Neon database (branch or restore point).
+2. **Apply migration `0005_round2`** from `/setup` with the setup token (section 3). Additive only: new enum values
+   (order sources, the `held` demand state, the `packaging` movement kind, `shortfall_decision`, `pay_by`), new
+   tables `credit_memo` and `lot_packaging_entry`, new nullable columns on `market`, `warehouse`,
+   `customer_location`, `customer_order`, `brew_batch`, `company_settings`, `invoice` and `shipment_line`, and
+   `shipment.scheduled_date` made nullable. Its data statements: accounts with the retired status *inactive* become
+   *closed* with the close reason "Was inactive; status retired in round 2 (R2-31)" and an audit row each; the
+   `CM` document counter is created at zero; one samples house account per market is created (Samples, SoCal;
+   Samples, NorCal; Samples, NorCal (Distributed); Samples, Connecticut; Samples, Massachusetts); every lot with
+   quantities gets one packaging entry dated its packaging day, noted as backfilled. Nothing is deleted. The app
+   keeps serving until it is applied; the order screen needs it.
+3. **Confirm the switch is off**: Company settings shows *Email each warehouse its next-day pull sheet* unchecked.
+   Leave it off; the email transport is not built, and a switched-on send only opens a case.
+4. **Warehouse send details** (optional, for later): the pull-sheet email and local send time on Express Wine
+   Delivery and Balmuth under Markets & stock, from the Owner's list.
+5. **Accounts**: set *Pays by* (Fintech, Stripe, check) and, where agreed, *Invoice on receipt* and the floating
+   deposit on file per account; add reps' home addresses as samples recipients (Admin, from the account tools).
+6. **People**: grant the SoCal driver the Driver/Service role; the driver signs in on the phone and sees *My stops*.
+7. **Credit memos** are issued by the Owner or the back office only (`credit.issue` is limited to the admin role).
+8. No step above sends an email or touches Stripe.

@@ -8,6 +8,7 @@ import {
   cancelUndeliveredDemand,
   createShipmentForOrder,
   flagAbnormal,
+  previewOrderShortfall,
   releaseHeldOrder,
   requestOrderChange,
   submitOrder,
@@ -87,6 +88,11 @@ export async function submitOrderFormAction(_prev: FormState, form: FormData): P
       res = await submitOrder(db, actor, input);
     } catch (err) {
       if (err instanceof ShortfallError) return { state: { shortfall: { originName: err.originName, lines: err.lines } } };
+      if (err instanceof BusinessError && err.field === "shortfallReason") {
+        // Keep the shortfall panel on screen with the field error, so the office can add the reason and submit again.
+        const preview = await previewOrderShortfall(db, actor, { locationId: input.locationId, lines: input.lines });
+        return { state: { error: err.message, fieldErrors: { shortfallReason: err.message }, shortfall: { originName: preview.originName, lines: preview.lines } } };
+      }
       throw err;
     }
     let ok = `${res.order.orderNumber} ${summarise(res)}`;
