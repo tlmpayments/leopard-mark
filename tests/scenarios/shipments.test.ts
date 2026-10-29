@@ -178,6 +178,31 @@ describe("Acceptance 3 — allocate, void, deliver", () => {
   });
 });
 
+describe("Owner review of Oct 28 — pickup invoicing and market scoping", () => {
+  it("issues the numbered invoice at confirmation for a pickup, dated the scheduled date, and re-dates it at delivery without renumbering", async () => {
+    const pick = await createShipment(db, f.admin, header({ destinationLocationId: distributor.id, pickup: true, scheduledDate: "2026-11-25", poNumbers: ["TLM2003"] }), [{ skuId: f.skus.sunlightHalf.id, lotId: lotHalf, qty: 1 }]);
+    await confirmShipment(db, f.admin, pick.id);
+    const atConfirm = (await getShipment(db, pick.id))!.invoices[0];
+    expect(atConfirm.status).toBe("issued");
+    expect(atConfirm.number).toMatch(/^INV26\d{3}$/);
+    expect(atConfirm.invoiceDate).toBe("2026-11-25");
+    await deliverShipment(db, f.admin, pick.id, { actualDate: "2026-11-26" });
+    const atDelivery = (await getShipment(db, pick.id))!.invoices[0];
+    expect(atDelivery.number).toBe(atConfirm.number);
+    expect(atDelivery.invoiceDate).toBe("2026-11-26");
+    expect(atDelivery.dueDate).toBe("2026-12-26");
+    const audits = await db.select().from(schema.auditEvent).where(eq(schema.auditEvent.subjectId, atConfirm.id));
+    expect(audits.map((a) => a.action)).toContain("invoice.redate");
+  });
+  it("gives a transfer the destination origin's market, so the receiving market's sales see it and the sending market's do not", async () => {
+    const maWarehouse = (await db.select().from(schema.warehouse).where(eq(schema.warehouse.marketId, f.market2.id)))[0];
+    const t = await createShipment(db, f.admin, { type: "T", originWarehouseId: f.warehouse.id, destinationWarehouseId: maWarehouse.id, scheduledDate: "2026-11-27" }, [{ skuId: f.skus.sunlightHalf.id, lotId: lotHalf, qty: 1 }]);
+    expect(t.marketId).toBe(f.market2.id);
+    expect((await listShipments(db, f.sales2, {})).map((r) => r.s.id)).toEqual([t.id]);
+    expect((await listShipments(db, f.sales, {})).map((r) => r.s.id)).not.toContain(t.id);
+  });
+});
+
 describe("Acceptance 4 — transfers", () => {
   it("puts stock in transit at the destination and raises a receiving discrepancy on a short count", async () => {
     const t = await createShipment(db, f.admin, { type: "T", originWarehouseId: f.warehouse.id, destinationWarehouseId: destWarehouse.id, scheduledDate: "2026-11-15" }, [{ skuId: f.skus.sunlightHalf.id, lotId: lotHalf, qty: 4 }]);
@@ -216,7 +241,7 @@ describe("Acceptance 5 — invoices", () => {
     expect(dc.template).toBe("distributor");
     await deliverShipment(db, f.admin, dist.id, { actualDate: "2026-11-21" });
     const dInv = (await getInvoice(db, (await getShipment(db, dist.id))!.invoices[0].id))!;
-    expect(dInv.invoice.number).toBe("INV26377");
+    expect(dInv.invoice.number).toBe("INV26378");
     expect(dInv.invoice.fobWording).toBe("FOB brewery or designated warehouse");
     expect(dInv.lines.some((l) => l.kind === "deposit")).toBe(false);
     expect(dInv.lines.find((l) => l.kind === "info")?.description).toMatch(/MicroStar kegs shipped: 2 half barrel, 1 sixtel/);
@@ -270,8 +295,8 @@ describe("Counts, kegs by hand, MicroStar report (8.x)", () => {
     const b = (await kegBalances(db, f.admin, { locationId: retail.id }))[0];
     expect(b.halfBalance).toBe(2); // 1 out, 1 in from deliveries plus 2 opening
     const dist = await microstarReport(db, f.accounting, { month: "2026-11", groupBy: "distributor" });
-    expect(dist.length).toBe(1);
-    expect(dist[0]).toMatchObject({ groupName: "Big Distributor Inc", halfOut: 2, sixtelOut: 1 });
+    expect(dist.length).toBe(2); // the carrier delivery and the will-call pickup
+    expect(dist.find((r) => r.sixtelOut === 1)).toMatchObject({ groupName: "Big Distributor Inc", halfOut: 2, sixtelOut: 1 });
     const brew = await microstarReport(db, f.accounting, { month: "2026-11", groupBy: "brewery" });
     expect(brew.every((r) => r.groupName.startsWith("East Brother"))).toBe(true);
     expect(brew.length).toBeGreaterThanOrEqual(3);
@@ -282,7 +307,8 @@ describe("Acceptance 8 and 9 — access and audit", () => {
   it("scopes shipments and invoices by market, confines drivers to assigned stops, and reserves confirm/void and settings/import to the right roles", async () => {
     const mine = await listShipments(db, f.sales, {});
     expect(mine.length).toBeGreaterThan(0);
-    expect(await listShipments(db, f.sales2, {})).toEqual([]);
+    // The MA rep sees only the transfer into the MA warehouse (its market), none of the NC deliveries.
+    expect((await listShipments(db, f.sales2, {})).every((r) => r.s.type === "T")).toBe(true);
     expect(await listInvoices(db, f.sales2, {})).toEqual([]);
     const s = await createShipment(db, f.admin, header({ scheduledDate: "2026-12-10", driverEmployeeId: f.driver.employeeId }), [{ skuId: f.skus.sunlightHalf.id, lotId: lotHalf, qty: 1 }]);
     const driverSees = await listShipments(db, f.driver, {});

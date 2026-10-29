@@ -168,7 +168,18 @@ export async function issueInvoiceForShipment(db: DbOrTx, actor: Actor, shipment
   let invoiceId = links[0]?.invoiceId;
   if (!invoiceId) invoiceId = await createDraftInvoiceForShipment(db, actor, shipmentId);
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId));
-  if (!inv || inv.status !== "draft") return inv ?? null;
+  if (!inv) return null;
+  if (inv.status === "issued" && inv.invoiceDate !== actualDate) {
+    // Issued at confirmation for a pickup (dated the scheduled date); the actual pickup date differs, so re-date.
+    // The number never changes (7.1); due date follows the terms; the document is regenerated with the next revision.
+    const due = new Date(actualDate + "T00:00:00Z");
+    due.setUTCDate(due.getUTCDate() + (inv.termsDays ?? 30));
+    const [row] = await db.update(schema.invoice).set({ invoiceDate: actualDate, dueDate: due.toISOString().slice(0, 10), updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId)).returning();
+    await storeInvoiceDocument(db, actor, invoiceId);
+    await recordAudit(db, actor, { action: "invoice.redate", subjectType: "invoice", subjectId: invoiceId, prior: { invoiceDate: inv.invoiceDate, dueDate: inv.dueDate }, current: { invoiceDate: actualDate, dueDate: row.dueDate }, reason: "Actual pickup date differs from the scheduled date", marketId: inv.marketId });
+    return row;
+  }
+  if (inv.status !== "draft") return inv;
   const all = await db.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
   const shipments = await db.select().from(schema.shipment).where(inArray(schema.shipment.id, all.map((a) => a.shipmentId)));
   // Issue only once every shipment on the draft is delivered (the shipment being delivered is updated before this call).

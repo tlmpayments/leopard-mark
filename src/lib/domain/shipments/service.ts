@@ -19,7 +19,7 @@ import { currentPrice } from "@/lib/domain/catalog/service";
 import { originAddressLines } from "@/lib/domain/origins/service";
 import { yymmdd } from "@/lib/domain/lots/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
-import { createDraftInvoiceForShipment, issueInvoiceForShipment, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
+import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
 import { recordKegEventForShipment } from "@/lib/domain/kegs/service";
 import { renderPdf } from "@/lib/documents/render";
 import type { ShipmentSnapshot, SnapshotLine } from "@/lib/documents/types";
@@ -99,13 +99,21 @@ function templateFor(type: ShipmentType, destinationKind: string | null): Shipme
   return "retail";
 }
 
-/** Market used for scoping: the destination account's market, else the origin's market (5.7). */
-async function scopingMarket(db: DbOrTx, originWarehouseId: string, destinationLocationId: string | null | undefined): Promise<string | null> {
-  if (destinationLocationId) {
-    const loc = await loadDestination(db, destinationLocationId);
+/**
+ * Market used for scoping (owner review, Oct 28): D and S take the destination account's market; T takes the
+ * destination origin's market (a Richmond transfer to EWD feeds NorCal Self Distribution, a Richmond pickup by
+ * Matagrano is NorCal Distributed). Only a sample to a free-text destination falls back to the origin's market.
+ */
+async function scopingMarket(db: DbOrTx, header: Pick<ShipmentHeaderInput, "type" | "originWarehouseId" | "destinationLocationId" | "destinationWarehouseId">): Promise<string | null> {
+  if (header.type === "T" && header.destinationWarehouseId) {
+    const [dest] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, header.destinationWarehouseId));
+    if (dest?.marketId) return dest.marketId;
+  }
+  if (header.destinationLocationId) {
+    const loc = await loadDestination(db, header.destinationLocationId);
     return loc.marketId;
   }
-  const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, originWarehouseId));
+  const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, header.originWarehouseId));
   return origin?.marketId ?? null;
 }
 
@@ -175,7 +183,7 @@ async function writeLines(tx: Tx, shipmentId: string, lines: ShipmentLineInput[]
 // ---------------------------------------------------------------------------
 
 export async function createShipment(db: DbOrTx, actor: Actor, header: ShipmentHeaderInput, lines: ShipmentLineInput[] = []) {
-  const marketId = await scopingMarket(db, header.originWarehouseId, header.destinationLocationId);
+  const marketId = await scopingMarket(db, header);
   authorize(actor, "shipment.manage", { marketId });
   const { template } = await validateHeader(db, header);
   const clean = cleanLines(lines);
@@ -249,7 +257,7 @@ export async function updateShipmentHeader(db: DbOrTx, actor: Actor, shipmentId:
     if (changed.length) throw new BusinessError(`After confirmation only logistics fields can change (not ${changed.join(", ")}); void and re-create to change the route`);
   }
   const { template } = await validateHeader(db, merged);
-  const marketId = await scopingMarket(db, merged.originWarehouseId, merged.destinationLocationId);
+  const marketId = await scopingMarket(db, merged);
   return withTx(db, async (tx) => {
     const [row] = await tx
       .update(schema.shipment)
@@ -448,7 +456,10 @@ export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: stri
       }
     }
     if ((row.type === "D" || row.type === "S") && row.destinationLocationId) {
-      await createDraftInvoiceForShipment(tx, actor, row.id);
+      const invoiceId = await createDraftInvoiceForShipment(tx, actor, row.id);
+      // Will-call / distributor pickup (owner review, Oct 28): the numbered invoice travels with the BOL in the pickup
+      // pack, so it is issued now, dated the scheduled pickup date; delivery re-dates it if the actual date differs.
+      if (row.pickup) await issueInvoice(tx, actor, invoiceId, row.scheduledDate);
     }
     await storeDocuments(tx, actor, row.id, ["bol", "picking_ticket"]);
     await recordAudit(tx, actor, { action: "shipment.confirm", subjectType: "shipment", subjectId: row.id, prior: { status: "draft" }, current: { status: "confirmed", number }, marketId: row.marketId });
