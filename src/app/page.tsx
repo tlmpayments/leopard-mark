@@ -34,6 +34,20 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
               New order
             </Button>
           ) : null}
+          {can(actor, "shipment.manage") ? (
+            <Button href="/shipments/new" variant="secondary">
+              New shipment
+            </Button>
+          ) : can(actor, "shipment.view") ? (
+            <Button href="/shipments" variant="secondary">
+              Shipments
+            </Button>
+          ) : null}
+          {can(actor, "lot.view") && !isField ? (
+            <Button href="/lots" variant="ghost">
+              Lots
+            </Button>
+          ) : null}
         </>
       }
     >

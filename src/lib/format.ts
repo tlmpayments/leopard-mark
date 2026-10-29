@@ -100,6 +100,25 @@ export const STATUS_PRESENTATION: Record<string, { label: string; tone: Tone }> 
   retry: { label: "Retrying", tone: "warn" },
   skipped: { label: "Skipped", tone: "neutral" },
   lost_claim: { label: "Lost claim", tone: "warn" },
+  // shipments (SHIPMENTS_SPEC §2 state machine)
+  draft: { label: "Draft", tone: "neutral" },
+  confirmed: { label: "Confirmed", tone: "info" },
+  staged: { label: "Staged", tone: "info" },
+  out: { label: "Out", tone: "info" },
+  delivered: { label: "Delivered", tone: "good" },
+  voided: { label: "Voided", tone: "danger" },
+  // invoices
+  issued: { label: "Issued", tone: "info" },
+  paid: { label: "Paid", tone: "good" },
+  void: { label: "Void", tone: "danger" },
+  // brew batches
+  scheduled: { label: "Scheduled", tone: "neutral" },
+  in_progress: { label: "In progress", tone: "info" },
+  complete: { label: "Complete", tone: "good" },
+  destroyed: { label: "Destroyed", tone: "danger" },
+  // NMFC
+  proposed: { label: "Proposed", tone: "warn" },
+  approved: { label: "Approved", tone: "good" },
 };
 
 export function presentStatus(value: string): { label: string; tone: Tone; glyph: string } {

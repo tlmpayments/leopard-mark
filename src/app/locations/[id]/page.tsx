@@ -9,10 +9,15 @@ import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
-import { marketCatalog } from "@/lib/domain/catalog/service";
-import { findSimilarLocations, getLocation } from "@/lib/domain/customers/service";
+import { formatCents, listPriceOverrides, marketCatalog } from "@/lib/domain/catalog/service";
+import { findSimilarLocations, getLocation, listLocations } from "@/lib/domain/customers/service";
+import { ACCOUNT_KIND_LABEL, DEPOSIT_MODE_LABEL } from "@/lib/domain/customers/shipping";
 import { listEmployees } from "@/lib/domain/employees/service";
+import { kegBalances } from "@/lib/domain/kegs/service";
 import { listWarehouses } from "@/lib/domain/markets/service";
+import { listShipments } from "@/lib/domain/shipments/service";
+import { shipmentNumber } from "../../shipments/labels";
+import { setPriceOverrideAction, updateAccountShippingAction } from "./shipping-actions";
 import { NOTICE_PURPOSE_LABEL, listNotices } from "@/lib/domain/notices/service";
 import { listOrders } from "@/lib/domain/orders/service";
 import { authorizedPayer } from "@/lib/domain/payment/service";
@@ -125,6 +130,16 @@ export default async function LocationPage({ params, searchParams }: { params: P
   const openOrders = orders.filter((o) => o.order.demandState === "submitted" || o.order.demandState === "partially_fulfilled");
   const lastOrder = orders.find((o) => o.order.demandState !== "cancelled");
   const pendingNotices = notices.filter((n) => n.n.state === "manual_pending" || n.n.state === "failed" || n.n.state === "unknown");
+  // Shipping & billing (SHIPMENTS_SPEC 2.4 to 2.6, 3.9, 3.10, 7.4): served-by, deposit mode, price exceptions, keg balance, shipments.
+  const canShipping = can(actor, "location.lifecycle", { marketId: loc.marketId });
+  const canPrice = can(actor, "price.manage", { marketId: loc.marketId });
+  const canShipView = can(actor, "shipment.view", { marketId: loc.marketId });
+  const canShipManage = can(actor, "shipment.manage", { marketId: loc.marketId });
+  const [servedBy] = loc.servedByLocationId ? await d.select({ id: schema.customerLocation.id, tradeName: schema.customerLocation.tradeName }).from(schema.customerLocation).where(eq(schema.customerLocation.id, loc.servedByLocationId)) : [];
+  const distributors = canShipping ? (await listLocations(d, actor, { marketId: loc.marketId })).filter((l) => l.loc.kind === "distributor" && l.loc.id !== id) : [];
+  const priceOverrides = await listPriceOverrides(d, id);
+  const [kegBalance] = can(actor, "keg.view", { marketId: loc.marketId }) ? await kegBalances(d, actor, { locationId: id }) : [];
+  const recentShipments = canShipView ? await listShipments(d, actor, { destinationLocationId: id, limit: 8 }) : [];
 
   return (
     <Page
@@ -142,6 +157,11 @@ export default async function LocationPage({ params, searchParams }: { params: P
           {canOrder && lastOrder ? (
             <Button href={`/orders/new?locationId=${id}&repeat=${lastOrder.order.id}`} variant="secondary">
               Repeat {lastOrder.order.orderNumber}
+            </Button>
+          ) : null}
+          {canShipManage && loc.status !== "closed" ? (
+            <Button href={`/shipments/new?locationId=${id}`} variant="secondary">
+              New shipment
             </Button>
           ) : null}
         </>
@@ -753,6 +773,178 @@ export default async function LocationPage({ params, searchParams }: { params: P
               <p className="text-xs text-muted">Internal demand only; never a Stripe Subscription (U22).</p>
             </form>
           </details>
+        ) : null}
+      </Card>
+
+      <Card title="Shipping & billing">
+        <KV
+          items={[
+            ["Account kind", ACCOUNT_KIND_LABEL[loc.kind] ?? loc.kind],
+            ["Served by", servedBy ? <Link key="sb" href={`/locations/${servedBy.id}`} className="underline">{servedBy.tradeName}</Link> : "Direct"],
+            ["Legacy id", loc.legacyAccountId],
+            ["Region", loc.region],
+            ["Fulfilment", loc.fulfilment === "pickup" ? "Pickup at the origin (will-call)" : "Delivery"],
+            ["Appointment required", loc.appointmentRequired === true ? "Yes" : loc.appointmentRequired === false ? "No" : "Unknown"],
+            ["Deposit mode", `${DEPOSIT_MODE_LABEL[loc.depositMode] ?? loc.depositMode}${loc.depositCentsOverride != null ? ` · ${formatCents(loc.depositCentsOverride)} per keg` : ""}`],
+            ["Terms", loc.termsDaysOverride != null ? `Net ${loc.termsDaysOverride} (account override)` : `Market rule (Net ${market?.termsDays ?? 30})`],
+            ["Pallet rule", loc.palletRule],
+            ["Receiving requirements", loc.receivingRequirements],
+            ["First delivery", loc.firstDeliveryOn ? fmtDay(loc.firstDeliveryOn) : "—"],
+            [
+              "Keg balance",
+              kegBalance ? (
+                <Link key="kb" href={`/kegs/${id}`} className="underline">
+                  {kegBalance.halfBalance} × 1/2 bbl, {kegBalance.sixtelBalance} × 1/6 bbl out
+                </Link>
+              ) : (
+                <Link key="kb" href={`/kegs/${id}`} className="underline">
+                  none recorded
+                </Link>
+              ),
+            ],
+          ]}
+        />
+        {loc.servedByLocationId && loc.kind !== "distributor" ? <p className="mt-2 text-xs text-warn">A direct shipment to this account needs an override reason at confirmation (2.6).</p> : null}
+        {canShipping ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-accent">Edit shipping and billing attributes (Admin)</summary>
+            <form action={updateAccountShippingAction} className="mt-2 grid gap-2 sm:grid-cols-3">
+              <input type="hidden" name="locationId" value={id} />
+              <Field label="Account kind">
+                <Select name="kind" defaultValue={loc.kind}>
+                  {Object.entries(ACCOUNT_KIND_LABEL).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Served by" hint="Distributor accounts in this market; blank = direct.">
+                <Select name="servedByLocationId" defaultValue={loc.servedByLocationId ?? ""}>
+                  <option value="">Direct</option>
+                  {distributors.map((l) => (
+                    <option key={l.loc.id} value={l.loc.id}>
+                      {l.loc.tradeName}
+                    </option>
+                  ))}
+                  {loc.servedByLocationId && !distributors.some((l) => l.loc.id === loc.servedByLocationId) && servedBy ? <option value={servedBy.id}>{servedBy.tradeName}</option> : null}
+                </Select>
+              </Field>
+              <Field label="Legacy ACC- id">
+                <Input name="legacyAccountId" defaultValue={loc.legacyAccountId ?? ""} />
+              </Field>
+              <Field label="Region" hint={market?.regionList?.length ? `Market regions: ${market.regionList.join(", ")}` : "Free text; the market has no region list yet."}>
+                <Input name="region" defaultValue={loc.region ?? ""} list={`regions-${id}`} />
+                {market?.regionList?.length ? (
+                  <datalist id={`regions-${id}`}>
+                    {market.regionList.map((r) => (
+                      <option key={r} value={r} />
+                    ))}
+                  </datalist>
+                ) : null}
+              </Field>
+              <Field label="Fulfilment">
+                <Select name="fulfilment" defaultValue={loc.fulfilment}>
+                  <option value="delivery">Delivery</option>
+                  <option value="pickup">Pickup at the origin</option>
+                </Select>
+              </Field>
+              <Field label="Appointment required">
+                <Select name="appointmentRequired" defaultValue={loc.appointmentRequired === true ? "yes" : loc.appointmentRequired === false ? "no" : ""}>
+                  <option value="">Unknown</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </Select>
+              </Field>
+              <Field label="Deposit mode (3.10)">
+                <Select name="depositMode" defaultValue={loc.depositMode}>
+                  {Object.entries(DEPOSIT_MODE_LABEL).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Deposit per keg override (USD)" hint="Blank = market rate.">
+                <Input name="depositOverride" type="number" min={0} step="0.01" defaultValue={loc.depositCentsOverride != null ? (loc.depositCentsOverride / 100).toFixed(2) : ""} />
+              </Field>
+              <Field label="Terms override (days)" hint="Blank inherits the market rule (7.4).">
+                <Input name="termsDaysOverride" type="number" min={0} step={1} defaultValue={loc.termsDaysOverride ?? ""} />
+              </Field>
+              <Field label="Pallet rule">
+                <Input name="palletRule" defaultValue={loc.palletRule ?? ""} placeholder="e.g. 48 x 40 GMA, max 56 in" />
+              </Field>
+              <Field label="Receiving requirements">
+                <Input name="receivingRequirements" defaultValue={loc.receivingRequirements ?? ""} />
+              </Field>
+              <Field label="First delivery on">
+                <Input name="firstDeliveryOn" type="date" defaultValue={loc.firstDeliveryOn ?? ""} />
+              </Field>
+              <div className="sm:col-span-3">
+                <Button small>Save</Button>
+              </div>
+            </form>
+          </details>
+        ) : null}
+        <div className="mt-3 border-t border-line pt-3">
+          <div className="text-xs uppercase tracking-wide text-muted">Price exceptions (3.9, 7.10)</div>
+          {priceOverrides.length === 0 ? (
+            <p className="text-sm text-muted">None; the market price list applies.</p>
+          ) : (
+            <ul className="text-sm">
+              {priceOverrides.map(({ o, sku }) => (
+                <li key={o.id}>
+                  <span className="font-mono text-xs">{sku.code}</span> {sku.brand} {sku.name}: <strong>{formatCents(o.priceCents)}</strong> <span className="text-xs text-muted">· {o.reason} · since {fmtDate(o.effectiveFrom, tz)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canPrice ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-sm text-accent">Set a price exception</summary>
+              <form action={setPriceOverrideAction} className="mt-2 grid gap-2 sm:grid-cols-4">
+                <input type="hidden" name="locationId" value={id} />
+                <Select name="skuId" required defaultValue="" aria-label="SKU">
+                  <option value="" disabled>
+                    SKU…
+                  </option>
+                  {catalog.map((c) => (
+                    <option key={c.sku.id} value={c.sku.id}>
+                      {c.sku.code} — {c.sku.brand} {c.sku.name} ({formatCents(c.priceCents)})
+                    </option>
+                  ))}
+                </Select>
+                <Input name="price" type="number" step="0.01" min={0} required placeholder="Price (USD)" aria-label="Price" />
+                <Input name="reason" required placeholder="Reason (required)" aria-label="Reason" />
+                <Button small variant="secondary">
+                  Set exception
+                </Button>
+              </form>
+              <p className="mt-1 text-xs text-muted">Replaces any open exception for the SKU; your approval is recorded. Approval above a threshold (7.10) is the Owner&apos;s or Admin&apos;s by role.</p>
+            </details>
+          ) : null}
+        </div>
+        {canShipView ? (
+          <div className="mt-3 border-t border-line pt-3">
+            <div className="text-xs uppercase tracking-wide text-muted">Recent shipments</div>
+            {recentShipments.length === 0 ? (
+              <p className="text-sm text-muted">No shipments yet.</p>
+            ) : (
+              <ul className="text-sm">
+                {recentShipments.map(({ s }) => (
+                  <li key={s.id} className="flex items-center justify-between py-1">
+                    <Link href={`/shipments/${s.id}`} className="underline">
+                      {shipmentNumber(s)} <span className="text-xs text-muted">· {s.type} · {fmtDay(s.scheduledDate)}</span>
+                    </Link>
+                    <StatusBadge value={s.status} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            <Link href={`/shipments?destination=${id}`} className="mt-1 block text-sm text-accent hover:underline">
+              All shipments for this account
+            </Link>
+          </div>
         ) : null}
       </Card>
 
