@@ -74,8 +74,8 @@ export default async function ShipmentsPage({ searchParams }: { searchParams: Se
             <span className="text-xs text-ink-3">Day print: filter by origin and from-date.</span>
           ) : null}
           {can(actor, "shipment.manage") ? (
-            <Button href="/shipments/new" small>
-              New shipment
+            <Button href="/shipments/new" small variant="secondary">
+              New transfer
             </Button>
           ) : null}
         </>

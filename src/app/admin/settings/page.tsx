@@ -94,6 +94,12 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
             <Textarea name="remitTo" rows={2} defaultValue={settings.remitTo ?? ""} />
           </Field>
         </Card>
+        <Card title="End-of-day pull sheets (R2-29)">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="autoSendPullSheets" defaultChecked={settings.autoSendPullSheets} /> Email each warehouse its next-day pull sheet at the time set on the warehouse (off by default)
+          </label>
+          <p className="mt-1 text-xs text-muted">Off: the office downloads the sheet from Shipments, End of day. On: a send is queued daily per warehouse with an address and time; the email transport is not built yet, so sends wait and open a case rather than pretending.</p>
+        </Card>
         <div>
           <Button>Save settings</Button>
         </div>

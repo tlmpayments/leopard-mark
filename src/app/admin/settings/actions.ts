@@ -26,6 +26,7 @@ export async function updateSettingsAction(form: FormData) {
       nmfcStatus: str(form, "nmfcStatus") === "approved" ? "approved" : "proposed",
       markingConvention: opt(form, "markingConvention"),
       printRemitTo: str(form, "printRemitTo") === "on",
+      autoSendPullSheets: str(form, "autoSendPullSheets") === "on",
       remitTo: opt(form, "remitTo"),
     };
     await updateCompanySettings(db, actor, patch);

@@ -4,7 +4,7 @@ import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
 import { listCountSessions } from "@/lib/domain/counts/service";
-import { listOrigins } from "@/lib/domain/origins/service";
+import { listOrigins, originLabel } from "@/lib/domain/origins/service";
 
 export default async function CountsPage({ searchParams }: { searchParams: SearchParams }) {
   await requireAction("count.record");
@@ -21,8 +21,7 @@ export default async function CountsPage({ searchParams }: { searchParams: Searc
           <option value="">All origins</option>
           {origins.map((o) => (
             <option key={o.id} value={o.id}>
-              {o.originCode ? `${o.originCode} · ` : ""}
-              {o.name}
+              {originLabel(o)}
             </option>
           ))}
         </Select>
@@ -36,7 +35,7 @@ export default async function CountsPage({ searchParams }: { searchParams: Searc
             <Link key="d" href={`/admin/counts/${s.id}`} className="font-medium hover:underline">
               {fmtDay(s.countedOn)}
             </Link>,
-            `${warehouse.originCode ? warehouse.originCode + " · " : ""}${warehouse.name}`,
+            originLabel(warehouse),
             s.countedBy ?? "—",
             <StatusBadge key="s" value={s.status} />,
             s.appliedAt ? fmtDate(s.appliedAt) : "—",

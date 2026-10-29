@@ -4,6 +4,7 @@ import type { Actor } from "@/lib/authz/actor";
 import { authorize } from "@/lib/authz/authorize";
 import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
+import { BusinessError } from "@/lib/errors";
 
 /** Global confirmed defaults (brief §8) — not market-configurable. */
 export const KEG_DEPOSIT_CENTS = 3500;
@@ -193,19 +194,37 @@ export async function listSkuAliases(db: DbOrTx) {
 }
 
 /** Per-account price exception with a reason; approval recorded by Owner/Admin (7.10). Closes any open override for the SKU. */
-export async function setPriceOverride(db: DbOrTx, actor: Actor, input: { locationId: string; skuId: string; priceCents: number; reason: string }) {
+/**
+ * A price exception for one account and SKU (R2-16): prices are posted per market; only the Owner or the back office
+ * (price.manage) may set an exception, always with a reason and an end date, after which the posted price applies again.
+ */
+export async function setPriceOverride(db: DbOrTx, actor: Actor, input: { locationId: string; skuId: string; priceCents: number; reason: string; endsOn: string }) {
   authorize(actor, "price.manage");
-  if (!Number.isInteger(input.priceCents) || input.priceCents < 0) throw new Error("Price must be a whole number of cents");
-  if (!input.reason.trim()) throw new Error("A reason is required for a price exception");
+  if (!Number.isInteger(input.priceCents) || input.priceCents < 0) throw new BusinessError("Price must be a whole number of cents", { field: "price" });
+  if (!input.reason.trim()) throw new BusinessError("A reason is required for a price exception", { field: "reason" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.endsOn)) throw new BusinessError("An end date is required for a price exception (R2-16)", { field: "endsOn" });
+  const effectiveTo = new Date(`${input.endsOn}T23:59:59.999Z`);
+  if (effectiveTo.getTime() <= Date.now()) throw new BusinessError("The end date must be in the future", { field: "endsOn" });
+  const now = new Date();
   await db
     .update(schema.priceOverride)
-    .set({ effectiveTo: new Date() })
-    .where(and(eq(schema.priceOverride.locationId, input.locationId), eq(schema.priceOverride.skuId, input.skuId), isNull(schema.priceOverride.effectiveTo)));
+    .set({ effectiveTo: now })
+    .where(and(eq(schema.priceOverride.locationId, input.locationId), eq(schema.priceOverride.skuId, input.skuId), or(isNull(schema.priceOverride.effectiveTo), gt(schema.priceOverride.effectiveTo, now))));
   const [row] = await db
     .insert(schema.priceOverride)
-    .values({ locationId: input.locationId, skuId: input.skuId, priceCents: input.priceCents, reason: input.reason.trim(), approvedByEmployeeId: actor.employeeId, createdByEmployeeId: actor.employeeId })
+    .values({ locationId: input.locationId, skuId: input.skuId, priceCents: input.priceCents, reason: input.reason.trim(), effectiveTo, approvedByEmployeeId: actor.employeeId, createdByEmployeeId: actor.employeeId })
     .returning();
-  await recordAudit(db, actor, { action: "price.override", subjectType: "customer_location", subjectId: input.locationId, current: { skuId: input.skuId, priceCents: input.priceCents }, reason: input.reason.trim() });
+  await recordAudit(db, actor, { action: "price.override", subjectType: "customer_location", subjectId: input.locationId, current: { skuId: input.skuId, priceCents: input.priceCents, endsOn: input.endsOn }, reason: input.reason.trim() });
+  return row;
+}
+
+/** End a price exception early (R2-16): the posted price applies from now. */
+export async function endPriceOverride(db: DbOrTx, actor: Actor, overrideId: string, reason: string) {
+  authorize(actor, "price.manage");
+  if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
+  const [row] = await db.update(schema.priceOverride).set({ effectiveTo: new Date() }).where(eq(schema.priceOverride.id, overrideId)).returning();
+  if (!row) throw new BusinessError("Price exception not found");
+  await recordAudit(db, actor, { action: "price.override_ended", subjectType: "customer_location", subjectId: row.locationId, current: { skuId: row.skuId, overrideId }, reason: reason.trim() });
   return row;
 }
 
@@ -214,6 +233,6 @@ export async function listPriceOverrides(db: DbOrTx, locationId: string) {
     .select({ o: schema.priceOverride, sku: schema.sku })
     .from(schema.priceOverride)
     .innerJoin(schema.sku, eq(schema.sku.id, schema.priceOverride.skuId))
-    .where(and(eq(schema.priceOverride.locationId, locationId), isNull(schema.priceOverride.effectiveTo)))
+    .where(and(eq(schema.priceOverride.locationId, locationId), or(isNull(schema.priceOverride.effectiveTo), gt(schema.priceOverride.effectiveTo, new Date()))))
     .orderBy(schema.sku.code);
 }

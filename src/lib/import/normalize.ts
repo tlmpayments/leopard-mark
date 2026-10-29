@@ -648,6 +648,29 @@ function normalizeAccounts(master: Sheet | null, supplement: Sheet | null, emplo
   return { accounts, regionsByMarket };
 }
 
+/**
+ * Parent groupings (2.8, R2-19): accounts that share a legal name or a billing (AP) email are listed in the report as
+ * a likely parent, for the office to read. Nothing is applied: every licensed location stays its own account with
+ * its own history, invoices, credits and kegs.
+ */
+function listParentGroupings(accounts: AccountRecord[], ctx: NormalizeContext) {
+  const by = new Map<string, { label: string; names: Set<string> }>();
+  for (const a of accounts) {
+    const keys: Array<[string, string]> = [];
+    if (a.legalName?.trim()) keys.push([`legal:${a.legalName.trim().toLowerCase()}`, `legal name "${a.legalName.trim()}"`]);
+    if (a.apEmail?.trim()) keys.push([`ap:${a.apEmail.trim().toLowerCase()}`, `billing email ${a.apEmail.trim().toLowerCase()}`]);
+    for (const [key, label] of keys) {
+      const g = by.get(key) ?? { label, names: new Set<string>() };
+      g.names.add(a.tradeName);
+      by.set(key, g);
+    }
+  }
+  for (const [key, g] of by) {
+    if (g.names.size < 2) continue;
+    ctx.flag("accounts", key, `Parent grouping (listed, not applied, R2-19): ${Array.from(g.names).sort().join(", ")} share ${g.label}; each stays a separate account.`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -679,6 +702,7 @@ export function normalizeWorkbook(wb: ParsedWorkbook, fileName: string): Normali
   const employees = normalizePeople(sheets.reps, ctx);
   const { accounts, regionsByMarket } = normalizeAccounts(sheets.master, sheets.supplement, employees, ctx);
   const markets = normalizeMarkets(regionsByMarket);
+  listParentGroupings(accounts, ctx);
 
   const seenCodes = new Map<string, string>();
   if (sheets.productInfo) for (const r of sheets.productInfo.rows) {

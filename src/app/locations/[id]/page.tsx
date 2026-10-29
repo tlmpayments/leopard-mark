@@ -11,13 +11,13 @@ import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
 import { formatCents, listPriceOverrides, marketCatalog } from "@/lib/domain/catalog/service";
 import { findSimilarLocations, getLocation, listLocations } from "@/lib/domain/customers/service";
-import { ACCOUNT_KIND_LABEL, DEPOSIT_MODE_LABEL } from "@/lib/domain/customers/shipping";
+import { ACCOUNT_KIND_LABEL, DEPOSIT_MODE_LABEL, PAY_BY_LABEL, type PayBy } from "@/lib/domain/customers/shipping";
 import { listEmployees } from "@/lib/domain/employees/service";
 import { kegBalances } from "@/lib/domain/kegs/service";
 import { listWarehouses } from "@/lib/domain/markets/service";
 import { listShipments } from "@/lib/domain/shipments/service";
 import { shipmentNumber } from "../../shipments/labels";
-import { setPriceOverrideAction, updateAccountShippingAction } from "./shipping-actions";
+import { endPriceOverrideAction, setPriceOverrideAction, updateAccountShippingAction, updateDepositOnFileAction } from "./shipping-actions";
 import { NOTICE_PURPOSE_LABEL, listNotices } from "@/lib/domain/notices/service";
 import { listOrders } from "@/lib/domain/orders/service";
 import { authorizedPayer } from "@/lib/domain/payment/service";
@@ -785,8 +785,14 @@ export default async function LocationPage({ params, searchParams }: { params: P
             ["Region", loc.region],
             ["Fulfilment", loc.fulfilment === "pickup" ? "Pickup at the origin (will-call)" : "Delivery"],
             ["Appointment required", loc.appointmentRequired === true ? "Yes" : loc.appointmentRequired === false ? "No" : "Unknown"],
-            ["Deposit mode", `${DEPOSIT_MODE_LABEL[loc.depositMode] ?? loc.depositMode}${loc.depositCentsOverride != null ? ` · ${formatCents(loc.depositCentsOverride)} per keg` : ""}`],
+            ["Deposit mode", `${DEPOSIT_MODE_LABEL[loc.depositMode] ?? loc.depositMode}${loc.depositCentsOverride != null ? `, ${formatCents(loc.depositCentsOverride)} per keg` : ""}`],
+            [
+              "Deposit on file",
+              loc.depositTakenCents != null ? `${formatCents(loc.depositTakenCents)} taken ${loc.depositTakenOn ? fmtDay(loc.depositTakenOn) : ""}${loc.depositSettledOn ? `, settled ${fmtDay(loc.depositSettledOn)}${loc.depositSettlementNote ? ` (${loc.depositSettlementNote})` : ""}` : ", open"}` : loc.depositMode === "floating" ? "none recorded yet (R2-13)" : "—",
+            ],
             ["Terms", loc.termsDaysOverride != null ? `Net ${loc.termsDaysOverride} (account override)` : `Market rule (Net ${market?.termsDays ?? 30})`],
+            ["Pays by", loc.payBy ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy : "not set"],
+            ["Invoice on receipt", loc.invoiceOnReceipt ? "Yes: the invoice travels in the delivery pack" : "No"],
             ["Pallet rule", loc.palletRule],
             ["Receiving requirements", loc.receivingRequirements],
             ["First delivery", loc.firstDeliveryOn ? fmtDay(loc.firstDeliveryOn) : "—"],
@@ -880,8 +886,47 @@ export default async function LocationPage({ params, searchParams }: { params: P
               <Field label="First delivery on">
                 <Input name="firstDeliveryOn" type="date" defaultValue={loc.firstDeliveryOn ?? ""} />
               </Field>
+              <Field label="Pays by (R2-12)" hint="Copied onto each invoice at issue; collection stays manual.">
+                <Select name="payBy" defaultValue={loc.payBy ?? ""}>
+                  <option value="">Not set</option>
+                  {Object.entries(PAY_BY_LABEL).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Invoice on receipt (R2-30)" hint="Off by default; on adds the invoice to the delivery pack.">
+                <label className="flex h-9 items-center gap-2 text-sm">
+                  <input type="checkbox" name="invoiceOnReceipt" defaultChecked={loc.invoiceOnReceipt} /> Print the invoice with the BOL
+                </label>
+              </Field>
               <div className="sm:col-span-3">
                 <Button small>Save</Button>
+              </div>
+            </form>
+          </details>
+        ) : null}
+        {canShipping && (loc.depositMode === "floating" || loc.depositTakenCents != null) ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-accent">Floating deposit on file (R2-13)</summary>
+            <form action={updateDepositOnFileAction} className="mt-2 grid gap-2 sm:grid-cols-4">
+              <input type="hidden" name="locationId" value={id} />
+              <Field label="Deposit taken (USD)">
+                <Input name="depositTaken" type="number" min={0} step="0.01" defaultValue={loc.depositTakenCents != null ? (loc.depositTakenCents / 100).toFixed(2) : ""} />
+              </Field>
+              <Field label="Taken on">
+                <Input name="depositTakenOn" type="date" defaultValue={loc.depositTakenOn ?? ""} />
+              </Field>
+              <Field label="Settled on" hint="On the last order; leave blank while kegs are out.">
+                <Input name="depositSettledOn" type="date" defaultValue={loc.depositSettledOn ?? ""} />
+              </Field>
+              <Field label="Settlement note">
+                <Input name="depositSettlementNote" defaultValue={loc.depositSettlementNote ?? ""} placeholder="e.g. refunded by check 1182" />
+              </Field>
+              <div className="sm:col-span-4">
+                <Button small>Save deposit</Button>
+                <span className="ml-2 text-xs text-ink-3">One deposit per account, never per-keg lines; kegs out and empties back are counted on the Kegs page.</span>
               </div>
             </form>
           </details>
@@ -893,8 +938,24 @@ export default async function LocationPage({ params, searchParams }: { params: P
           ) : (
             <ul className="text-sm">
               {priceOverrides.map(({ o, sku }) => (
-                <li key={o.id}>
-                  <span className="font-mono text-xs">{sku.code}</span> {sku.brand} {sku.name}: <strong>{formatCents(o.priceCents)}</strong> <span className="text-xs text-muted">· {o.reason} · since {fmtDate(o.effectiveFrom, tz)}</span>
+                <li key={o.id} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    <span className="font-mono text-xs">{sku.code}</span> {sku.brand} {sku.name}: <strong>{formatCents(o.priceCents)}</strong>{" "}
+                    <span className="text-xs text-muted">
+                      {o.reason}, since {fmtDate(o.effectiveFrom, tz)}
+                      {o.effectiveTo ? `, until ${fmtDate(o.effectiveTo, tz)}` : ""}
+                    </span>
+                  </span>
+                  {canPrice ? (
+                    <form action={endPriceOverrideAction} className="flex items-center gap-1">
+                      <input type="hidden" name="locationId" value={id} />
+                      <input type="hidden" name="overrideId" value={o.id} />
+                      <Input name="reason" required placeholder="Reason" className="w-36" aria-label="Reason" />
+                      <Button small variant="ghost">
+                        End now
+                      </Button>
+                    </form>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -916,11 +977,12 @@ export default async function LocationPage({ params, searchParams }: { params: P
                 </Select>
                 <Input name="price" type="number" step="0.01" min={0} required placeholder="Price (USD)" aria-label="Price" />
                 <Input name="reason" required placeholder="Reason (required)" aria-label="Reason" />
+                <Input name="endsOn" type="date" required aria-label="Ends on" />
                 <Button small variant="secondary">
                   Set exception
                 </Button>
               </form>
-              <p className="mt-1 text-xs text-muted">Replaces any open exception for the SKU; your approval is recorded. Approval above a threshold (7.10) is the Owner&apos;s or Admin&apos;s by role.</p>
+              <p className="mt-1 text-xs text-muted">Owner or back office only, with a reason and an end date (R2-16); replaces any open exception for the SKU.</p>
             </details>
           ) : null}
         </div>
@@ -999,10 +1061,9 @@ export default async function LocationPage({ params, searchParams }: { params: P
             </form>
             <form action={statusAction} className="space-y-1">
               <input type="hidden" name="locationId" value={id} />
-              <Field label="Status" hint="Closure keeps every obligation, credit, custody and audit; run-off review opens (J31).">
-                <Select name="status" defaultValue={loc.status}>
+              <Field label="Status" hint="Active or Closed (R2-31). Closure keeps every obligation, credit, custody and audit; run-off review opens (J31).">
+                <Select name="status" defaultValue={loc.status === "inactive" ? "closed" : loc.status}>
                   <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
                   <option value="closed">Closed</option>
                 </Select>
               </Field>

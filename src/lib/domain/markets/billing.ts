@@ -16,7 +16,11 @@ export interface MarketBillingPatch {
   distributorKegDepositCents?: number;
   cod?: boolean;
   regionList?: string[] | null;
+  /** Optional route days (R2-4), as weekday names; shown when the office schedules, never enforced. */
+  routeDays?: string[] | null;
 }
+
+export const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 function wholeNumber(value: number | undefined, field: string, label: string) {
   if (value === undefined) return;
@@ -38,6 +42,13 @@ export async function updateMarketBilling(db: DbOrTx, actor: Actor, marketId: st
   if (patch.regionList !== undefined) {
     const regions = Array.from(new Set((patch.regionList ?? []).map((r) => r.trim()).filter(Boolean)));
     set.regionList = regions.length ? regions : null;
+  }
+  if (patch.routeDays !== undefined) {
+    const days = (patch.routeDays ?? []).map((d) => d.trim()).filter(Boolean);
+    const bad = days.find((d) => !(WEEKDAY_NAMES as readonly string[]).includes(d));
+    if (bad) throw new BusinessError(`Route days are weekday names (${WEEKDAY_NAMES.join(", ")}); "${bad}" is not one`, { field: "routeDays" });
+    const ordered = WEEKDAY_NAMES.filter((d) => days.includes(d));
+    set.routeDays = ordered.length ? [...ordered] : null;
   }
   if (Object.keys(set).length === 0) throw new BusinessError("Nothing to change");
   const [row] = await db.update(schema.market).set(set).where(eq(schema.market.id, marketId)).returning();

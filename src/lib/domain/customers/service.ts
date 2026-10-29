@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import { marketScopeFor, type Actor } from "@/lib/authz/actor";
 import { authorize, can } from "@/lib/authz/authorize";
@@ -259,10 +259,15 @@ export async function getLocation(db: DbOrTx, locationId: string) {
 /** Roles that may list accounts market-wide (Driver/Service sees only assigned execution context — REV-11). */
 export const LOCATION_VIEW_ROLES = ["owner", "admin", "accounting", "sales"] as const;
 
+/**
+ * Accounts: hosts and warehouses are locations (origins), not accounts, so they stay out of the list and the pickers
+ * unless asked for (R2-32). Samples recipients (the market's samples house and reps' home addresses) are accounts of
+ * kind internal or individual and are listed only when `includeSamplesRecipients` is set (R2-27, R2-28).
+ */
 export async function listLocations(
   db: DbOrTx,
   actor: Actor,
-  opts: { marketId?: string; q?: string; status?: string; limit?: number; offset?: number; withAddress?: boolean } = {},
+  opts: { marketId?: string; q?: string; status?: string; kind?: string; servedBy?: "direct" | "distributor" | string; limit?: number; offset?: number; withAddress?: boolean; includeOrigins?: boolean; includeSamplesRecipients?: boolean } = {},
 ) {
   const scope = marketScopeFor(actor, [...LOCATION_VIEW_ROLES]);
   const conds = [];
@@ -272,6 +277,12 @@ export async function listLocations(
   }
   if (opts.marketId) conds.push(eq(schema.customerLocation.marketId, opts.marketId));
   if (opts.status) conds.push(eq(schema.customerLocation.status, opts.status as never));
+  if (opts.kind) conds.push(eq(schema.customerLocation.kind, opts.kind as never));
+  else if (!opts.includeOrigins) conds.push(sql`${schema.customerLocation.kind} not in ('host', 'warehouse')`);
+  if (!opts.includeSamplesRecipients && !opts.kind) conds.push(and(eq(schema.customerLocation.samplesHouse, false), isNull(schema.customerLocation.repEmployeeId))!);
+  if (opts.servedBy === "direct") conds.push(isNull(schema.customerLocation.servedByLocationId));
+  else if (opts.servedBy === "distributor") conds.push(sql`${schema.customerLocation.servedByLocationId} is not null`);
+  else if (opts.servedBy) conds.push(eq(schema.customerLocation.servedByLocationId, opts.servedBy));
   if (opts.q) conds.push(or(ilike(schema.customerLocation.tradeName, `%${escapeLike(opts.q)}%`), ilike(schema.address.line1, `%${escapeLike(opts.q)}%`), ilike(schema.address.city, `%${escapeLike(opts.q)}%`))!);
   const rows = await db
     .select({ loc: schema.customerLocation, market: schema.market, address: schema.address })
@@ -690,6 +701,8 @@ export async function setLocationStatus(db: DbOrTx, actor: Actor, locationId: st
   const [loc] = await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, locationId));
   if (!loc) throw new BusinessError("Location not found");
   authorize(actor, "location.lifecycle", { marketId: loc.marketId });
+  // R2-31: an account is Active or Closed; "inactive" was retired by migration 0005 and stays readable on history only.
+  if (status === "inactive") throw new BusinessError("Accounts are Active or Closed (R2-31); close the account instead", { field: "status" });
   if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
   if (loc.status === status) throw new StaleStateError(`The location is already ${status}.`);
   return withTx(db, async (tx) => {
@@ -766,4 +779,58 @@ function pick<T extends object, K extends keyof T>(obj: T, keys: K[]): Pick<T, K
   const out = {} as Pick<T, K>;
   for (const k of keys) out[k] = obj[k];
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Samples recipients (R2-27, R2-28)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where samples go in a market: the market's samples house account ("Samples, SoCal": kind internal, no license, no
+ * terms, created by migration 0005) and the home addresses of the reps who work it (kind individual, carrying the rep).
+ */
+export async function samplesRecipients(db: DbOrTx, marketId: string) {
+  const rows = await db
+    .select({ loc: schema.customerLocation, address: schema.address, rep: schema.employee })
+    .from(schema.customerLocation)
+    .leftJoin(schema.locationAddress, and(eq(schema.locationAddress.locationId, schema.customerLocation.id), eq(schema.locationAddress.kind, "delivery"), eq(schema.locationAddress.current, true)))
+    .leftJoin(schema.address, eq(schema.address.id, schema.locationAddress.addressId))
+    .leftJoin(schema.employee, eq(schema.employee.id, schema.customerLocation.repEmployeeId))
+    .where(and(eq(schema.customerLocation.marketId, marketId), eq(schema.customerLocation.status, "active"), or(eq(schema.customerLocation.samplesHouse, true), sql`${schema.customerLocation.repEmployeeId} is not null`)!))
+    .orderBy(desc(schema.customerLocation.samplesHouse), schema.customerLocation.tradeName);
+  return rows;
+}
+
+/** Is this account a samples recipient (so a new order defaults to no charge)? */
+export function isSamplesRecipient(loc: { samplesHouse: boolean; repEmployeeId: string | null }): boolean {
+  return loc.samplesHouse || Boolean(loc.repEmployeeId);
+}
+
+/**
+ * A rep's home address as a delivery address for samples (R2-28): an account of kind individual in the rep's market,
+ * one per rep per market, with the rep on it. No license, no terms, never invoiced for money.
+ */
+export async function createRepHomeAddress(
+  db: DbOrTx,
+  actor: Actor,
+  input: { marketId: string; repEmployeeId: string; address: AddressInput; label?: string | null },
+) {
+  authorize(actor, "location.lifecycle", { marketId: input.marketId });
+  const [rep] = await db.select().from(schema.employee).where(eq(schema.employee.id, input.repEmployeeId));
+  if (!rep) throw new BusinessError("Rep not found", { field: "repEmployeeId" });
+  const [existing] = await db.select().from(schema.customerLocation).where(and(eq(schema.customerLocation.marketId, input.marketId), eq(schema.customerLocation.repEmployeeId, input.repEmployeeId), eq(schema.customerLocation.status, "active")));
+  if (existing) throw new BusinessError(`${rep.displayName} already has a samples address in this market (${existing.tradeName})`);
+  const a = input.address;
+  if (!a.line1?.trim() || !a.city?.trim() || !a.state?.trim() || !a.postalCode?.trim()) throw new BusinessError("Street, city, state and ZIP are required", { field: "address" });
+  return withTx(db, async (tx) => {
+    const tradeName = input.label?.trim() || `Samples, ${rep.displayName} (home)`;
+    const [loc] = await tx
+      .insert(schema.customerLocation)
+      .values({ marketId: input.marketId, tradeName, kind: "individual", status: "active", depositMode: "none", termsDaysOverride: 0, repEmployeeId: input.repEmployeeId, currentRepEmployeeId: input.repEmployeeId, createdByEmployeeId: actor.employeeId })
+      .returning();
+    const [addr] = await tx.insert(schema.address).values({ line1: a.line1.trim(), line2: a.line2?.trim() || null, city: a.city.trim(), state: a.state.trim().toUpperCase(), postalCode: a.postalCode.trim(), provenance: "admin_entered", createdByEmployeeId: actor.employeeId }).returning();
+    await tx.insert(schema.locationAddress).values({ locationId: loc.id, addressId: addr.id, kind: "delivery", current: true });
+    await recordAudit(tx, actor, { action: "location.create", subjectType: "customer_location", subjectId: loc.id, current: { tradeName, kind: "individual", repEmployeeId: input.repEmployeeId, purpose: "samples address (R2-28)" }, marketId: input.marketId });
+    return loc;
+  });
 }

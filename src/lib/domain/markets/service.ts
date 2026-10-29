@@ -19,6 +19,27 @@ export async function createMarket(
     .values({ code, name: input.name.trim(), timezone: input.timezone ?? "America/Los_Angeles" })
     .returning();
   await recordAudit(db, actor, { action: "market.create", subjectType: "market", subjectId: row.id, current: { code, name: row.name } });
+  await ensureSamplesHouse(db, row);
+  return row;
+}
+
+/** The samples house name per market, the same rule migration 0005 used for the markets that already existed. */
+export function samplesHouseName(market: { code: string; name: string }): string {
+  const named: Record<string, string> = { SOCAL: "Samples, SoCal", "NORCAL-SD": "Samples, NorCal", "NORCAL-D": "Samples, NorCal (Distributed)", CT: "Samples, Connecticut", MA: "Samples, Massachusetts" };
+  return named[market.code] ?? `Samples, ${market.name}`;
+}
+
+/**
+ * Every market has one samples house account (R2-27): kind internal, no license, no terms, where samples go when they
+ * are not delivered to a rep's home. Created with the market; idempotent, keyed like the migration.
+ */
+export async function ensureSamplesHouse(db: DbOrTx, market: { id: string; code: string; name: string }) {
+  const [existing] = await db.select().from(schema.customerLocation).where(and(eq(schema.customerLocation.marketId, market.id), eq(schema.customerLocation.samplesHouse, true)));
+  if (existing) return existing;
+  const [row] = await db
+    .insert(schema.customerLocation)
+    .values({ marketId: market.id, tradeName: samplesHouseName(market), status: "active", kind: "internal", depositMode: "none", termsDaysOverride: 0, samplesHouse: true })
+    .returning();
   return row;
 }
 

@@ -89,7 +89,7 @@ describe("REV-11 / AC02 — market-scoped Admin stays inside its market", () => 
 describe("REV-11 / AC03 — Driver/Service sees only assigned execution context", () => {
   it("driver gets no market-wide accounts/orders from lists, search or direct record access", async () => {
     const { location } = await makeLocation(db, f.sales, f.market.id, "Driver Denied Diner");
-    const o = await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
     expect(can(f.driver, "order.view", { marketId: f.market.id })).toBe(false);
     expect(can(f.driver, "location.view", { marketId: f.market.id })).toBe(false);
     expect(await listOrders(db, f.driver)).toHaveLength(0);
@@ -128,7 +128,7 @@ describe("UX-05 / UX-09 / AC34 — lists, search and timeline beyond the page si
     expect((await search(db, f.sales2, "Paged Pub")).filter((h) => h.kind === "location")).toHaveLength(0);
     // Timeline: more entries than one page → cursor walks them once, newest first, and a kind filter narrows without breaking the walk.
     const { location } = await makeLocation(db, f.sales, f.market.id, "Busy Timeline Bar");
-    for (let i = 0; i < 12; i++) await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
+    for (let i = 0; i < 12; i++) await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
     const ids: string[] = [];
     let cursor: string | null = null;
     let pages = 0;

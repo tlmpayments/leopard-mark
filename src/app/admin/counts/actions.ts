@@ -26,7 +26,7 @@ export async function createCountSessionAction(form: FormData) {
 export async function applyCountSessionAction(form: FormData) {
   const id = str(form, "sessionId");
   return runAction(`/admin/counts/${id}`, async ({ db, actor }) => {
-    const r = await applyCountSession(db, actor, id);
+    const r = await applyCountSession(db, actor, id, { reason: opt(form, "reason") });
     return `Count applied: ${r.changes.length} SKU position(s) set to the counted totals`;
   });
 }

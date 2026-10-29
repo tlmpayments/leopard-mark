@@ -27,30 +27,41 @@ export interface KegBalance {
   lastEventOn: string | null;
 }
 
-/** Called inside the delivery transaction; idempotent per shipment. */
-export async function recordKegEventForShipment(db: DbOrTx, actor: Actor, shipmentId: string) {
+/**
+ * Called inside the delivery transaction; idempotent per shipment. Kegs out count what the account kept: the
+ * delivered quantity per line (R2-8), so refused and damaged kegs never enter the account's balance. With
+ * `replace`, an office correction (R2-38) rewrites the shipment's event from the corrected lines.
+ */
+export async function recordKegEventForShipment(db: DbOrTx, actor: Actor, shipmentId: string, opts: { replace?: boolean } = {}) {
   const [s] = await db.select().from(schema.shipment).where(eq(schema.shipment.id, shipmentId));
   if (!s || !s.destinationLocationId) return null;
   const [existing] = await db.select().from(schema.kegEvent).where(and(eq(schema.kegEvent.shipmentId, shipmentId), eq(schema.kegEvent.kind, "shipment")));
-  if (existing) return existing;
+  if (existing && !opts.replace) return existing;
   const lines = await db
-    .select({ qty: schema.shipmentLine.qty, packageKind: schema.sku.packageKind })
+    .select({ qty: schema.shipmentLine.qty, deliveredQty: schema.shipmentLine.deliveredQty, packageKind: schema.sku.packageKind })
     .from(schema.shipmentLine)
     .innerJoin(schema.sku, eq(schema.sku.id, schema.shipmentLine.skuId))
     .where(eq(schema.shipmentLine.shipmentId, shipmentId));
   let halfOut = 0;
   let sixtelOut = 0;
   for (const l of lines) {
-    if (l.packageKind === "keg_half") halfOut += l.qty;
-    if (l.packageKind === "keg_sixtel") sixtelOut += l.qty;
+    const kept = l.deliveredQty ?? l.qty;
+    if (l.packageKind === "keg_half") halfOut += kept;
+    if (l.packageKind === "keg_sixtel") sixtelOut += kept;
   }
   const [pickup] = await db.select().from(schema.shipmentKegPickup).where(eq(schema.shipmentKegPickup.shipmentId, shipmentId));
   const halfIn = pickup?.halfIn ?? 0;
   const sixtelIn = pickup?.sixtelIn ?? 0;
+  const on = s.actualDate ?? s.scheduledDate ?? new Date().toISOString().slice(0, 10);
+  if (existing) {
+    // Never deleted: a correction that leaves no kegs keeps the row at zero with the note, so the history stays readable.
+    const [row] = await db.update(schema.kegEvent).set({ halfOut, sixtelOut, halfIn, sixtelIn, on, note: "Corrected by the office after delivery" }).where(eq(schema.kegEvent.id, existing.id)).returning();
+    return row;
+  }
   if (halfOut + sixtelOut + halfIn + sixtelIn === 0) return null;
   const [row] = await db
     .insert(schema.kegEvent)
-    .values({ locationId: s.destinationLocationId, shipmentId, on: s.actualDate ?? s.scheduledDate, kind: "shipment", halfOut, sixtelOut, halfIn, sixtelIn, recordedByEmployeeId: actor.employeeId })
+    .values({ locationId: s.destinationLocationId, shipmentId, on, kind: "shipment", halfOut, sixtelOut, halfIn, sixtelIn, recordedByEmployeeId: actor.employeeId })
     .returning();
   return row;
 }
@@ -112,21 +123,22 @@ export async function kegHistory(db: DbOrTx, locationId: string, limit = 100): P
 }
 
 export interface MicroStarRow {
-  groupId: string;
-  groupName: string;
+  facilityId: string;
+  facilityName: string;
   on: string;
   shipmentNumber: string | null;
+  distributorId: string;
+  distributorName: string;
   halfOut: number;
   sixtelOut: number;
-  halfIn: number;
-  sixtelIn: number;
 }
 
 /**
- * MicroStar outbound report (8.6): kegs shipped per distributor (by destination account) or per brewery (by origin) for
- * a month. Counts only, no serials. Returned as rows for CSV and on-screen use.
+ * MicroStar outbound report (8.6, R2-25): per facility (brewery origin) per month, every delivered shipment to a
+ * distributor with its BOL number and the kegs out by size. Counts only, no serials; returns are not tracked
+ * (MicroStar bills the distributor). Hand-entered balances and retail deliveries never appear.
  */
-export async function microstarReport(db: DbOrTx, actor: Actor, input: { month: string; groupBy: "distributor" | "brewery" }): Promise<MicroStarRow[]> {
+export async function microstarReport(db: DbOrTx, actor: Actor, input: { month: string; facilityWarehouseId?: string | null }): Promise<MicroStarRow[]> {
   authorize(actor, "report.export");
   if (!/^\d{4}-\d{2}$/.test(input.month)) throw new BusinessError("Month must be YYYY-MM", { field: "month" });
   const from = `${input.month}-01`;
@@ -136,28 +148,25 @@ export async function microstarReport(db: DbOrTx, actor: Actor, input: { month: 
     .select({ ev: schema.kegEvent, s: schema.shipment, loc: schema.customerLocation, origin: schema.warehouse })
     .from(schema.kegEvent)
     .innerJoin(schema.customerLocation, eq(schema.customerLocation.id, schema.kegEvent.locationId))
-    .leftJoin(schema.shipment, eq(schema.shipment.id, schema.kegEvent.shipmentId))
-    .leftJoin(schema.warehouse, eq(schema.warehouse.id, schema.shipment.originWarehouseId))
-    .where(and(gte(schema.kegEvent.on, from), lte(schema.kegEvent.on, to)))
-    .orderBy(asc(schema.kegEvent.on));
+    .innerJoin(schema.shipment, eq(schema.shipment.id, schema.kegEvent.shipmentId))
+    .innerJoin(schema.warehouse, eq(schema.warehouse.id, schema.shipment.originWarehouseId))
+    .where(and(gte(schema.kegEvent.on, from), lte(schema.kegEvent.on, to), eq(schema.kegEvent.kind, "shipment"), eq(schema.customerLocation.kind, "distributor")))
+    .orderBy(asc(schema.warehouse.name), asc(schema.kegEvent.on), asc(schema.shipment.number));
   const out: MicroStarRow[] = [];
   for (const r of rows) {
-    if (input.groupBy === "distributor") {
-      if (r.loc.kind !== "distributor") continue;
-      out.push({ groupId: r.loc.id, groupName: r.loc.tradeName, on: r.ev.on, shipmentNumber: r.s?.number ?? null, halfOut: r.ev.halfOut, sixtelOut: r.ev.sixtelOut, halfIn: r.ev.halfIn, sixtelIn: r.ev.sixtelIn });
-    } else {
-      if (!r.origin || r.origin.kind !== "brewery") continue;
-      out.push({ groupId: r.origin.id, groupName: r.origin.name, on: r.ev.on, shipmentNumber: r.s?.number ?? null, halfOut: r.ev.halfOut, sixtelOut: r.ev.sixtelOut, halfIn: r.ev.halfIn, sixtelIn: r.ev.sixtelIn });
-    }
+    if (input.facilityWarehouseId && r.origin.id !== input.facilityWarehouseId) continue;
+    if (r.ev.halfOut + r.ev.sixtelOut === 0) continue;
+    out.push({ facilityId: r.origin.id, facilityName: r.origin.originCode ? `${r.origin.originCode} ${r.origin.name}` : r.origin.name, on: r.ev.on, shipmentNumber: r.s.number, distributorId: r.loc.id, distributorName: r.loc.tradeName, halfOut: r.ev.halfOut, sixtelOut: r.ev.sixtelOut });
   }
   return out;
 }
 
+/** Plain CSV, one row per BOL: facility, date, BOL, distributor, 1/2 bbl out, 1/6 bbl out. */
 export function microstarCsv(rows: MicroStarRow[]): string {
   const esc = (v: string | number | null) => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const head = ["Group", "Date", "Shipment", "1/2 bbl out", "1/6 bbl out", "1/2 bbl in", "1/6 bbl in"];
-  return [head.join(","), ...rows.map((r) => [r.groupName, r.on, r.shipmentNumber, r.halfOut, r.sixtelOut, r.halfIn, r.sixtelIn].map(esc).join(","))].join("\n") + "\n";
+  const head = ["Facility", "Date", "BOL", "Distributor", "1/2 bbl out", "1/6 bbl out"];
+  return [head.join(","), ...rows.map((r) => [r.facilityName, r.on, r.shipmentNumber, r.distributorName, r.halfOut, r.sixtelOut].map(esc).join(","))].join("\n") + "\n";
 }

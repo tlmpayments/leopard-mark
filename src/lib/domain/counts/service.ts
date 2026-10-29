@@ -40,20 +40,29 @@ export async function createCountSession(db: DbOrTx, actor: Actor, input: { ware
   });
 }
 
-/** Apply: on hand becomes the counted total per SKU; lot codes on the lines are kept for later per-lot balances (4.1). */
-export async function applyCountSession(db: DbOrTx, actor: Actor, sessionId: string) {
+/**
+ * Apply: on hand becomes the counted total per SKU; lot codes on the lines are kept for later per-lot balances (4.1).
+ * Every variance is posted as a count adjustment with the reason given (R2-23); a count that changes a position
+ * without a reason is refused.
+ */
+export async function applyCountSession(db: DbOrTx, actor: Actor, sessionId: string, opts: { reason?: string | null } = {}) {
   const [session] = await db.select().from(schema.countSession).where(eq(schema.countSession.id, sessionId));
   if (!session) throw new BusinessError("Count session not found");
   const [wh] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, session.warehouseId));
   authorize(actor, "count.record", { marketId: wh?.marketId ?? null });
   if (session.status !== "draft") throw new StaleStateError("This count was already applied");
+  const reason = opts.reason?.trim() || session.note?.trim() || null;
   return withTx(db, async (tx) => {
     const lines = await tx.select().from(schema.countLine).where(eq(schema.countLine.sessionId, sessionId));
     const totals = new Map<string, number>();
     for (const l of lines) totals.set(l.skuId, (totals.get(l.skuId) ?? 0) + l.qty);
     const changes: Array<{ skuId: string; before: number; after: number }> = [];
+    const positions = new Map<string, Awaited<ReturnType<typeof lockPosition>>>();
+    for (const [skuId] of Array.from(totals.entries()).sort()) positions.set(skuId, await lockPosition(tx, session.warehouseId, skuId));
+    const anyVariance = Array.from(totals.entries()).some(([skuId, qty]) => qty !== positions.get(skuId)!.onHandQty);
+    if (anyVariance && !reason) throw new BusinessError("The count differs from the ledger; say why before applying (the reason goes on each adjustment, R2-23)", { field: "reason" });
     for (const [skuId, qty] of Array.from(totals.entries()).sort()) {
-      const pos = await lockPosition(tx, session.warehouseId, skuId);
+      const pos = positions.get(skuId)!;
       const delta = qty - pos.onHandQty;
       await tx
         .update(schema.stockPosition)
@@ -66,13 +75,13 @@ export async function applyCountSession(db: DbOrTx, actor: Actor, sessionId: str
           await tx.insert(schema.stockMovement).values({ warehouseId: session.warehouseId, skuId, kind: "count", qtyDelta: 0, referenceType: "count_session", referenceId: sessionId, evidence: `Counted ${ll.qty} of lot ${ll.lotCode}`, actorEmployeeId: actor.employeeId, lotId: lot?.id ?? null });
         }
       }
-      await tx.insert(schema.stockMovement).values({ warehouseId: session.warehouseId, skuId, kind: "count", qtyDelta: delta, referenceType: "count_session", referenceId: sessionId, evidence: `Physical count ${session.countedOn}: on hand set to ${qty}`, actorEmployeeId: actor.employeeId });
+      await tx.insert(schema.stockMovement).values({ warehouseId: session.warehouseId, skuId, kind: "count", qtyDelta: delta, referenceType: "count_session", referenceId: sessionId, evidence: `Physical count ${session.countedOn}: on hand set to ${qty}${delta !== 0 ? ` (was ${pos.onHandQty}; ${reason})` : ""}`, actorEmployeeId: actor.employeeId });
       changes.push({ skuId, before: pos.onHandQty, after: qty });
       if (delta > 0) await fillUnmetDemand(tx, actor, session.warehouseId, skuId);
     }
     const [row] = await tx.update(schema.countSession).set({ status: "applied", appliedAt: new Date(), appliedByEmployeeId: actor.employeeId }).where(and(eq(schema.countSession.id, sessionId), eq(schema.countSession.status, "draft"))).returning();
     if (!row) throw new StaleStateError("This count was applied by someone else a moment ago");
-    await recordAudit(tx, actor, { action: "count.apply", subjectType: "count_session", subjectId: sessionId, current: { changes }, marketId: wh?.marketId ?? null });
+    await recordAudit(tx, actor, { action: "count.apply", subjectType: "count_session", subjectId: sessionId, current: { changes }, reason: reason ?? undefined, marketId: wh?.marketId ?? null });
     return { session: row, changes };
   });
 }

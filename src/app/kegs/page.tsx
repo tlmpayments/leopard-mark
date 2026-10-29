@@ -68,7 +68,7 @@ export default async function KegsPage({ searchParams }: { searchParams: SearchP
           <span key="d" className="whitespace-nowrap">{fmtDay(b.lastEventOn)}</span>,
         ])}
       />
-      <p className="text-xs text-ink-3">Distributors remit keg deposits to MicroStar; retail accounts carry the $35 per-keg deposit on the invoice (3.10). The monthly MicroStar outbound report is under Reports. Counts only, no serial numbers.</p>
+      <p className="text-xs text-ink-3">Distributors remit keg deposits to MicroStar; retail accounts carry the $35 per-keg deposit on the invoice (3.10). The monthly MicroStar outbound report is the next tab under Kegs (R2-35). Counts only, no serial numbers; a floating deposit on file is recorded on the account (R2-13).</p>
       {canRecord ? (
         <Card title="Record an opening balance or adjustment">
           <KegEventForm locations={locations.map((l) => ({ id: l.loc.id, label: `${l.loc.tradeName} (${l.market.code})` }))} returnTo="/kegs" today={todayIso()} />

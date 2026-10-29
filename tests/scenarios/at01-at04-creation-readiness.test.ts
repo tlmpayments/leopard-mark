@@ -40,7 +40,7 @@ describe("AT01 — New customer", () => {
     expect(detail?.license?.state).toBe("unverified");
     expect(detail?.payment?.setupState).toBe("not_requested");
     // No preapproval/underwriting: an order can be captured immediately.
-    const res = await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
     expect(res.order.orderNumber).toMatch(/^NC-\d{6}$/);
     // Audit exists with actor.
     const audits = await db.select().from(schema.auditEvent).where(and(eq(schema.auditEvent.subjectType, "customer_location"), eq(schema.auditEvent.subjectId, location.id)));
@@ -104,7 +104,7 @@ describe("AT02 — Similar-name customer", () => {
 describe("AT03 — Missing license, later verified", () => {
   it("captures account/order before license enrichment; delivery stays unverified until the company records a decision", async () => {
     const { location } = await makeLocation(db, f.sales, f.market.id, "Unlicensed Yet Lounge");
-    await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 1 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 1 }] });
     let readiness = await evaluateLocationReadiness(db, location.id);
     expect(readiness.conditions.find((c) => c.code === "license")?.status).toBe("pending");
     expect(readiness.releasable).toBe(false);
@@ -129,7 +129,7 @@ describe("AT04 — First order before ACH setup", () => {
   it("missing setup blocks neither capture nor the first-delivery allowance; no debit path exists", async () => {
     const { location } = await makeLocation(db, f.sales, f.market.id, "First Timer Taproom");
     await recordLicenseDecision(db, f.admin, { locationId: location.id, state: "verified", licenseNumber: "L-1", evidence: "lookup" });
-    const res = await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] });
     expect(res.order.demandState).toBe("submitted");
     const readiness = await evaluateLocationReadiness(db, location.id);
     expect(readiness.isFirstDelivery).toBe(true);

@@ -87,6 +87,7 @@ export type SettingsPatch = Partial<
     | "markingConvention"
     | "printRemitTo"
     | "remitTo"
+    | "autoSendPullSheets"
   >
 >;
 
@@ -135,7 +136,7 @@ export async function upsertPosItem(db: DbOrTx, actor: Actor, input: { code: str
  * Next number in a series for a year, atomically. The upsert serialises concurrent callers on the counter row.
  * Format: INV26376 (series + two-digit year + three-digit sequence, widening past 999).
  */
-export async function nextDocNumber(db: DbOrTx, series: "INV" | "NC", year: number): Promise<string> {
+export async function nextDocNumber(db: DbOrTx, series: "INV" | "NC" | "CM", year: number): Promise<string> {
   const [row] = await db
     .insert(schema.docCounter)
     .values({ series, year, lastSeq: 1 })

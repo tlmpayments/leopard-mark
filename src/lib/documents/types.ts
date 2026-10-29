@@ -28,6 +28,10 @@ export interface SnapshotLine {
   kegSize?: "half" | "sixtel" | null;
   isPos: boolean;
   unitPriceCents?: number | null;
+  /** Set once the stop is delivered (R2-8, R2-9): what the account kept, what came back, what was written off. */
+  deliveredQty?: number | null;
+  refusedQty?: number | null;
+  damagedQty?: number | null;
 }
 
 export interface ShipmentSnapshot {
@@ -40,7 +44,8 @@ export interface ShipmentSnapshot {
   voided: boolean;
   type: "D" | "T" | "S";
   pickup: boolean;
-  scheduledDate: string;
+  /** Blank on an order-created draft until the office confirms the shipment (R2-3). */
+  scheduledDate: string | null;
   actualDate: string | null;
   shipper: { legalName: string; dba: string; lines: string[]; arEmail: string; phone?: string | null };
   shipFrom: PartyBlock & { originCode: string | null };
@@ -93,6 +98,8 @@ export interface InvoiceSnapshot {
   shipmentNumbers: string[];
   poNumbers: string[];
   fobWording: string | null;
+  /** How the account pays (R2-12), copied from the account when the invoice is issued. */
+  payBy?: "fintech" | "stripe" | "check" | null;
   lines: InvoiceSnapshotLine[];
   subtotalCents: number;
   depositCents: number;

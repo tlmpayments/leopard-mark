@@ -78,7 +78,7 @@ export interface NavSection {
 /**
  * Which section and page the current path belongs to: the page whose path (or one of its `also` paths) is the
  * longest prefix of the current path. Longest wins so /admin/markets lands on Markets & stock (Stock) and not on
- * the Command center at /admin (Exceptions). A path outside every visible page (home, search, menu) has no section.
+ * Exceptions (whose `also` keeps the old /admin address). A path outside every visible page (home, search, menu) has no section.
  */
 function useActive(sections: NavSection[]): { section: NavSection | null; page: string | null } {
   const pathname = usePathname();

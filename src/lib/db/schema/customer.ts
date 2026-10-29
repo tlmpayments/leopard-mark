@@ -10,6 +10,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -23,6 +24,7 @@ import {
 import { market } from "./market";
 import { roleEnum } from "./platform";
 
+/** Active or Closed (R2-31). "inactive" stays in the type for history; rows were migrated to closed with a note in 0005. */
 export const locationStatusEnum = pgEnum("location_status", [
   "active",
   "inactive",
@@ -129,6 +131,19 @@ export const customerLocation = pgTable(
     palletRule: text("pallet_rule"),
     receivingRequirements: text("receiving_requirements"),
     firstDeliveryOn: text("first_delivery_on"),
+    /** How the account pays (R2-12): fintech, stripe or check; copied onto each invoice at issue. */
+    payBy: text("pay_by"),
+    /** When on, the delivery pack carries the invoice with the BOL (R2-30); off by default. */
+    invoiceOnReceipt: boolean("invoice_on_receipt").notNull().default(false),
+    /** Floating keg deposit (R2-13): the one deposit taken on the first order, settled on the last. */
+    depositTakenCents: integer("deposit_taken_cents"),
+    depositTakenOn: date("deposit_taken_on"),
+    depositSettledOn: date("deposit_settled_on"),
+    depositSettlementNote: text("deposit_settlement_note"),
+    /** A rep's home address for samples (R2-28): an account of kind individual that belongs to this employee. */
+    repEmployeeId: uuid("rep_employee_id"),
+    /** The market's samples house account (R2-27): kind internal, no license, no terms. */
+    samplesHouse: boolean("samples_house").notNull().default(false),
     createdByEmployeeId: uuid("created_by_employee_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -9,6 +9,7 @@ import { getDb } from "@/lib/db/client";
 import { listLocations } from "@/lib/domain/customers/service";
 import { listNotices } from "@/lib/domain/notices/service";
 import { listOrders } from "@/lib/domain/orders/service";
+import { listShipments } from "@/lib/domain/shipments/service";
 import { listOpenExceptions } from "@/lib/exceptions/service";
 
 export default async function Home({ searchParams }: { searchParams: SearchParams }) {
@@ -22,6 +23,8 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
   const myCases = can(actor, "exception.view") ? await listOpenExceptions(d, { marketIds: queueScope(actor), limit: 8 }) : [];
   const forMe = myCases.filter((e) => (e.ownerRole ? roles.includes(e.ownerRole) : can(actor, "exception.manage")));
   const notices = can(actor, "notice.record_outcome") ? await listNotices(d, actor, { states: ["manual_pending", "failed", "unknown"], limit: 5 }) : [];
+  // The driver's own stops not yet delivered (R2-38); listShipments already restricts a driver to assigned shipments.
+  const stops = isField ? (await listShipments(d, actor, { limit: 50 })).filter(({ s }) => ["confirmed", "staged", "out"].includes(s.status)) : [];
   return (
     <Page
       title={`Hello, ${actor.displayName.split(" ")[0]}`}
@@ -36,7 +39,7 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
           ) : null}
           {can(actor, "shipment.manage") ? (
             <Button href="/shipments/new" variant="secondary">
-              New shipment
+              New transfer
             </Button>
           ) : can(actor, "shipment.view") ? (
             <Button href="/shipments" variant="secondary">
@@ -53,8 +56,26 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
     >
       <Flash {...flash} />
       {isField ? (
-        <Card title="Today">
-          <StateLine kind="provider_unavailable">Nothing is assigned to you. Route assignment and field capture are not built in this revision (phase 2).</StateLine>
+        <Card title="My stops">
+          {stops.length === 0 ? (
+            <StateLine kind="info">Nothing is assigned to you right now.</StateLine>
+          ) : (
+            <ul className="divide-y divide-line">
+              {stops.map(({ s, destination }) => (
+                <li key={s.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span>
+                    {destination?.tradeName ?? s.destinationText ?? "—"} <span className="text-xs text-muted">{s.scheduledDate ?? ""}</span>
+                  </span>
+                  <StatusBadge value={s.status} />
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-2">
+            <Link href="/field" className="text-sm text-accent hover:underline">
+              Open my stops to mark deliveries
+            </Link>
+          </div>
         </Card>
       ) : null}
       {forMe.length ? (
@@ -74,8 +95,8 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
           </ul>
           {can(actor, "exception.manage") ? (
             <div className="mt-2 text-right">
-              <Link href="/admin" className="text-sm text-accent hover:underline">
-                Open the command center
+              <Link href="/admin/exceptions" className="text-sm text-accent hover:underline">
+                Open Exceptions
               </Link>
             </div>
           ) : null}

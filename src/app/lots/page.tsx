@@ -5,8 +5,8 @@ import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
-import { BRAND_CODES, listLots } from "@/lib/domain/lots/service";
-import { listOrigins } from "@/lib/domain/origins/service";
+import { ACTIVE_BRANDS, BRAND_CODES, listLots } from "@/lib/domain/lots/service";
+import { listOrigins, originLabel } from "@/lib/domain/origins/service";
 import { todayIso } from "../shipments/labels";
 
 const SOURCE_LABEL: Record<string, string> = { packaging_report: "packaging report", production_tab: "Production tab (import)", bol_log_backfill: "BOL log backfill" };
@@ -59,14 +59,13 @@ export default async function LotsPage({ searchParams }: { searchParams: SearchP
             .filter((o) => o.kind === "brewery")
             .map((o) => (
               <option key={o.id} value={o.id}>
-                {o.lotFacilityCode ? `${o.lotFacilityCode} ` : ""}
-                {o.name}
+                {originLabel(o)}
               </option>
             ))}
         </Select>
         <Select name="brand" defaultValue={brand ?? ""} aria-label="Brand">
           <option value="">All brands</option>
-          {BRAND_CODES.map((b) => (
+          {ACTIVE_BRANDS.map((b) => (
             <option key={b.code} value={b.code}>
               {b.code} {b.name}
             </option>

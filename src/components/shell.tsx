@@ -24,13 +24,11 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField },
     { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField },
     { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField },
-    { href: "/field", label: "My route", show: roles.includes("driver_service"), frequent: true },
+    { href: "/field", label: "My stops", show: roles.includes("driver_service"), frequent: true },
     { href: "/locations", label: "Accounts", show: can(actor, "location.view") && !isField, frequent: true },
     { href: "/orders", label: "Orders", show: can(actor, "order.view") && !isField, frequent: true },
-    { href: "/admin", label: "Command center", show: can(actor, "exception.view") && (can(actor, "exception.manage") || can(actor, "allocation.resolve")), frequent: !isSalesOnly },
-    { href: "/samples", label: "Samples", show: can(actor, "sample.record") },
     { href: "/products", label: "Products", show: can(actor, "catalog.view") },
-    { href: "/admin/exceptions", label: "Exceptions", show: can(actor, "exception.view") && !isSalesOnly },
+    { href: "/admin/exceptions", label: "Exceptions", show: can(actor, "exception.view") && !isSalesOnly, frequent: !isSalesOnly },
     { href: "/admin/notices", label: "Notices", show: can(actor, "notice.view") && !isSalesOnly },
     { href: "/admin/intake", label: "Email intake", show: can(actor, "intake.handle") },
     { href: "/admin/markets", label: "Markets & stock", show: can(actor, "stock.record") },
@@ -42,7 +40,7 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/finance", label: "Finance", show: can(actor, "finance.view") },
     { href: "/owner/decisions", label: "Decisions", show: can(actor, "decision.view") },
     { href: "/integrations", label: "Integrations", show: can(actor, "integration.view") },
-    { href: "/reports/microstar", label: "Reports", show: can(actor, "report.export") },
+    { href: "/reports/microstar", label: "MicroStar report", show: can(actor, "report.export") },
     { href: "/search", label: "Search", show: true, frequent: isSalesOnly || isField },
   ].filter((n) => n.show);
 }
@@ -55,13 +53,12 @@ export function navFor(actor: Actor): NavItem[] {
  */
 const SECTIONS: Array<{ key: string; label: string; pages: Array<{ href: string; also?: string[] }> }> = [
   { key: "accounts", label: "Accounts", pages: [{ href: "/locations" }] },
-  { key: "orders", label: "Orders", pages: [{ href: "/orders" }, { href: "/samples" }, { href: "/admin/intake" }] },
+  { key: "orders", label: "Orders", pages: [{ href: "/orders", also: ["/samples"] }, { href: "/admin/intake" }] },
   { key: "shipments", label: "Shipments", pages: [{ href: "/shipments" }] },
   { key: "stock", label: "Stock", pages: [{ href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
   { key: "invoices", label: "Invoices", pages: [{ href: "/invoices" }, { href: "/finance" }] },
-  { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }] },
-  { key: "exceptions", label: "Exceptions", pages: [{ href: "/admin" }, { href: "/admin/exceptions" }, { href: "/admin/notices" }] },
-  { key: "reports", label: "Reports", pages: [{ href: "/reports/microstar", also: ["/reports"] }] },
+  { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }, { href: "/reports/microstar", also: ["/reports"] }] },
+  { key: "exceptions", label: "Exceptions", pages: [{ href: "/admin/exceptions", also: ["/admin"] }, { href: "/admin/notices" }] },
   {
     key: "admin",
     label: "Admin",

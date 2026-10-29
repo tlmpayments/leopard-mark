@@ -3,6 +3,7 @@
 import { num, opt, runAction, str } from "@/lib/actions/helpers";
 import {
   confirmShipment,
+  correctDelivery,
   deliverShipment,
   markShipmentOut,
   receiveTransfer,
@@ -51,10 +52,28 @@ export async function saveLogisticsAction(form: FormData) {
   });
 }
 
+/** Per-line outcome fields delivered:<lineId>, refused:<lineId>, damaged:<lineId>, damageReason:<lineId> (R2-8, R2-9). */
+function outcomeLinesFrom(form: FormData) {
+  const lines: Array<{ lineId: string; deliveredQty: number; refusedQty: number; damagedQty: number; damageReason: string | null }> = [];
+  for (const [k, v] of form.entries()) {
+    if (!k.startsWith("delivered:") || typeof v !== "string") continue;
+    const lineId = k.slice("delivered:".length);
+    const n = (key: string) => {
+      const t = str(form, `${key}:${lineId}`);
+      if (t === "") return 0;
+      const x = Number(t);
+      if (!Number.isInteger(x) || x < 0) throw new BusinessError("Quantities are whole numbers of zero or more", { field: `${key}:${lineId}` });
+      return x;
+    };
+    lines.push({ lineId, deliveredQty: n("delivered"), refusedQty: n("refused"), damagedQty: n("damaged"), damageReason: opt(form, `damageReason:${lineId}`) });
+  }
+  return lines;
+}
+
 export async function confirmAction(form: FormData) {
   const id = str(form, "shipmentId");
   return runAction(`/shipments/${id}`, async ({ db, actor }) => {
-    const s = await confirmShipment(db, actor, id);
+    const s = await confirmShipment(db, actor, id, { scheduledDate: opt(form, "scheduledDate") });
     return `Confirmed as ${s.number}; stock allocated, BOL and picking ticket stored${(s.type === "D" || s.type === "S") && s.destinationLocationId ? ", invoice draft created" : ""}`;
   });
 }
@@ -79,20 +98,34 @@ export async function deliverAction(form: FormData) {
   const id = str(form, "shipmentId");
   return runAction(`/shipments/${id}`, async ({ db, actor }) => {
     const withPickup = form.has("halfIn") || form.has("sixtelIn");
+    const perLine = form.has("perLine") ? outcomeLinesFrom(form) : null;
     const s = await deliverShipment(db, actor, id, {
       actualDate: str(form, "actualDate"),
       kegPickup: withPickup ? { halfIn: opt(form, "halfIn") ? num(form, "halfIn") : 0, sixtelIn: opt(form, "sixtelIn") ? num(form, "sixtelIn") : 0 } : null,
       note: opt(form, "note"),
+      lines: perLine && perLine.length ? perLine : null,
     });
-    return `Delivered ${s.actualDate}; stock depleted at the origin${(s.type === "D" || s.type === "S") && s.destinationLocationId ? ", keg balance and invoice updated" : s.type === "T" ? ", stock in transit at the destination until received" : ""}`;
+    const exceptions = perLine?.filter((l) => l.refusedQty || l.damagedQty) ?? [];
+    const ok = `${s.number} delivered ${s.actualDate}; stock depleted at the origin for what was kept${exceptions.length ? ` (${exceptions.length} line${exceptions.length === 1 ? "" : "s"} refused or damaged)` : ""}${(s.type === "D" || s.type === "S") && s.destinationLocationId ? ", keg balance and invoice updated" : s.type === "T" ? ", stock in transit at the destination until received" : ""}`;
+    const returnTo = str(form, "returnTo");
+    return returnTo === "/field" ? { ok, redirectTo: "/field" } : ok;
   });
 }
 
 export async function voidAction(form: FormData) {
   const id = str(form, "shipmentId");
   return runAction(`/shipments/${id}`, async ({ db, actor }) => {
-    const s = await voidShipment(db, actor, id, str(form, "reason"));
-    return s.number ? `Voided; ${s.number} stays as a permanent gap and allocations are released` : "Draft voided";
+    const order = str(form, "order") === "cancel" ? "cancel" : "reopen";
+    const s = await voidShipment(db, actor, id, str(form, "reason"), { order });
+    return s.number ? `Voided; ${s.number} stays as a permanent gap and stock is released${order === "cancel" ? "; the order is cancelled" : "; the order is open again"}` : "Draft voided";
+  });
+}
+
+export async function correctDeliveryAction(form: FormData) {
+  const id = str(form, "shipmentId");
+  return runAction(`/shipments/${id}`, async ({ db, actor }) => {
+    await correctDelivery(db, actor, id, { lines: outcomeLinesFrom(form), reason: str(form, "reason") });
+    return "Delivery corrected; stock, keg balance and the invoice follow the corrected quantities";
   });
 }
 

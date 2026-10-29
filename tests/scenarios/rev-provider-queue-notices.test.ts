@@ -244,7 +244,7 @@ describe("REV-18 / AC27 — manual notices are a real workflow", () => {
   it("pending → sent with evidence (once); failed → owned follow-up; missing recipient owned; re-issue supersedes; no automatic sender", async () => {
     const loc = await payerReadyLocation("Notice Nook");
     await recordLicenseDecision(db, f.admin, { locationId: loc.id, state: "verified", licenseNumber: "L", evidence: "e" });
-    const o = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
     const [n] = await db.select().from(schema.notice).where(and(eq(schema.notice.subjectType, "order"), eq(schema.notice.subjectId, o.order.id)));
     expect(n.state).toBe("manual_pending");
     expect(n.intendedSender).toBe("unselected");
@@ -273,7 +273,7 @@ describe("REV-18 / AC27 — manual notices are a real workflow", () => {
     // Missing recipient → owned case for Sales.
     const bare = (await makeLocation(db, f.sales, f.market.id, "No Email Bar", { buyer: { name: "No Mail" }, ap: null })).location;
     await recordLicenseDecision(db, f.admin, { locationId: bare.id, state: "verified", licenseNumber: "L", evidence: "e" });
-    const o2 = await submitOrder(db, f.sales, { locationId: bare.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
+    const o2 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: bare.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
     const [n2] = await db.select().from(schema.notice).where(eq(schema.notice.subjectId, o2.order.id));
     expect(n2.recipientEmail).toBeNull();
     const [nc] = await db.select().from(schema.exceptionCase).where(eq(schema.exceptionCase.dedupeKey, `notice_no_recipient:${n2.id}`));
@@ -290,7 +290,7 @@ describe("REV-18 / AC27 — manual notices are a real workflow", () => {
   it("cancelling an order before its 'order received' notice was sent withdraws the pending notice (kept as superseded, never deleted) and its missing-recipient case", async () => {
     const bare = (await makeLocation(db, f.sales, f.market.id, "Withdrawn Notice Bar", { buyer: { name: "No Mail" }, ap: null })).location;
     await recordLicenseDecision(db, f.admin, { locationId: bare.id, state: "verified", licenseNumber: "L", evidence: "e" });
-    const o = await submitOrder(db, f.sales, { locationId: bare.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: bare.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
     const [pending] = await db.select().from(schema.notice).where(eq(schema.notice.subjectId, o.order.id));
     expect(pending.state).toBe("manual_pending");
     await cancelUndeliveredDemand(db, f.admin, o.order.id, "customer withdrew");
@@ -324,7 +324,7 @@ describe("§4.8 / AC29 / AC30 — incidents, targeted resolution, repeated follo
     expect((await resolveHold(db, f.admin, h1.id, "again")).active).toBe(false);
     expect((await db.select().from(schema.auditEvent).where(and(eq(schema.auditEvent.action, "hold.resolve"), eq(schema.auditEvent.subjectId, loc.id)))).length).toBe(1);
     // Stock follow-through repeated: receipts refill exactly the waiting demand, once per logical effect.
-    const short = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 25 }] });
+    const short = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 25 }] });
     expect(short.lines[0].unmetQty).toBeGreaterThan(0);
     const { recordStockMovement } = await import("@/lib/domain/allocation/service");
     await recordStockMovement(db, f.admin, { warehouseId: f.warehouse.id, skuId: f.skus.sunlightHalf.id, kind: "receipt", qtyDelta: 100, evidence: "delivery" });

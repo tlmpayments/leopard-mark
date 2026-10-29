@@ -190,6 +190,9 @@ export async function generateStandingOccurrences(db: DbOrTx, actor: Actor, now 
           locationId: loc.id,
           lines: orderable.map((l) => ({ skuId: l.skuId, qty: l.qty })),
           source: "standing",
+          // Nobody is at the keyboard when a standing order generates: a short origin holds the order for the office (R2-5).
+          shortfallDecision: "hold",
+          shortfallReason: "Standing order generated while the origin was short; the office decides",
           submissionKey: `standing:${arr.id}:${cycleKey}`,
           standingOccurrenceId: occ.id,
           repEmployeeId: loc.currentRepEmployeeId,

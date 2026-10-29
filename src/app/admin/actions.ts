@@ -12,6 +12,7 @@ import { confirmSellerContext, createMarket, createWarehouse } from "@/lib/domai
 import { addExceptionNote, reopenException, transitionException, type ExceptionState } from "@/lib/exceptions/service";
 import { runDueJobs } from "@/lib/jobs/queue";
 import "@/lib/integrations/stripe/adapter";
+import "@/lib/domain/pullsheet/service"; // registers the pull sheet send handler (R2-29)
 
 // --- exceptions ---
 export async function transitionExceptionAction(form: FormData) {
@@ -189,7 +190,15 @@ export async function convertIntakeAction(form: FormData) {
   return runAction("/admin/intake", async ({ db, actor }) => {
     const lines: Array<{ skuId: string; qty: number }> = [];
     for (const [k, v] of form.entries()) if (k.startsWith("qty:") && typeof v === "string" && Number(v) > 0) lines.push({ skuId: k.slice(4), qty: Number(v) });
-    const res = await convertIntakeToOrder(db, actor, { intakeId: id, locationId: str(form, "locationId"), lines, requestedDate: opt(form, "requestedDate") });
+    const decision = str(form, "shortfallDecision");
+    const res = await convertIntakeToOrder(db, actor, {
+      intakeId: id,
+      locationId: str(form, "locationId"),
+      lines,
+      requestedDate: opt(form, "requestedDate"),
+      shortfallDecision: decision === "ship_available" || decision === "hold" ? decision : null,
+      shortfallReason: opt(form, "shortfallReason"),
+    });
     return { ok: `Converted to ${res.order.orderNumber}`, redirectTo: `/orders/${res.order.id}` };
   });
 }

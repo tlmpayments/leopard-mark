@@ -1,7 +1,7 @@
 "use server";
 
 import { opt, runAction, str } from "@/lib/actions/helpers";
-import { confirmLotQuantities, recordPackagingReport } from "@/lib/domain/lots/service";
+import { addPackagingDay, confirmLotQuantities, recordPackagingReport } from "@/lib/domain/lots/service";
 
 /** qty:<skuId> inputs; blank means the SKU was not packaged in this run and is left off the report. */
 function quantitiesFrom(form: FormData): Array<{ skuId: string; qty: number }> {
@@ -26,6 +26,15 @@ export async function recordPackagingReportAction(form: FormData) {
       quantitiesKnown: !unknown,
     });
     return { ok: `Lot ${lot.lotCode} recorded${unknown ? "; quantities to confirm with the host" : ""}`, redirectTo: `/lots/${lot.id}` };
+  });
+}
+
+/** Packaging that ran over into a second day (R2-21): quantities added to the same lot, dated the day they were packaged. */
+export async function addPackagingDayAction(form: FormData) {
+  const id = str(form, "lotId");
+  return runAction(`/lots/${id}`, async ({ db, actor }) => {
+    const lot = await addPackagingDay(db, actor, id, { packagedOn: str(form, "packagedOn"), quantities: quantitiesFrom(form), note: opt(form, "note") });
+    return `Packaging day added to ${lot.lotCode}; totals and stock updated`;
   });
 }
 

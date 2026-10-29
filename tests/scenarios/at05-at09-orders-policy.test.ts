@@ -36,7 +36,7 @@ describe("AT05 — D01 unresolved", () => {
     await db.insert(schema.deliveryVisit).values({ locationId: loc.id, deliveryDate: "2026-09-10", outcome: "accepted", acceptedMerchandiseCents: 18000, acceptedKegCount: 0 });
     // Even with a "method usable" provider status, D01 stays unresolved.
     await db.update(schema.paymentRelationship).set({ setupState: "method_usable", channel: "stripe_ach" }).where(eq(schema.paymentRelationship.locationId, loc.id));
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 4 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 4 }] });
     expect(res.order.demandState).toBe("submitted"); // demand retained
     const readiness = await evaluateLocationReadiness(db, loc.id);
     const rule = readiness.conditions.find((c) => c.code === "delivery_rule")!;
@@ -75,7 +75,7 @@ describe("AT06 — Order under payment hold", () => {
     const manual = await createHold(db, f.admin, { locationId: loc.id, kind: "admin_manual", cause: "Customer asked to pause deliveries" });
     // Payment-failure holds cannot be hand-made (they come from definitive provider evidence).
     await expect(createHold(db, f.admin, { locationId: loc.id, kind: "payment_failure", cause: "x" })).rejects.toThrow(/definitive provider evidence/);
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }] });
     expect(res.lines[0].reservedQty).toBe(2); // consumed allocation normally
     let readiness = await evaluateLocationReadiness(db, loc.id);
     expect(readiness.conditions.filter((c) => c.code.startsWith("hold:") && c.status === "blocked")).toHaveLength(2);
@@ -114,7 +114,7 @@ describe("AT07 — Minimum edge cases", () => {
 
   it("a below-minimum order is captured and flagged for Admin, not rejected", async () => {
     const loc = await verifiedLocation("Small Order Snug");
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 2 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 2 }] });
     expect(res.minimum.verdict).toBe("below");
     const cases = await db.select().from(schema.exceptionCase).where(eq(schema.exceptionCase.dedupeKey, `below_minimum:${res.order.id}`));
     expect(cases).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("AT07 — Minimum edge cases", () => {
 describe("AT08 — Price-change edge", () => {
   it("Sales cannot override; a later market price change leaves the submitted price history intact; additions with a price question are held for D12", async () => {
     const loc = await verifiedLocation("Price Point Pub");
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
     expect(res.lines[0].unitPriceCentsAtSubmission).toBe(3600);
     await expect(setMarketPrice(db, f.sales, { marketId: f.market.id, skuId: f.skus.cantinescaCase.id, priceCents: 100 })).rejects.toBeInstanceOf(AuthorizationError);
     await setMarketPrice(db, f.admin, { marketId: f.market.id, skuId: f.skus.cantinescaCase.id, priceCents: 3900, reason: "Q4 list" });
@@ -154,17 +154,17 @@ describe("AT08 — Price-change edge", () => {
 
   it("repeat-last-order shows changes and never resurrects an archived SKU", async () => {
     const loc = await verifiedLocation("Repeat Rathskeller");
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }, { skuId: f.skus.cantinescaSixtel.id, qty: 1 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }, { skuId: f.skus.cantinescaSixtel.id, qty: 1 }] });
     await setMarketPrice(db, f.admin, { marketId: f.market.id, skuId: f.skus.sunlightCase.id, priceCents: 4400 });
     const tempSku = await (await import("@/lib/domain/catalog/service")).createSku(db, f.admin, { code: "TMP-1", name: "Seasonal", brand: "Cantinesca", packageKind: "case_12oz_can", sellingUnit: "case" });
     await setMarketPrice(db, f.admin, { marketId: f.market.id, skuId: tempSku.id, priceCents: 3000 });
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }, { skuId: tempSku.id, qty: 1 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightCase.id, qty: 2 }, { skuId: tempSku.id, qty: 1 }] });
     await archiveSku(db, f.admin, tempSku.id, "season over");
     const preview = await repeatLastOrderPreview(db, loc.id);
     expect(preview.lines.find((l) => l.skuId === tempSku.id)?.change).toBe("archived");
     expect(preview.lines.find((l) => l.skuId === tempSku.id)?.orderable).toBe(false);
     expect(preview.lines.find((l) => l.skuId === f.skus.sunlightCase.id)?.change).toBe("none");
-    await expect(submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: tempSku.id, qty: 1 }] })).rejects.toThrow(/archived/);
+    await expect(submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: tempSku.id, qty: 1 }] })).rejects.toThrow(/archived/);
     await setMarketPrice(db, f.admin, { marketId: f.market.id, skuId: f.skus.sunlightCase.id, priceCents: 4200 });
   });
 });

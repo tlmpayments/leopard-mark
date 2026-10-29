@@ -77,7 +77,7 @@ run("Real-Postgres concurrency", () => {
   it("AC10 — concurrent submissions never over-reserve; total reserved ≤ on hand; unmet retained", async () => {
     const sku = await freshSku("R-AC10", 10);
     const locs = await Promise.all([1, 2, 3, 4, 5].map((i) => verifiedLocation(`Race Loc ${i}`)));
-    const results = await settled(locs.map((l) => submitOrder(db, f.sales, { locationId: l.id, lines: [{ skuId: sku.id, qty: 4 }] })));
+    const results = await settled(locs.map((l) => submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: l.id, lines: [{ skuId: sku.id, qty: 4 }] })));
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
     const a = await availability(db, f.warehouse.id, sku.id);
     expect(a.reservedQty).toBe(10);
@@ -89,7 +89,7 @@ run("Real-Postgres concurrency", () => {
   it("AC11 — concurrent amendment and cancellation: one wins, no reservation survives on a cancelled order", async () => {
     const sku = await freshSku("R-AC11");
     const loc = await verifiedLocation("Amend vs Cancel");
-    const o = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 4 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 4 }] });
     const r = await settled([cancelUndeliveredDemand(db, f.admin, o.order.id, "cancel"), adminAmendQuantity(db, f.admin, o.lines[0].id, 6, "amend")]);
     const after = await getOrder(db, o.order.id);
     if (after?.order.demandState === "cancelled") {
@@ -104,7 +104,7 @@ run("Real-Postgres concurrency", () => {
   it("AC12 — the same submission key fired simultaneously produces exactly one order", async () => {
     const sku = await freshSku("R-AC12");
     const loc = await verifiedLocation("Double Click Deli");
-    const input = { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "dbl-1" };
+    const input = { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "dbl-1", shortfallDecision: "ship_available" as const, shortfallReason: "test: ships what is on hand" };
     const r = await settled([submitOrder(db, f.sales, input), submitOrder(db, f.sales, input), submitOrder(db, f.sales, input)]);
     expect(r.every((x) => x.status === "fulfilled")).toBe(true);
     const ids = new Set(r.map((x) => (x as PromiseFulfilledResult<Awaited<ReturnType<typeof submitOrder>>>).value.order.id));

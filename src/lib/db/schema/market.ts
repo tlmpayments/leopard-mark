@@ -43,6 +43,8 @@ export const stockMovementKindEnum = pgEnum("stock_movement_kind", [
   "shipment_out",
   /** Physical count applied: brings on hand to the counted total (8.1). */
   "count",
+  /** Packaging run recorded: packaged units go on hand at the brewery (R2-21). */
+  "packaging",
 ]);
 
 /** Origin kinds (2.4, 2.2): a brewery is also a lot facility; warehouses and cold storage hold stock only. */
@@ -74,6 +76,8 @@ export const market = pgTable("market", {
   cod: boolean("cod").notNull().default(false),
   /** Sheet regions become a sub-list under the market (2.1). */
   regionList: text("region_list").array(),
+  /** Optional route days for the market (R2-4), e.g. ["Tue", "Thu"]; none required. */
+  routeDays: text("route_days").array(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -109,6 +113,9 @@ export const warehouse = pgTable(
     shippingContactName: text("shipping_contact_name"),
     shippingContactEmail: text("shipping_contact_email"),
     shippingContactPhone: text("shipping_contact_phone"),
+    /** End-of-day pull sheet recipient and local send time, HH:MM (R2-29); used only when the company switch is on. */
+    pullSheetEmail: text("pull_sheet_email"),
+    pullSheetSendTime: text("pull_sheet_send_time"),
     addressLine1: text("address_line1"),
     addressLine2: text("address_line2"),
     addressCity: text("address_city"),

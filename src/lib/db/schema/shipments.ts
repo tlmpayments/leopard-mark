@@ -63,6 +63,8 @@ export const brewBatch = pgTable(
     batchNumber: text("batch_number").notNull().unique(), // B01CNT26001
     brewDate: date("brew_date"),
     vesselSize: text("vessel_size"),
+    /** Batch size in barrels from the brewer's report (R2-26); the packaging report shows packaged total and loss against it (R2-22). */
+    barrels: numeric("barrels", { precision: 8, scale: 2 }),
     status: batchStatusEnum("status").notNull().default("scheduled"),
     statusReason: text("status_reason"),
     statusChangedOn: date("status_changed_on"),
@@ -100,7 +102,30 @@ export const lot = pgTable(
   (t) => [index("lot_facility_idx").on(t.facilityWarehouseId, t.packagingDate)],
 );
 
-/** Quantities packaged per SKU in a lot (4.3). */
+/**
+ * One packaging day on a lot (R2-21): a lot is dated its first packaging day and quantities are added as packaged;
+ * each entry posts the inbound stock movement at the brewery. lot_sku_qty holds the running totals.
+ */
+export const lotPackagingEntry = pgTable(
+  "lot_packaging_entry",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    lotId: uuid("lot_id")
+      .notNull()
+      .references(() => lot.id),
+    packagedOn: date("packaged_on").notNull(),
+    skuId: uuid("sku_id")
+      .notNull()
+      .references(() => sku.id),
+    qty: integer("qty").notNull(),
+    note: text("note"),
+    recordedByEmployeeId: uuid("recorded_by_employee_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("lot_packaging_entry_lot_idx").on(t.lotId, t.packagedOn)],
+);
+
+/** Quantities packaged per SKU in a lot (4.3): the running total across packaging days (R2-21). */
 export const lotSkuQty = pgTable(
   "lot_sku_qty",
   {
@@ -148,7 +173,8 @@ export const shipment = pgTable(
     /** Will-call: picked up at the origin (legacy P) — type stays D (5.5). */
     pickup: boolean("pickup").notNull().default(false),
     template: shipmentTemplateEnum("template").notNull().default("retail"),
-    scheduledDate: date("scheduled_date").notNull(),
+    /** Set by the office at confirmation (R2-3); a draft created from an order carries none until then. */
+    scheduledDate: date("scheduled_date"),
     actualDate: date("actual_date"),
     status: shipmentStatusEnum("status").notNull().default("draft"),
     poNumbers: text("po_numbers").array(),
@@ -211,6 +237,13 @@ export const shipmentLine = pgTable(
     weightLb: numeric("weight_lb", { precision: 10, scale: 2 }),
     /** Reason given when the lot's quantities are not yet confirmed (4.6). */
     lotReason: text("lot_reason"),
+    /** Recorded at delivery (R2-8, R2-9): what the receiver accepted, refused (back to origin stock) and what was damaged (adjusted out with a reason). Null until delivered. */
+    deliveredQty: integer("delivered_qty"),
+    refusedQty: integer("refused_qty").notNull().default(0),
+    damagedQty: integer("damaged_qty").notNull().default(0),
+    damageReason: text("damage_reason"),
+    /** The order line this shipment line fulfils when the shipment was created from an order (R2-1). */
+    orderLineId: uuid("order_line_id"),
   },
   (t) => [index("shipment_line_shipment_idx").on(t.shipmentId)],
 );
@@ -389,6 +422,8 @@ export const kegEvent = pgTable(
 // ---------------------------------------------------------------------------
 
 export const invoiceSeriesEnum = pgEnum("invoice_series", ["INV", "NC"]);
+/** How the account pays, copied from the account at issue (R2-12); collection itself stays outside the system. */
+export const payByEnum = pgEnum("pay_by", ["fintech", "stripe", "check"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "paid", "void"]);
 
 export const invoice = pgTable(
@@ -411,6 +446,8 @@ export const invoice = pgTable(
     termsDays: integer("terms_days"),
     /** "FOB brewery or designated warehouse" for distributors; null for retail (7.7). */
     fobWording: text("fob_wording"),
+    /** The account's payment channel at issue (R2-12). */
+    payBy: payByEnum("pay_by"),
     subtotalCents: integer("subtotal_cents").notNull().default(0),
     depositCents: integer("deposit_cents").notNull().default(0),
     totalCents: integer("total_cents").notNull().default(0),
@@ -446,6 +483,33 @@ export const invoiceLine = pgTable(
     lineTotalCents: integer("line_total_cents").notNull().default(0),
   },
   (t) => [index("invoice_line_invoice_idx").on(t.invoiceId)],
+);
+
+/**
+ * A credit memo against an issued invoice (R2-14): its own CM series, a reason, Owner or Admin approval, used rarely.
+ * The original invoice is never changed; the memo records the amount credited and why.
+ */
+export const creditMemo = pgTable(
+  "credit_memo",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    number: text("number").notNull().unique(), // CM26001
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoice.id),
+    locationId: uuid("location_id").references(() => customerLocation.id),
+    marketId: uuid("market_id").references(() => market.id),
+    amountCents: integer("amount_cents").notNull(),
+    reason: text("reason").notNull(),
+    memoDate: date("memo_date").notNull(),
+    status: text("status").notNull().default("issued"), // issued | void
+    issuedByEmployeeId: uuid("issued_by_employee_id"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    voidedByEmployeeId: uuid("voided_by_employee_id"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidReason: text("void_reason"),
+  },
+  (t) => [index("credit_memo_invoice_idx").on(t.invoiceId)],
 );
 
 export const invoiceShipment = pgTable(
@@ -503,6 +567,8 @@ export const companySettings = pgTable("company_settings", {
   /** Print remit-to details on invoices; off by default (7.9). */
   printRemitTo: boolean("print_remit_to").notNull().default(false),
   remitTo: text("remit_to"),
+  /** End-of-day pull sheets go to each warehouse's address at its send time when on (R2-29); off by default, ships off. */
+  autoSendPullSheets: boolean("auto_send_pull_sheets").notNull().default(false),
   updatedByEmployeeId: uuid("updated_by_employee_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

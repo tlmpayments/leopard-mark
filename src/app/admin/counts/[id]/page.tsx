@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
-import { Button, Card, Flash, KV, Notice, Page, StatusBadge, Table, fmtDate, fmtDay } from "@/components/ui";
+import { Button, Card, Field, Flash, Input, KV, Notice, Page, StatusBadge, Table, fmtDate, fmtDay } from "@/components/ui";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
+import { originLabel } from "@/lib/domain/origins/service";
 import { getCountSession } from "@/lib/domain/counts/service";
 import { warehouseAvailability } from "@/lib/domain/allocation/service";
 import { applyCountSessionAction } from "../actions";
@@ -36,7 +37,7 @@ export default async function CountPage({ params, searchParams }: { params: Prom
     >
       <Flash {...flash} />
       <Card title="Sheet">
-        <KV items={[["Origin", warehouse ? `${warehouse.originCode ? warehouse.originCode + " · " : ""}${warehouse.name}` : "—"], ["Counted on", fmtDay(session.countedOn)], ["Counted by", session.countedBy], ["Note", session.note], ["Entered", fmtDate(session.createdAt)], ["Applied", session.appliedAt ? fmtDate(session.appliedAt) : "not yet"]]} />
+        <KV items={[["Origin", warehouse ? originLabel(warehouse) : "—"], ["Counted on", fmtDay(session.countedOn)], ["Counted by", session.countedBy], ["Note", session.note], ["Entered", fmtDate(session.createdAt)], ["Applied", session.appliedAt ? fmtDate(session.appliedAt) : "not yet"]]} />
       </Card>
       <Card title="Lines">
         <Table caption="Count lines" head={["SKU", "Product", "Lot code", "Counted"]} rows={lines.map(({ l, sku }) => [<span key="c" className="font-mono text-xs">{sku.code}</span>, `${sku.brand} ${sku.name}`, l.lotCode ?? "—", String(l.qty)])} />
@@ -53,10 +54,13 @@ export default async function CountPage({ params, searchParams }: { params: Prom
           })}
         />
         {session.status === "draft" ? (
-          <form action={applyCountSessionAction} className="mt-3">
+          <form action={applyCountSessionAction} className="mt-3 flex flex-wrap items-end gap-2">
             <input type="hidden" name="sessionId" value={session.id} />
+            <Field label="Reason for variances" hint="Required when the count differs from the ledger; goes on each adjustment (R2-23).">
+              <Input name="reason" defaultValue={session.note ?? ""} placeholder="e.g. month-end count, two cases found behind the cooler" className="w-96" />
+            </Field>
             <Button>Apply count</Button>
-            <p className="mt-1 text-xs text-muted">One count movement per SKU brings on hand to the counted total; waiting demand is re-filled oldest first when stock increases. Applying is recorded once and audited (9.8).</p>
+            <p className="w-full text-xs text-muted">One count movement per SKU brings on hand to the counted total, with the reason; waiting demand is re-filled oldest first when stock increases. Applying is recorded once and audited (9.8).</p>
           </form>
         ) : (
           <Notice tone="good">Applied {fmtDate(session.appliedAt)}.</Notice>

@@ -55,7 +55,8 @@ export const ACTIONS = {
   "exception.view": ["admin", "accounting", "sales"],
   "exception.manage": ["admin", "accounting"],
   // --- finance (phase 3/4 powers named by the brief; kept for authority correctness) ---
-  "credit.issue": ["admin", "accounting"],
+  /** Credit memos (R2-14): the Owner or the back office (admin) only. */
+  "credit.issue": ["admin"],
   "credit.request": ["admin", "accounting", "sales"],
   "finance.view": ["admin", "accounting"],
   // --- customer notices (manual single-sender process; D32/IG04 unselected) ---
@@ -74,7 +75,8 @@ export const ACTIONS = {
   "shipment.view": ["admin", "accounting", "sales", "driver_service"],
   "shipment.manage": ["admin"],
   "shipment.confirm": ["admin"],
-  "shipment.deliver": ["admin"],
+  /** Driver/Service marks its own assigned stops delivered from the phone (R2-38); the office may deliver or correct any. */
+  "shipment.deliver": ["admin", "driver_service"],
   "shipment.void": ["admin"],
   "shipment.receive": ["admin"],
   "lot.view": ["admin", "accounting", "sales"],
@@ -100,6 +102,6 @@ export const ACTION_LABEL: Partial<Record<Action, string>> = {
   "decision.select_production": "Select production business policy (Owner only)",
   "location.billing_email.approve": "Approve billing-email changes",
   "hold.override": "Override a delivery hold (audited)",
-  "credit.issue": "Issue reason-coded credits",
+  "credit.issue": "Issue credit memos (Owner or back office)",
   "order.cancel_undelivered": "Cancel undelivered demand (D10 pending for Sales)",
 };

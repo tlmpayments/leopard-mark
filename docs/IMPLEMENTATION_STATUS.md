@@ -273,6 +273,15 @@ fit; Google content rights; QBO model; Slack no-mutation. A person records demon
 
 ## 6. Deferred / future scope
 
+Round 2 (October 28 answers, R2-1 to R2-38) is built on branch `round2` with migration `0005_round2`; see
+`SHIPMENTS_SPEC.md` section 9 for the decision-by-decision account. Deferred by that brief and still not built:
+rep self-entry of orders, invoice sending and collection (Fintech, Stripe) and payment status, QuickBooks, parent
+organisations (the import lists groupings only), keg tracking beyond self-distribution balances and the MicroStar
+export, line cleaning, route optimisation, proof of delivery and photos, Northeast / Texas / Rhode Island go-live,
+section 11.2 to 11.7, the decision-register entries for the October 28 policy answers, and low-stock alerts
+(R2-24). The end-of-day pull sheet's email transport is not built: the company switch is off by default and a
+switched-on send waits with a case rather than sending.
+
 Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
 phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution
 view beyond assigned stops, proof of delivery, line cleaning / service (10.7), credits and collections, host

@@ -22,7 +22,7 @@ export const STATUS_PRESENTATION: Record<string, { label: string; tone: Tone }> 
   "not releasable": { label: "Not releasable", tone: "warn" },
   // location / license / payment
   active: { label: "Active", tone: "good" },
-  inactive: { label: "Inactive", tone: "warn" },
+  inactive: { label: "Inactive (retired status)", tone: "warn" },
   closed: { label: "Closed", tone: "danger" },
   unverified: { label: "Not verified", tone: "warn" },
   pending_review: { label: "Pending review", tone: "warn" },
@@ -41,7 +41,8 @@ export const STATUS_PRESENTATION: Record<string, { label: string; tone: Tone }> 
   revoked: { label: "Revoked", tone: "danger" },
   unknown: { label: "Unknown", tone: "warn" },
   // orders / demand
-  submitted: { label: "Recorded", tone: "info" },
+  submitted: { label: "Open", tone: "info" },
+  held: { label: "Held", tone: "warn" },
   partially_fulfilled: { label: "Partly delivered", tone: "info" },
   fulfilled: { label: "Delivered", tone: "good" },
   cancelled: { label: "Cancelled", tone: "danger" },

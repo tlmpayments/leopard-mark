@@ -184,3 +184,34 @@ and one run character per report, no two-date rule (`recordPackagingReport`); **
 collection) — issue, PDF and manual *Mark paid* only, no sender, no provider payment; **2.3** Envision / SC
 Warehouses — imported inactive without codes, refused as origins until activated (`validateHeader`). Section
 11 beyond 11.1 is on hold and has no code.
+
+## 6. Round 2 (decisions R2-1 to R2-38)
+
+Rules come from the owner's October 28 answers (brief "Changes to build"); `SHIPMENTS_SPEC.md` section 9 states
+each. Migration `0005_round2`. Tests are `tests/scenarios/round2-orders.test.ts` (R2 describe titles),
+`round2-amend.test.ts`, the updated `shipments.test.ts` (R2-15, R2-23, R2-25) and browser journeys 12 to 18.
+
+| Decision | Source (file and function) | Tests |
+|---|---|---|
+| R2-1, R2-3 | `orders/service.ts` `submitOrder`, `createDraftShipmentForOrder`, `createShipmentForOrder`, `syncDraftShipmentLine`; `shipments/service.ts` `confirmShipment` (date, `commitReservationsForShipmentLines`); `src/app/orders/new/*`, `src/app/orders/[id]/page.tsx` | round2 › R2-1, R2-3, R2-11, R2-12; round2-amend; journeys 12, 14 |
+| R2-2, R2-6, R2-11, R2-12 | `orders/service.ts` `ORDER_SOURCE_LABEL`, `minimumAppliesTo`; `invoices/service.ts` `issueInvoice` (`payBy`) | round2 › the $90 minimum applies to rep orders only; a PO order needs its PO number; journey 14 |
+| R2-4 | `markets/billing.ts` `routeDays`; order form hint | — (display) |
+| R2-5 | `orders/service.ts` `shortfallFor`, `previewOrderShortfall`, `ShortfallError`, `releaseHeldOrder`; `standing/service.ts` (hold); `src/app/orders/actions.ts` `submitOrderFormAction` | round2 › R2-5: never short silently (both); journey 15 |
+| R2-7 | `shipments/service.ts` `voidShipment` (order reopen/cancel), `allocation/service.ts` `uncommitReservationsForOrderLines`; `orders/service.ts` `cancelUndeliveredDemand` (voids a draft) | round2 › R2-7: void after confirmation (both); journey 3 |
+| R2-8, R2-9, R2-38 | `shipments/service.ts` `resolveDeliveredLines`, `deliverShipment`, `recordOrderDelivery`, `correctDelivery`; `allocation/service.ts` `fulfilReservationsForOrderLines`; `kegs/service.ts` `recordKegEventForShipment` (kept kegs, `replace`); `invoices/service.ts` `compute` (delivered qty), `recomputeIssuedInvoice`; `src/app/field/page.tsx`; `authz/actions.ts` `shipment.deliver` | round2 › R2-8, R2-9, R2-38; journeys 12, 16 |
+| R2-10 | `orders/service.ts` (`pickup` from the account's fulfilment); `shipments/service.ts` `confirmShipment` (issue at confirmation); `invoices/service.ts` `issueInvoiceForShipment` (re-date) | round2 › R2-10, R2-14, R2-16 › a pickup account's order is will-call |
+| R2-13 | `customers/shipping.ts` deposit fields; account page | — (fields; invoice behaviour as 3.10 floating) |
+| R2-14 | `invoices/service.ts` `issueCreditMemo`, `voidCreditMemo`, `creditMemosForInvoice`; `settings/service.ts` `nextDocNumber("CM")`; `authz/actions.ts` `credit.issue` | round2 › credit memos stand against an issued invoice…; access › Five roles |
+| R2-15 | `invoices/service.ts` (add-to-open removed) | shipments › issues exactly one invoice per delivery; samples take their own NC invoice |
+| R2-16 | `catalog/service.ts` `setPriceOverride` (`endsOn`), `endPriceOverride`, `listPriceOverrides` | round2 › a price exception needs the Owner or back office, a reason and an end date |
+| R2-19 | `src/lib/import/normalize.ts` `listParentGroupings` | import (flags listed, nothing applied) |
+| R2-20, R2-31, R2-32 | `customers/service.ts` `listLocations` (origins and samples recipients excluded, served-by filter), `setLocationStatus` (inactive refused); migration data statement | round2 › R2-31; journey 9 (picker) |
+| R2-21, R2-22, R2-26 | `lots/service.ts` `createBatch` (barrels, auto number), `recordPackagingReport` (same batch adds a day), `addPackagingDay`, `lotYield`, `listPackagingEntries`, `postPackagingStock` | round2 › R2-21, R2-22, R2-26 |
+| R2-23 | `counts/service.ts` `applyCountSession` (reason on variance) | shipments › applies a count with lot codes and keeps movements per lot |
+| R2-25, R2-35 | `kegs/service.ts` `microstarReport`, `microstarCsv`; `src/app/reports/microstar/*`; `components/shell.tsx` SECTIONS | shipments › records an opening keg balance and reports kegs out…; journey 13 |
+| R2-27, R2-28 | `markets/service.ts` `ensureSamplesHouse`, `samplesHouseName`; `customers/service.ts` `samplesRecipients`, `createRepHomeAddress`, `isSamplesRecipient`; `src/app/samples/page.tsx` (history) | round2 › R2-27, R2-28; journeys 4, 17 |
+| R2-29 | `src/lib/domain/pullsheet/service.ts` (`schedulePullSheetSends`, `pull_sheet.send` handler), `src/app/shipments/end-of-day/page.tsx`, `origins/service.ts` (`pullSheetEmail`, `pullSheetSendTime`), `settings/service.ts` (`autoSendPullSheets`), cron route | journey 18 |
+| R2-30 | `shipments/service.ts` `confirmShipment` (issue at confirmation), `src/app/shipments/[id]/documents/[kind]/route.ts` (`delivery_pack`) | journey 16 (Mission Taproom takes its invoice on receipt) |
+| R2-33, R2-34 | `lots/service.ts` `ACTIVE_BRANDS`, `skuBrandActive`; `origins/service.ts` `originLabel` | journey 12 (`EBB East Brother`) |
+| R2-36 | `src/app/admin/exceptions/page.tsx`, `src/app/admin/page.tsx` (redirect) | journeys 4, 13 |
+| R2-37 | breweries are origins of kind brewery holding lot-tagged stock (`postPackagingStock`) | round2 › R2-21… (stock posts at the facility) |

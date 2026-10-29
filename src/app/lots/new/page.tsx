@@ -3,8 +3,8 @@ import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
 import { listSkus } from "@/lib/domain/catalog/service";
-import { BRAND_CODES, brandCodeForSku, listBatches } from "@/lib/domain/lots/service";
-import { listOrigins } from "@/lib/domain/origins/service";
+import { ACTIVE_BRANDS, BRAND_CODES, brandCodeForSku, listBatches } from "@/lib/domain/lots/service";
+import { listOrigins, originLabel } from "@/lib/domain/origins/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { todayIso } from "../../shipments/labels";
 import { recordPackagingReportAction } from "../actions";
@@ -18,9 +18,8 @@ export default async function NewLotPage({ searchParams }: { searchParams: Searc
   const d = await getDb();
   const [origins, skus, batches, settings] = await Promise.all([listOrigins(d), listSkus(d), listBatches(d), getCompanySettings(d)]);
   const breweries = origins.filter((o) => o.kind === "brewery");
-  const facilityName = new Map(origins.map((o) => [o.id, o.name]));
   const activeSkus = skus.filter((s) => !s.archivedAt);
-  const brands = [...BRAND_CODES].sort((a, b) => Number(b.active) - Number(a.active));
+  const brands = ACTIVE_BRANDS;
   const skuBrands = Array.from(new Set(activeSkus.map((s) => brandCodeForSku(s.code))));
   const openBatches = batches.filter((b) => b.status !== "destroyed" && b.status !== "cancelled" && (!facilityParam || b.facilityWarehouseId === facilityParam));
   const today = todayIso();
@@ -38,8 +37,8 @@ export default async function NewLotPage({ searchParams }: { searchParams: Searc
                 </option>
                 {breweries.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.lotFacilityCode ? `${o.lotFacilityCode} ` : "(no lot code) "}
-                    {o.name}
+                    {originLabel(o)}
+                    {o.lotFacilityCode ? "" : " (no lot code yet)"}
                   </option>
                 ))}
               </Select>
@@ -49,25 +48,25 @@ export default async function NewLotPage({ searchParams }: { searchParams: Searc
                 {brands.map((b) => (
                   <option key={b.code} value={b.code}>
                     {b.code} {b.name}
-                    {b.active ? "" : " (inactive)"}
                   </option>
                 ))}
               </Select>
             </Field>
             <div className="grid grid-cols-[1fr_5rem] gap-x-3">
-              <Field label="Packaging date" hint="Packaging that spans two dates is an open question (4.5): record the date the host reports.">
+              <Field label="Packaging date" hint="The first day of the run (R2-21); a second day is added on the lot afterwards. The run digit changes only for a different brew.">
                 <Input name="packagingDate" type="date" required defaultValue={today} />
               </Field>
-              <Field label="Run" hint="One digit per run per day.">
+              <Field label="Run" hint="One digit per brew.">
                 <Input name="runCode" required maxLength={1} defaultValue="1" className="text-center uppercase" />
               </Field>
             </div>
-            <Field label="Batch (optional)" hint="A batch usually yields one lot (4.2); it must belong to the facility chosen above.">
+            <Field label="Batch" hint="A batch yields one lot (4.2); choosing a batch already packaged adds this day to its lot (R2-21). Packaged total and loss show against the batch size (R2-22).">
               <Select name="batchId" defaultValue="">
                 <option value="">No batch</option>
                 {openBatches.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.batchNumber} {facilityName.get(b.facilityWarehouseId) ?? ""} {b.brandCode} {b.status.replace(/_/g, " ")}
+                    {b.batchNumber} {originLabel(origins.find((o) => o.id === b.facilityWarehouseId))} {b.brandCode}
+                    {b.barrels ? ` ${Number(b.barrels).toFixed(0)} bbl` : ""} {b.status.replace(/_/g, " ")}
                   </option>
                 ))}
               </Select>

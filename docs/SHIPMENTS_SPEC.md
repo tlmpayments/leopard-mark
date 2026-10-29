@@ -146,7 +146,59 @@ Navigation: "Shipments", "Lots", "Invoices" for admin/accounting; Sales see Ship
 8. Sales in SoCal cannot see NorCal shipments or invoices; Driver sees only assigned stops; Admin confirms and voids; only the Owner applies an import or edits company settings.
 9. No flow sends email; every import, count, confirmation, delivery and void writes an audit event.
 
-## 9. Out of scope for this release
+## 9. Round 2 (October 28 owner answers, decisions R2-1 to R2-38; migration `0005_round2`)
+
+The second round changes services and screens; the design system of the October 28 pass is unchanged. Every state
+change is audited as before. Schema changes are additive (migration `0005_round2`, applied through `/setup` after a
+Neon snapshot); nothing is deleted, and the retired account status is migrated with a note.
+
+| Decision | What the build does |
+| --- | --- |
+| R2-1 | Submitting an order creates its draft shipment in the same transaction: type D (S when no charge), origin the account's market default (or the account's override), one line per order line with a reserved quantity, the lot prefilled from what is on hand at that origin (oldest first; editable on the shipment before confirmation), the order line carried on the shipment line, no scheduled date. "New shipment" exists only for transfers (T). The order page shows the shipment, confirms it with a date and prints; the order form's *Submit and confirm shipment* does both in one go. |
+| R2-2 | The office enters orders; `order.source` is phone, text, email, slack, rep or po (Phase 1 values sales, standing and customer_link stay readable). |
+| R2-3 | `order.requested_date` stays what the account asked for; `shipment.scheduled_date` is nullable and set at confirmation (refused without it). |
+| R2-4 | `market.route_days text[]` (weekday names), optional; shown as a hint when scheduling, never enforced. |
+| R2-5 | Never short silently: the origin is checked per line before anything is reserved; a shortfall throws `ShortfallError` (the form shows asked, on hand, short per line) unless a decision is given. `ship_available` ships what is on hand and keeps the rest as an open line (reason required); `hold` keeps the order in demand state `held` with no shipment until the office lifts it. Decision, reason, who and when are on the order (`shortfall_*` columns) and audited (`order.submit_short`, `order.hold`, `order.release_hold`). Standing orders hold when short. |
+| R2-6 | The $90 minimum applies only to orders with source rep (or the Phase 1 value sales) that are charged; office orders, samples and POS never open a below-minimum case. |
+| R2-7 | Void after confirmation keeps the number, releases stock and the draft invoice, and either returns the order to open (reservations count again; *Create shipment* drafts a new one) or cancels it, as chosen on the void. Cancelling an open order voids its unconfirmed draft with it. |
+| R2-8 | Delivery records delivered, refused and damaged per line (`shipment_line.delivered_qty/refused_qty/damaged_qty/damage_reason`); kept + refused + damaged = shipped. Delivered units leave the origin; refused units never left and are re-reserved as open demand on the order; the invoice bills the delivered quantity. |
+| R2-9 | Damaged units post a `damage` movement with the reason (unavailable at the origin) and are never invoiced. |
+| R2-10 | A pickup account's order is will-call: type D from the warehouse, `pickup` ticked, no driver, invoice issued at confirmation and re-dated at pickup. |
+| R2-11 | `order.po_numbers text[]`; copied to the shipment and printed on the BOL and the invoice; several POs per pickup; a source=po order needs one. |
+| R2-12 | `customer_location.pay_by` (fintech, stripe, check) and `invoice.pay_by` copied at issue; paid is marked by hand. |
+| R2-13 | Floating deposit on file: `deposit_taken_cents/on`, `deposit_settled_on`, `deposit_settlement_note` on the account; no per-keg lines; kegs out and empties back per account as before. |
+| R2-14 | `credit_memo` table, own series CM + yy + seq (`doc_counter` row CM), against an issued or paid invoice, reason required, never above the invoice total; `credit.issue` limited to the admin role (Owner, Daniel). The invoice is never rewritten. |
+| R2-15 | Exactly one invoice per delivery; "add to open invoice" removed. |
+| R2-16 | Price exceptions need `price.manage` (Owner, back office), a reason and an end date (`price_override.effective_to`); they can be ended early with a reason. |
+| R2-17 | The ABC license gate before the first retail delivery is unchanged (readiness conditions and cases). |
+| R2-18 | Served-by, override reason and audited history unchanged. |
+| R2-19 | Accounts stay separate; the import dry run lists parent groupings (shared legal name or billing email) as flags and applies nothing. |
+| R2-20 | New account minimum: trade name, delivery address, one contact, market; license before the first delivery; the rest optional. |
+| R2-21 | Packaging over two days: one lot dated the first day; `lot_packaging_entry` holds each day's quantities; *Add a packaging day* on the lot (or a packaging report against the same batch) adds to the totals and posts stock lot-tagged. The run digit changes only for a different brew (closes 4.5). |
+| R2-22 | `brew_batch.barrels`; the batches list and the lot page show batch size, packaged barrels and loss (displayed only). |
+| R2-23 | Monthly count sheet per origin as before; applying a count with any variance requires a reason, written on each count adjustment. |
+| R2-24 | Low-stock alerts: not built. |
+| R2-25 | MicroStar CSV per facility per month: facility, date, BOL, distributor, 1/2 bbl out, 1/6 bbl out; no returns. |
+| R2-26 | Batch entry when the beer goes in the tank: brand, barrels, facility, brew date; number B + facility + brand + yy + seq unless typed. |
+| R2-27 | Samples are orders with *No charge* to the market's samples house account (`customer_location.samples_house`, kind internal, no license, no terms; created by the migration for existing markets and with every new market) or a rep's home address; they produce an S shipment and an NC invoice. The Samples page is Phase 1 history, read-only. |
+| R2-28 | Rep home addresses are accounts of kind individual carrying `rep_employee_id`, listed as samples recipients on the order screen. |
+| R2-29 | End of day (Shipments, End of day): the master pull sheet per warehouse for the next day, download as PDF with the day's documents. Auto-send by email is behind `company_settings.auto_send_pull_sheets` (off by default) with `warehouse.pull_sheet_email` and `pull_sheet_send_time`; the cron run queues one `pull_sheet.send` job per warehouse per day while the switch is on. The email transport (automated Gmail send) is not built, so a queued send waits honestly and opens a case; nothing is emailed while the switch is off. |
+| R2-30 | `customer_location.invoice_on_receipt` (off by default): the invoice is issued at confirmation and the delivery pack (`/shipments/<id>/documents/delivery_pack`) is the BOL followed by the invoice; otherwise the BOL alone. |
+| R2-31 | Account status is Active or Closed; the migration moves inactive accounts to closed with the note "Was inactive; status retired in round 2 (R2-31)"; the list defaults to Active and shows served-by as a label and filter. |
+| R2-32 | Kind defaults retailer; hosts and warehouses are origins and never appear in the accounts list or the pickers. |
+| R2-33 | Brand pickers and filters offer SLG and CNT only. |
+| R2-34 | Origins read "CODE Name" everywhere; no facility numbers in labels. |
+| R2-35 | The MicroStar report sits under Kegs. |
+| R2-36 | The Command center is folded into Exceptions (`/admin` redirects). |
+| R2-37 | Host storage is on hand at that brewery (origins of kind brewery hold lot-tagged stock); no separate location. |
+| R2-38 | Users: Owner, back office (admin), SoCal rep (sales), SoCal driver (driver_service). `shipment.deliver` includes driver_service; a driver may deliver only an assigned stop, from the phone page (*My stops*); the office corrects afterwards (*Correct delivery*) under the same numbers. |
+
+Deferred by the brief: rep self-entry, invoice sending and collection (Fintech, Stripe), payment status, QuickBooks,
+parent organisations, keg tracking beyond self-distribution balances and the MicroStar export, line cleaning, route
+optimisation, proof of delivery and photos, Northeast / Texas / Rhode Island go-live, section 11.2 to 11.7, and the
+decision register entries for the October 28 policy answers.
+
+## 10. Out of scope for this release
 Invoice sending and payment collection (7.5 open; Stripe limitations to be worked out), QuickBooks sync, Slack notices,
 route optimisation, host logins, raw materials, prospect routes, TTB removal records, QC holds, Texas (Reyes), Rhode
 Island, nightly push to Google Sheets (export workbook only), section 11.2 to 11.7.

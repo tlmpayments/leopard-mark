@@ -8,20 +8,27 @@ import { withTx, type DbOrTx, type Tx } from "@/lib/db/types";
 import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import { getPolicy } from "@/lib/policy/policy";
-import { adjustLineReservation, releaseLineReservations, reserveForLine } from "../allocation/service";
+import { adjustLineReservation, availability, releaseLineReservations, reserveForLine } from "../allocation/service";
 import { KEG_DEPOSIT_CENTS, MINIMUM_DELIVERY_CENTS, currentPrice } from "../catalog/service";
+import { suggestLot } from "../lots/service";
 import { primaryWarehouse } from "../markets/service";
+import { originLabel } from "../origins/service";
 import { createNoticeIntent, withdrawPendingNotices } from "../notices/service";
+import { createShipment, voidShipment } from "../shipments/service";
 
 /**
- * Order intake (brief §12–§15, O12–O18).
+ * Order intake (brief §12–§15, O12–O18; round 2 R2-1 to R2-7, R2-10, R2-11, R2-27).
  *
- * Flow: location → SKU → quantity → optional date/notes → submit.
+ * Flow: account, products, requested date, submit. Submitting an order creates its draft shipment in the same
+ * transaction (R2-1): origin from the account's market default (or the account's override), lots from what is on
+ * hand at that origin, scheduled date blank until the office confirms (R2-3).
  * - Fixed market prices; Sales cannot override.
  * - Unique market-specific order number (technical syntax: CODE-000123, T06).
  * - Submission consumes supportable allocation FCFS; unmet demand retained.
+ * - Never submitted short silently (R2-5): a shortfall is shown per line; the office submits anyway (ships what is
+ *   on hand, the rest stays an open line) or holds the order; either decision is recorded with who and why.
+ * - The $90 minimum applies only to rep-sourced orders (R2-6); never to samples (no charge) or POS.
  * - Holds and readiness gaps never block capture (U06–U07).
- * - $90 minimum is evaluated and flagged; the basis is D11 (unselected).
  * - Abnormal orders are flagged only by a person or a selected D09 criterion.
  */
 
@@ -30,18 +37,97 @@ export interface OrderLineInput {
   qty: number;
 }
 
+export type OrderSource = (typeof schema.orderSourceEnum.enumValues)[number];
+
+/** How the order reached the office (R2-2). "sales" is the Phase 1 value for an order a rep keyed in; it reads as a rep order. */
+export const ORDER_SOURCE_LABEL: Record<OrderSource, string> = {
+  phone: "Phone",
+  text: "Text",
+  email: "Email",
+  slack: "Slack",
+  rep: "Rep",
+  po: "Purchase order",
+  sales: "Rep (Phase 1 entry)",
+  standing: "Standing order",
+  customer_link: "Customer link",
+};
+
+/** The sources the office picks from; standing and the Phase 1 value are set by the system. */
+export const OFFICE_ORDER_SOURCES: OrderSource[] = ["phone", "text", "email", "slack", "rep", "po"];
+
+export type ShortfallDecision = (typeof schema.shortfallDecisionEnum.enumValues)[number];
+
 export interface SubmitOrderInput {
   locationId: string;
   lines: OrderLineInput[];
   requestedDate?: string | null;
   notes?: string | null;
-  source?: "sales" | "email" | "standing";
+  source?: OrderSource;
   /** Idempotency for one submission (replay-safe); a legitimate repeat order uses a new key. */
   submissionKey?: string | null;
   intakeRequestId?: string | null;
   standingOccurrenceId?: string | null;
   /** Rep at transaction; defaults to the actor when the actor holds Sales. */
   repEmployeeId?: string | null;
+  /** Samples (R2-27): the goods ship as an S shipment and invoice at no charge on the NC series. */
+  noCharge?: boolean;
+  /** Will-call (R2-10): the account collects at the warehouse; no driver; the invoice issues at pickup. */
+  pickup?: boolean;
+  /** Purchase order numbers the account quoted (R2-11); printed on the BOL and the invoice. */
+  poNumbers?: string[] | null;
+  /** Required when the origin is short (R2-5). */
+  shortfallDecision?: ShortfallDecision | null;
+  shortfallReason?: string | null;
+  /** Default true (R2-1). Standing orders and intake pass false only where a person still confirms the shipment. */
+  createShipment?: boolean;
+}
+
+export interface ShortfallLine {
+  skuId: string;
+  skuName: string;
+  requested: number;
+  available: number;
+  short: number;
+}
+
+/** The origin cannot cover the order and no decision was given (R2-5). The caller shows the lines and asks. */
+export class ShortfallError extends BusinessError {
+  readonly lines: ShortfallLine[];
+  readonly originName: string;
+  constructor(lines: ShortfallLine[], originName: string) {
+    super(`${originName} is short on ${lines.length === 1 ? "one line" : `${lines.length} lines`}: ${lines.map((l) => `${l.skuName} ${l.available} of ${l.requested}`).join("; ")}. Submit anyway (ships what is on hand) or hold the order.`, { code: "shortfall" });
+    this.name = "ShortfallError";
+    this.lines = lines;
+    this.originName = originName;
+  }
+}
+
+/** Per-line shortfall at an origin for the quantities asked, before anything is reserved. */
+export async function shortfallFor(db: DbOrTx, warehouseId: string, lines: Array<{ skuId: string; qty: number; skuName: string }>): Promise<ShortfallLine[]> {
+  const out: ShortfallLine[] = [];
+  for (const l of lines) {
+    const a = await availability(db, warehouseId, l.skuId);
+    if (a.availableQty < l.qty) out.push({ skuId: l.skuId, skuName: l.skuName, requested: l.qty, available: a.availableQty, short: l.qty - a.availableQty });
+  }
+  return out;
+}
+
+/** What the office sees before submitting: the origin that would ship and which lines it cannot cover (R2-5). */
+export async function previewOrderShortfall(db: DbOrTx, actor: Actor, input: { locationId: string; lines: OrderLineInput[] }) {
+  const [loc] = await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, input.locationId));
+  if (!loc) throw new BusinessError("Account not found", { field: "locationId" });
+  authorize(actor, "order.submit", { marketId: loc.marketId });
+  const warehouseId = loc.warehouseOverrideId ?? (await primaryWarehouse(db, loc.marketId))?.id ?? null;
+  if (!warehouseId) throw new BusinessError("No primary warehouse is configured for this market (Admin: Markets & stock)");
+  const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, warehouseId));
+  const merged = new Map<string, number>();
+  for (const l of input.lines) merged.set(l.skuId, (merged.get(l.skuId) ?? 0) + l.qty);
+  const named = [];
+  for (const [skuId, qty] of merged) {
+    const [sku] = await db.select({ name: schema.sku.name, brand: schema.sku.brand }).from(schema.sku).where(eq(schema.sku.id, skuId));
+    named.push({ skuId, qty, skuName: sku ? `${sku.brand} ${sku.name}` : skuId });
+  }
+  return { warehouseId, originName: originLabel(origin), lines: await shortfallFor(db, warehouseId, named) };
 }
 
 export interface MinimumEvaluation {
@@ -104,7 +190,18 @@ export interface SubmitOrderResult {
   lines: Array<typeof schema.orderLine.$inferSelect & { reservedQty: number; unmetQty: number }>;
   replayed: boolean;
   minimum: MinimumEvaluation;
+  /** Whether the $90 minimum applies to this order at all (R2-6: rep-sourced, charged orders only). */
+  minimumApplies: boolean;
   shortage: boolean;
+  /** The draft shipment created with the order (R2-1); null when the order is held or nothing could be reserved. */
+  shipment: typeof schema.shipment.$inferSelect | null;
+  held: boolean;
+}
+
+/** The $90 minimum is a rep-order rule (R2-6); office orders, samples and POS are never subject to it. */
+export function minimumAppliesTo(input: Pick<SubmitOrderInput, "source" | "noCharge">): boolean {
+  if (input.noCharge) return false;
+  return input.source === "rep" || input.source === "sales";
 }
 
 /** Stable hash of what was asked for, so a replayed key with different content is refused (AC12). */
@@ -150,17 +247,23 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
           );
         }
         const lines = await linesWithAllocation(tx, existing.id);
+        const shipment = await activeShipmentForOrder(tx, existing.id);
         return {
           order: existing,
           lines,
           replayed: true,
           minimum: existing.minimumEvaluation as MinimumEvaluation,
+          minimumApplies: minimumAppliesTo({ source: existing.source, noCharge: existing.noCharge }),
           shortage: lines.some((l) => l.unmetQty > 0),
+          shipment,
+          held: existing.demandState === "held",
         };
       }
     }
     const warehouseId = lockedLoc.warehouseOverrideId ?? (await primaryWarehouse(tx, loc.marketId))?.id ?? null;
-    if (!warehouseId) throw new BusinessError("No primary warehouse is configured for this market (Admin: Markets → warehouses)");
+    if (!warehouseId) throw new BusinessError("No primary warehouse is configured for this market (Admin: Markets & stock)");
+    const [origin] = await tx.select().from(schema.warehouse).where(eq(schema.warehouse.id, warehouseId));
+    const originName = originLabel(origin);
 
     const priced: Array<{ skuId: string; qty: number; unitPriceCents: number; marketPriceId: string; kegsPerUnit: number; skuName: string }> = [];
     for (const [skuId, qty] of merged) {
@@ -172,9 +275,23 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
       priced.push({ skuId, qty, unitPriceCents: price.priceCents, marketPriceId: price.id, kegsPerUnit: s.kegsPerUnit, skuName: s.name });
     }
 
+    // Never short silently (R2-5): the origin is checked for every line before anything is reserved.
+    const shortfall = await shortfallFor(tx, warehouseId, priced.map((p) => ({ skuId: p.skuId, qty: p.qty, skuName: p.skuName })));
+    const decision: ShortfallDecision | null = shortfall.length ? (input.shortfallDecision ?? null) : null;
+    if (shortfall.length && !decision) throw new ShortfallError(shortfall, originName);
+    const shortfallReason = input.shortfallReason?.trim() || null;
+    if (decision === "ship_available" && !shortfallReason) throw new BusinessError("Say why the order ships short; the reason is recorded with your name (R2-5)", { field: "shortfallReason" });
+    const held = decision === "hold";
+
+    const source: OrderSource = input.source ?? "sales";
+    const noCharge = input.noCharge ?? false;
     const d11 = await getPolicy(tx, "D11", { marketId: loc.marketId });
     const minimum = evaluateMinimum(priced, d11);
+    const minimumApplies = minimumAppliesTo({ source, noCharge });
     const abnormal = await evaluateAbnormal(tx, priced, loc.marketId);
+    const poNumbers = input.poNumbers?.map((p) => p.trim()).filter(Boolean) ?? [];
+    if (source === "po" && poNumbers.length === 0) throw new BusinessError("A purchase-order order needs the PO number (R2-11)", { field: "poNumbers" });
+    const pickup = input.pickup ?? loc.fulfilment === "pickup";
 
     const orderNumber = await nextOrderNumber(tx, loc.marketId);
     const repEmployeeId = input.repEmployeeId ?? (can(actor, "order.submit") && actor.grants.some((g) => g.role === "sales") ? actor.employeeId : loc.currentRepEmployeeId);
@@ -184,7 +301,7 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
         marketId: loc.marketId,
         locationId: loc.id,
         orderNumber,
-        source: input.source ?? "sales",
+        source,
         requestedDate: input.requestedDate?.trim() || null,
         notes: input.notes?.trim() || null,
         repEmployeeId,
@@ -197,6 +314,14 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
         abnormalFlag: abnormal.flag,
         abnormalReason: abnormal.reason,
         minimumEvaluation: minimum,
+        demandState: held ? "held" : "submitted",
+        noCharge,
+        pickup,
+        poNumbers: poNumbers.length ? poNumbers : null,
+        shortfallDecision: decision,
+        shortfallReason,
+        shortfallDecidedByEmployeeId: decision ? actor.employeeId : null,
+        shortfallDecidedAt: decision ? new Date() : null,
       })
       .returning();
 
@@ -229,12 +354,33 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
       current: {
         orderNumber,
         locationId: loc.id,
+        source,
+        noCharge,
+        pickup,
+        poNumbers,
         lines: lines.map((l) => ({ skuId: l.skuId, qty: l.orderedQty, unitPriceCents: l.unitPriceCentsAtSubmission, reserved: l.reservedQty, unmet: l.unmetQty })),
-        minimum: minimum.verdict,
+        minimum: minimumApplies ? minimum.verdict : "not_applicable",
         abnormal: abnormal.flag,
+        shortfall: shortfall.length ? { decision, lines: shortfall } : null,
       },
+      reason: shortfallReason ?? undefined,
       marketId: loc.marketId,
     });
+    if (decision) {
+      // Who decided what about the shortfall, and why, separately from the submission (R2-5).
+      await recordAudit(tx, actor, {
+        action: decision === "hold" ? "order.hold" : "order.submit_short",
+        subjectType: "order",
+        subjectId: ord.id,
+        current: { decision, lines: shortfall },
+        reason: shortfallReason ?? undefined,
+        marketId: loc.marketId,
+      });
+    }
+
+    // The draft shipment (R2-1): what was reserved ships from the origin; a held order waits (R2-5).
+    let shipment: typeof schema.shipment.$inferSelect | null = null;
+    if (!held && input.createShipment !== false) shipment = await createDraftShipmentForOrder(tx, actor, ord, lines, { warehouseId, noCharge, pickup, poNumbers });
 
     if (shortage) {
       await openException(tx, actor, {
@@ -252,7 +398,7 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
         links: [{ subjectType: "order", subjectId: ord.id }],
       });
     }
-    if (minimum.verdict !== "meets") {
+    if (minimumApplies && minimum.verdict !== "meets") {
       await openException(tx, actor, {
         category: "below_minimum",
         title: `${orderNumber} ${minimum.verdict === "below" ? "is below" : "may be below"} the $90 minimum — ${loc.tradeName}`,
@@ -296,7 +442,109 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
       },
     });
 
-    return { order: ord, lines, replayed: false, minimum, shortage };
+    return { order: ord, lines, replayed: false, minimum, minimumApplies, shortage, shipment, held };
+  });
+}
+
+/** The order's shipment that is still in play (not voided). */
+export async function activeShipmentForOrder(db: DbOrTx, orderId: string) {
+  const rows = await db
+    .select({ s: schema.shipment })
+    .from(schema.shipmentOrder)
+    .innerJoin(schema.shipment, eq(schema.shipment.id, schema.shipmentOrder.shipmentId))
+    .where(and(eq(schema.shipmentOrder.orderId, orderId), ne(schema.shipment.status, "voided")))
+    .orderBy(desc(schema.shipment.createdAt));
+  return rows[0]?.s ?? null;
+}
+
+/**
+ * The draft shipment for an order (R2-1), inside the submission transaction: D (or S when no charge), origin the
+ * order's warehouse, destination the account, one line per order line with a reserved quantity, the lot prefilled
+ * from what is on hand at that origin (oldest first; the office may change it before confirming), the order line
+ * carried on each shipment line, no scheduled date until confirmation (R2-3), PO numbers printed (R2-11), will-call
+ * ticked for pickup accounts (R2-10).
+ */
+async function createDraftShipmentForOrder(
+  tx: Tx,
+  actor: Actor,
+  ord: typeof schema.order.$inferSelect,
+  lines: Array<{ id: string; skuId: string; reservedQty: number }>,
+  o: { warehouseId: string; noCharge: boolean; pickup: boolean; poNumbers: string[] },
+) {
+  const shipLines = [];
+  for (const l of lines) {
+    if (l.reservedQty <= 0) continue;
+    const lot = await suggestLot(tx, o.warehouseId, l.skuId);
+    shipLines.push({ skuId: l.skuId, lotId: lot?.lotId ?? null, qty: l.reservedQty, orderLineId: l.id });
+  }
+  if (!shipLines.length) return null;
+  const header = {
+    type: (o.noCharge ? "S" : "D") as "S" | "D",
+    originWarehouseId: o.warehouseId,
+    destinationLocationId: ord.locationId,
+    pickup: o.pickup,
+    scheduledDate: null,
+    poNumbers: o.poNumbers.length ? o.poNumbers : null,
+    notes: ord.notes,
+    orderIds: [ord.id],
+  };
+  // Authorised by order.submit: the shipment is a consequence of the order, so the office's right to take the order
+  // covers its draft; every later step (confirm, deliver, void) checks its own permission.
+  return createShipment(tx, actor, header, shipLines, { authorized: true });
+}
+
+/**
+ * The office lifts a hold (R2-5): the order goes back to open and its draft shipment is created from what is reserved
+ * now, the rest staying an open line. Recorded with who and why.
+ */
+export async function releaseHeldOrder(db: DbOrTx, actor: Actor, orderId: string, reason: string) {
+  const [pre] = await db.select().from(schema.order).where(eq(schema.order.id, orderId));
+  if (!pre) throw new BusinessError("Order not found");
+  authorize(actor, "order.submit", { marketId: pre.marketId });
+  if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
+  return withTx(db, async (tx) => {
+    const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId)).for("update");
+    if (ord.demandState !== "held") throw new StaleStateError(`${ord.orderNumber} is ${ord.demandState.replace(/_/g, " ")}, not held`);
+    if (!ord.warehouseId) throw new BusinessError("The order has no origin");
+    const lines = await linesWithAllocation(tx, orderId);
+    const [row] = await tx
+      .update(schema.order)
+      .set({ demandState: "submitted", shortfallDecision: "ship_available", shortfallReason: reason.trim(), shortfallDecidedByEmployeeId: actor.employeeId, shortfallDecidedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.order.id, orderId))
+      .returning();
+    const shipment = await createDraftShipmentForOrder(tx, actor, row, lines, { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
+    await recordAudit(tx, actor, {
+      action: "order.release_hold",
+      subjectType: "order",
+      subjectId: orderId,
+      prior: { demandState: "held" },
+      current: { demandState: "submitted", shipmentId: shipment?.id ?? null, lines: lines.map((l) => ({ skuId: l.skuId, reserved: l.reservedQty, unmet: l.unmetQty })) },
+      reason: reason.trim(),
+      marketId: ord.marketId,
+    });
+    return { order: row, shipment };
+  });
+}
+
+/**
+ * A new draft shipment for an open order whose shipment was voided and the order reopened (R2-7), or a held order
+ * since released. Refuses while a shipment is still in play.
+ */
+export async function createShipmentForOrder(db: DbOrTx, actor: Actor, orderId: string) {
+  const [pre] = await db.select().from(schema.order).where(eq(schema.order.id, orderId));
+  if (!pre) throw new BusinessError("Order not found");
+  authorize(actor, "shipment.manage", { marketId: pre.marketId });
+  return withTx(db, async (tx) => {
+    const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId)).for("update");
+    if (ord.demandState !== "submitted" && ord.demandState !== "partially_fulfilled") throw new StaleStateError(`${ord.orderNumber} is ${ord.demandState.replace(/_/g, " ")}; only an open order ships`);
+    if (!ord.warehouseId) throw new BusinessError("The order has no origin");
+    const active = await activeShipmentForOrder(tx, orderId);
+    if (active) throw new StaleStateError(`${ord.orderNumber} already has shipment ${active.number ?? "(draft)"} in play`);
+    const lines = await linesWithAllocation(tx, orderId);
+    const shipment = await createDraftShipmentForOrder(tx, actor, ord, lines, { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
+    if (!shipment) throw new BusinessError("Nothing is reserved for this order yet; it ships once stock is on hand at the origin");
+    await recordAudit(tx, actor, { action: "order.shipment_created", subjectType: "order", subjectId: orderId, current: { shipmentId: shipment.id }, marketId: ord.marketId });
+    return shipment;
   });
 }
 
@@ -359,6 +607,14 @@ export async function getOrder(db: DbOrTx, orderId: string) {
     .where(and(eq(schema.exceptionLink.subjectType, "order"), eq(schema.exceptionLink.subjectId, orderId)));
   const notices = await db.select().from(schema.notice).where(and(eq(schema.notice.subjectType, "order"), eq(schema.notice.subjectId, orderId)));
   const visits = await db.select().from(schema.deliveryVisitLine).where(eq(schema.deliveryVisitLine.orderId, orderId));
+  const shipments = (
+    await db
+      .select({ s: schema.shipment })
+      .from(schema.shipmentOrder)
+      .innerJoin(schema.shipment, eq(schema.shipment.id, schema.shipmentOrder.shipmentId))
+      .where(eq(schema.shipmentOrder.orderId, orderId))
+      .orderBy(desc(schema.shipment.createdAt))
+  ).map((r) => r.s);
   const audit = await db
     .select()
     .from(schema.auditEvent)
@@ -373,6 +629,7 @@ export async function getOrder(db: DbOrTx, orderId: string) {
     exceptions: exceptions.map((e) => e.c),
     notices,
     visits,
+    shipments,
     audit,
   };
 }
@@ -393,7 +650,9 @@ export async function listOrders(
   }
   if (opts.locationId) conds.push(eq(schema.order.locationId, opts.locationId));
   if (opts.marketId) conds.push(eq(schema.order.marketId, opts.marketId));
-  if (opts.state === "open") conds.push(inArray(schema.order.demandState, ["submitted", "partially_fulfilled"]));
+  if (opts.state === "open") conds.push(inArray(schema.order.demandState, ["submitted", "partially_fulfilled", "held"]));
+  else if (opts.state === "held") conds.push(eq(schema.order.demandState, "held"));
+  else if (opts.state === "fulfilled") conds.push(eq(schema.order.demandState, "fulfilled"));
   else if (opts.state === "cancelled") conds.push(eq(schema.order.demandState, "cancelled"));
   return db
     .select({ order: schema.order, location: schema.customerLocation })
@@ -420,6 +679,10 @@ export async function cancelUndeliveredDemand(db: DbOrTx, actor: Actor, orderId:
     const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId)).for("update");
     if (ord.demandState === "cancelled") throw new StaleStateError(`${ord.orderNumber} was already cancelled${ord.cancelledAt ? ` on ${ord.cancelledAt.toISOString().slice(0, 10)}` : ""}; nothing further to cancel.`);
     if (ord.demandState === "fulfilled") throw new StaleStateError(`${ord.orderNumber} is fulfilled; there is no undelivered demand to cancel.`);
+    const active = await activeShipmentForOrder(tx, orderId);
+    if (active && active.status !== "draft" && active.status !== "delivered") throw new BusinessError(`${ord.orderNumber} is on shipment ${active.number ?? "(draft)"} (${active.status}); void that shipment first and choose to cancel the order (R2-7)`);
+    // An unconfirmed draft shipment goes with the order it was created for.
+    if (active && active.status === "draft") await voidShipment(tx, actor, active.id, `Order ${ord.orderNumber} cancelled: ${reason.trim()}`, { order: "none" });
     const lines = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, orderId)).for("update");
     if (!lines.some((l) => l.currentQty - l.deliveredQty > 0)) throw new StaleStateError(`${ord.orderNumber} has no undelivered demand left.`);
     let routeCommitted = 0;
@@ -589,6 +852,7 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
       reason,
       policyStatus: "applied",
     });
+    await syncDraftShipmentLine(tx, ord.id, orderLineId);
     await reassessOrder(tx, actor, ord.id);
     await recordAudit(tx, actor, {
       action: "order.amend_qty",
@@ -601,6 +865,33 @@ export async function adminAmendQuantity(db: DbOrTx, actor: Actor, orderLineId: 
     });
     return row;
   });
+}
+
+/**
+ * The order's unconfirmed draft shipment (R2-1) follows an amendment: its line for this order line takes what is now
+ * reserved; a line with nothing reserved comes off the draft. A confirmed shipment is never touched here.
+ */
+async function syncDraftShipmentLine(tx: Tx, orderId: string, orderLineId: string) {
+  const active = await activeShipmentForOrder(tx, orderId);
+  if (!active || active.status !== "draft") return;
+  const [res] = await tx
+    .select({ reserved: sql<number>`coalesce(sum(${schema.reservation.reservedQty}), 0)::int` })
+    .from(schema.reservation)
+    .where(and(eq(schema.reservation.orderLineId, orderLineId), eq(schema.reservation.state, "reserved")));
+  const reserved = res?.reserved ?? 0;
+  const [sl] = await tx.select().from(schema.shipmentLine).where(and(eq(schema.shipmentLine.shipmentId, active.id), eq(schema.shipmentLine.orderLineId, orderLineId)));
+  if (sl) {
+    if (reserved > 0) await tx.update(schema.shipmentLine).set({ qty: reserved }).where(eq(schema.shipmentLine.id, sl.id));
+    else await tx.delete(schema.shipmentLine).where(eq(schema.shipmentLine.id, sl.id));
+  } else if (reserved > 0) {
+    const [ol] = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.id, orderLineId));
+    const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId));
+    if (ol && ord?.warehouseId) {
+      const lot = await suggestLot(tx, ord.warehouseId, ol.skuId);
+      const [{ n }] = await tx.select({ n: sql<number>`coalesce(max(${schema.shipmentLine.lineNo}), 0)::int` }).from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, active.id));
+      await tx.insert(schema.shipmentLine).values({ shipmentId: active.id, lineNo: n + 1, skuId: ol.skuId, lotId: lot?.lotId ?? null, lotCode: lot?.lotCode ?? null, qty: reserved, orderLineId });
+    }
+  }
 }
 
 /**
@@ -632,7 +923,7 @@ async function reassessOrder(tx: Tx, actor: Actor, orderId: string) {
   } else {
     await resolveByDedupeKeys(tx, actor, [`allocation_shortage:${orderId}`], "No unmet demand after amendment");
   }
-  if (minimum.verdict !== "meets" && live.length > 0) {
+  if (minimumAppliesTo({ source: ord.source, noCharge: ord.noCharge }) && minimum.verdict !== "meets" && live.length > 0) {
     await openException(tx, actor, {
       category: "below_minimum",
       title: `${ord.orderNumber} ${minimum.verdict === "below" ? "is below" : "may be below"} the $90 minimum after amendment`,
@@ -726,7 +1017,7 @@ async function previewFromOrder(db: DbOrTx, last: typeof schema.order.$inferSele
 
 /** Demand a market currently holds: submitted orders with remaining quantity, for the command center. */
 export async function openDemandSummary(db: DbOrTx, marketIds: "all" | string[]) {
-  const conds = [inArray(schema.order.demandState, ["submitted", "partially_fulfilled"])];
+  const conds = [inArray(schema.order.demandState, ["submitted", "partially_fulfilled", "held"])];
   if (marketIds !== "all") {
     if (marketIds.length === 0) return { orders: 0, unmetUnits: 0 };
     conds.push(inArray(schema.order.marketId, marketIds));
