@@ -10,12 +10,13 @@ import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
 import { formatCents, listSkus } from "@/lib/domain/catalog/service";
 import { lotPickerOptions } from "@/lib/domain/lots/service";
+import { originLabel } from "@/lib/domain/origins/service";
 import { getShipment } from "@/lib/domain/shipments/service";
 import { listPosItems } from "@/lib/domain/settings/service";
 import { TYPE_LABEL, isDriverOnly, todayIso } from "../labels";
-import { confirmAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, stageAction, voidAction } from "./actions";
+import { confirmAction, correctDeliveryAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, stageAction, voidAction } from "./actions";
 
-const DOC_LABEL: Record<string, string> = { bol: "Bill of lading", picking_ticket: "Picking ticket", pickup_pack: "Pickup pack", pull_sheet: "Pull sheet", invoice: "Invoice" };
+const DOC_LABEL: Record<string, string> = { bol: "Bill of lading", picking_ticket: "Picking ticket", pickup_pack: "Pickup pack", delivery_pack: "Delivery pack", pull_sheet: "Pull sheet", invoice: "Invoice" };
 const EDITABLE_LINES = ["draft", "confirmed", "staged"];
 const EDITABLE_HEADER = ["draft", "confirmed", "staged", "out"];
 
@@ -69,7 +70,23 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
   const morePeople = historyPeople.length ? await d.select({ id: schema.employee.id, displayName: schema.employee.displayName }).from(schema.employee).where(inArray(schema.employee.id, historyPeople)) : [];
   const anyName = (eid: string | null) => (eid ? (people.find((p) => p.id === eid)?.displayName ?? morePeople.find((p) => p.id === eid)?.displayName ?? "—") : "System");
 
-  const destinationLabel = destination ? destination.tradeName : destinationWarehouse ? `${destinationWarehouse.originCode ? destinationWarehouse.originCode + " " : ""}${destinationWarehouse.name}` : (s.destinationText ?? "—");
+  const destinationLabel = destination ? destination.tradeName : destinationWarehouse ? originLabel(destinationWarehouse) : (s.destinationText ?? "—");
+  const delivered = s.status === "delivered";
+  const outcomeFields = (prefix: string, defaults: "planned" | "recorded") =>
+    lines
+      .filter((l) => l.line.skuId)
+      .map(({ line, sku }) => (
+        <fieldset key={line.id} className="grid grid-cols-[minmax(0,1fr)_3.5rem_3.5rem_3.5rem] items-end gap-x-2 gap-y-1 border-b border-rule-soft pb-1.5">
+          <legend className="sr-only">{sku?.code}</legend>
+          <span className="truncate text-xs text-ink">
+            {sku?.code} <span className="text-ink-3">of {line.qty}</span>
+          </span>
+          <Input name={`${prefix}delivered:${line.id}`} type="number" min={0} max={line.qty} step={1} defaultValue={defaults === "recorded" ? (line.deliveredQty ?? line.qty) : line.qty} className="text-right" aria-label={`${sku?.code} kept`} />
+          <Input name={`${prefix}refused:${line.id}`} type="number" min={0} max={line.qty} step={1} defaultValue={defaults === "recorded" ? line.refusedQty : 0} className="text-right" aria-label={`${sku?.code} refused`} />
+          <Input name={`${prefix}damaged:${line.id}`} type="number" min={0} max={line.qty} step={1} defaultValue={defaults === "recorded" ? line.damagedQty : 0} className="text-right" aria-label={`${sku?.code} damaged`} />
+          <Input name={`${prefix}damageReason:${line.id}`} placeholder="Damage reason (when damaged)" defaultValue={defaults === "recorded" ? (line.damageReason ?? "") : ""} className="col-span-4" aria-label={`${sku?.code} damage reason`} />
+        </fieldset>
+      ));
   const servedWarning = Boolean(s.type === "D" && destination?.servedByLocationId && destination.kind !== "distributor");
   const today = todayIso();
   const expectedBySku = new Map<string, number>();
@@ -86,28 +103,42 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
     <>
       <Table
         caption="Shipment lines"
-        head={["#", "SKU / POS", "Description", "Lot", "Qty", "Unit price", "Weight lb", "Lot reason"]}
-        widths={["2.5rem", LIST_WIDTHS.code, undefined, LIST_WIDTHS.number, LIST_WIDTHS.qty, LIST_WIDTHS.money, LIST_WIDTHS.qty, "16rem"]}
-        align={["right", "left", "left", "left", "right", "right", "right", "left"]}
+        head={delivered ? ["#", "SKU / POS", "Description", "Lot", "Shipped", "Kept", "Refused", "Damaged", "Unit price"] : ["#", "SKU / POS", "Description", "Lot", "Qty", "Unit price", "Weight lb", "Lot reason"]}
+        widths={delivered ? ["2.5rem", LIST_WIDTHS.code, undefined, LIST_WIDTHS.number, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.qty, LIST_WIDTHS.money] : ["2.5rem", LIST_WIDTHS.code, undefined, LIST_WIDTHS.number, LIST_WIDTHS.qty, LIST_WIDTHS.money, LIST_WIDTHS.qty, "16rem"]}
+        align={delivered ? ["right", "left", "left", "left", "right", "right", "right", "right", "right"] : ["right", "left", "left", "left", "right", "right", "right", "left"]}
         empty="No lines yet."
-        rows={lines.map(({ line, sku, pos, lot }) => [
-          String(line.lineNo),
-          <Code key="c">{sku?.code ?? pos?.code ?? "—"}</Code>,
-          sku ? `${sku.brand} ${sku.name}` : pos ? `${pos.name} (POS)` : "—",
-          lot ? (
+        rows={lines.map(({ line, sku, pos, lot }) => {
+          const lotCell = lot ? (
             <Link key="l" href={`/lots/${lot.id}`} className="text-navy hover:underline">
               <Code>{lot.lotCode}</Code>
               {!lot.quantitiesKnown ? <span className="ml-1.5 text-[11px] text-ink-3">quantities unconfirmed</span> : null}
             </Link>
           ) : (
             <Code key="nl">{line.lotCode ?? (sku ? "no lot" : "—")}</Code>
-          ),
-          String(line.qty),
-          line.unitPriceCents != null ? formatCents(line.unitPriceCents) : "—",
-          line.weightLb ?? "—",
-          line.lotReason ?? "—",
-        ])}
+          );
+          const head = [String(line.lineNo), <Code key="c">{sku?.code ?? pos?.code ?? "—"}</Code>, sku ? `${sku.brand} ${sku.name}` : pos ? `${pos.name} (POS)` : "—", lotCell];
+          if (delivered)
+            return [
+              ...head,
+              String(line.qty),
+              String(line.deliveredQty ?? line.qty),
+              line.refusedQty ? <span key="r" className="font-semibold">{line.refusedQty}</span> : "0",
+              line.damagedQty ? (
+                <span key="d" className="font-semibold" title={line.damageReason ?? undefined}>
+                  {line.damagedQty}
+                </span>
+              ) : (
+                "0"
+              ),
+              line.unitPriceCents != null ? formatCents(line.unitPriceCents) : "—",
+            ];
+          return [...head, String(line.qty), line.unitPriceCents != null ? formatCents(line.unitPriceCents) : "—", line.weightLb ?? "—", line.lotReason ?? "—"];
+        })}
       />
+      {delivered && lines.some((l) => l.line.damagedQty) ? (
+        <p className="mt-2 text-xs text-ink-3">Damaged: {lines.filter((l) => l.line.damagedQty).map((l) => `${l.sku?.code ?? ""} ${l.line.damagedQty} (${l.line.damageReason ?? "no reason"})`).join("; ")}. Written off at the origin with the reason; nothing invoiced (R2-9).</p>
+      ) : null}
+      {delivered && lines.some((l) => l.line.refusedQty) ? <p className="mt-1 text-xs text-ink-3">Refused units never left the origin&apos;s stock and stay an open line on the order (R2-8).</p> : null}
       {lines.length ? (
         <p className="mt-2 text-xs text-ink-3">
           {totals.qty} units{totals.kegs ? `, ${totals.kegs} kegs` : ""}
@@ -220,10 +251,16 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
           </ul>
         )}
         {latestByKind.has("bol") && destination ? (
-          <p className="mt-3 text-sm">
-            <a href={docHref("pickup_pack")} target="_blank" rel="noopener" className="text-navy hover:underline">
-              Pickup pack (BOL followed by the invoice, one PDF)
-            </a>
+          <p className="mt-3 flex flex-wrap gap-x-4 text-sm">
+            {s.pickup ? (
+              <a href={docHref("pickup_pack")} target="_blank" rel="noopener" className="text-navy hover:underline">
+                Pickup pack (BOL followed by the invoice, one PDF)
+              </a>
+            ) : (
+              <a href={docHref("delivery_pack")} target="_blank" rel="noopener" className="text-navy hover:underline">
+                Delivery pack ({destination.invoiceOnReceipt ? "BOL followed by the invoice; the account takes its invoice on receipt, R2-30" : "BOL; this account does not take the invoice on receipt"})
+              </a>
+            )}
           </p>
         ) : null}
       </div>
@@ -376,7 +413,7 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
     <form action={saveLogisticsAction} className="grid max-w-4xl gap-x-6 gap-y-3 sm:grid-cols-2">
       <input type="hidden" name="shipmentId" value={s.id} />
       <Field label="Scheduled date" hint={s.status === "draft" ? "Drives the number at confirmation." : "The number keeps its original date (5.12)."}>
-        <Input name="scheduledDate" type="date" required defaultValue={s.scheduledDate} />
+        <Input name="scheduledDate" type="date" required defaultValue={s.scheduledDate ?? ""} />
       </Field>
       <Field label="Driver">
         <Select name="driverEmployeeId" defaultValue={s.driverEmployeeId ?? ""}>
@@ -476,9 +513,20 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
           <span className="text-ink-3">{s.template} template</span>
           {s.legacy ? <span className="text-ink-3">imported history</span> : null}
           <span>
-            {origin ? `${origin.originCode ?? ""} ${origin.name}`.trim() : "—"} to {destinationLabel}
+            {originLabel(origin)} to {destinationLabel}
           </span>
-          <span>scheduled {fmtDay(s.scheduledDate)}</span>
+          <span>{s.scheduledDate ? `scheduled ${fmtDay(s.scheduledDate)}` : "scheduled date set at confirmation"}</span>
+          {orders.length ? (
+            <span>
+              for{" "}
+              {orders.map((o, i) => (
+                <Link key={o.id} href={`/orders/${o.id}`} className="font-display text-navy hover:underline">
+                  {i ? ", " : ""}
+                  {o.orderNumber}
+                </Link>
+              ))}
+            </span>
+          ) : null}
         </>
       }
       actions={
@@ -494,10 +542,15 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
             </Button>
           ) : null}
           {s.status === "draft" && canConfirm ? (
-            <form action={confirmAction}>
-              <input type="hidden" name="shipmentId" value={s.id} />
-              <Button>Confirm (assign number)</Button>
-            </form>
+            <ActionPanel label="Confirm" variant="primary">
+              <form action={confirmAction} className="space-y-2">
+                <input type="hidden" name="shipmentId" value={s.id} />
+                <Field label="Scheduled date" hint="Numbers the shipment, allocates stock, stores the BOL and picking ticket (R2-3).">
+                  <Input name="scheduledDate" type="date" required defaultValue={s.scheduledDate ?? today} />
+                </Field>
+                <Button small>Confirm (assign number)</Button>
+              </form>
+            </ActionPanel>
           ) : null}
           {s.status === "confirmed" && canManage ? (
             <form action={stageAction}>
@@ -515,9 +568,22 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
             <ActionPanel label="Deliver" variant="primary">
               <form action={deliverAction} className="space-y-2">
                 <input type="hidden" name="shipmentId" value={s.id} />
-                <Field label="Actual date" hint="The office sets the actual date (5.11).">
+                <Field label="Actual date" hint={isDriverOnly(actor) ? "Today, unless the office says otherwise." : "The office sets the actual date (5.11)."}>
                   <Input name="actualDate" type="date" required defaultValue={today} />
                 </Field>
+                {s.type !== "T" && lines.some((l) => l.line.skuId) ? (
+                  <div className="space-y-1.5">
+                    <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_3.5rem_3.5rem] gap-x-2 font-display text-[10.5px] uppercase tracking-[0.12em] text-ink-2">
+                      <span>Line</span>
+                      <span className="text-right">Kept</span>
+                      <span className="text-right">Refused</span>
+                      <span className="text-right">Damaged</span>
+                    </div>
+                    <input type="hidden" name="perLine" value="1" />
+                    {outcomeFields("", "planned")}
+                    <p className="text-xs text-ink-3">Kept + refused + damaged = shipped. Refused goes back to the origin&apos;s stock; damaged is written off with the reason (R2-8, R2-9).</p>
+                  </div>
+                ) : null}
                 {s.type !== "T" && destination ? (
                   <div className="grid grid-cols-2 gap-2">
                     <Field label="Empty 1/2 bbl collected">
@@ -532,7 +598,28 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
                   <Input name="note" placeholder="Optional" />
                 </Field>
                 <Button small>Mark delivered</Button>
-                <p className="text-xs text-ink-3">Allocations are consumed and stock leaves the origin per line{s.type === "T" ? "; it sits in transit at the destination until received" : "; the keg balance moves and the invoice is issued dated the actual date"}. The number never changes.</p>
+                <p className="text-xs text-ink-3">Stock leaves the origin for what was kept{s.type === "T" ? "; it sits in transit at the destination until received" : "; the keg balance moves and the invoice is issued for the delivered quantities, dated the actual date"}. The number never changes.</p>
+              </form>
+            </ActionPanel>
+          ) : null}
+          {delivered && s.type !== "T" && canManage && lines.some((l) => l.line.skuId) ? (
+            <ActionPanel label="Correct delivery">
+              <form action={correctDeliveryAction} className="space-y-2">
+                <input type="hidden" name="shipmentId" value={s.id} />
+                <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_3.5rem_3.5rem] gap-x-2 font-display text-[10.5px] uppercase tracking-[0.12em] text-ink-2">
+                  <span>Line</span>
+                  <span className="text-right">Kept</span>
+                  <span className="text-right">Refused</span>
+                  <span className="text-right">Damaged</span>
+                </div>
+                {outcomeFields("", "recorded")}
+                <Field label="Reason (required)">
+                  <Input name="reason" required placeholder="e.g. driver keyed 5, the buyer kept 6" />
+                </Field>
+                <Button small variant="secondary">
+                  Correct
+                </Button>
+                <p className="text-xs text-ink-3">Office correction after the driver&apos;s record (R2-38): stock, keg balance and the invoice are recomputed under the same numbers; refused if the invoice is already paid.</p>
               </form>
             </ActionPanel>
           ) : null}
@@ -576,10 +663,18 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
                 <Field label="Reason (required)">
                   <Input name="reason" required />
                 </Field>
+                {orders.length ? (
+                  <Field label="The order" hint="Reopen keeps the demand reserved for a new shipment; cancel releases it (R2-7).">
+                    <Select name="order" defaultValue="reopen">
+                      <option value="reopen">Return to open</option>
+                      <option value="cancel">Cancel the order</option>
+                    </Select>
+                  </Field>
+                ) : null}
                 <Button small variant="danger">
                   Void shipment
                 </Button>
-                <p className="text-xs text-ink-3">Allocations are released, the draft invoice is voided and the number is kept as a gap (5.4).</p>
+                <p className="text-xs text-ink-3">Stock is released, the draft invoice is voided and the number is kept as a gap (5.4).</p>
               </form>
             </ActionPanel>
           ) : null}
@@ -605,7 +700,7 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
             items={[
               ["Number", s.number ?? "Assigned at confirmation"],
               ["Type", `${s.type} ${TYPE_LABEL[s.type]}${s.pickup ? " (will-call)" : ""}`],
-              ["Origin", origin ? `${origin.originCode ? origin.originCode + " " : ""}${origin.name}` : "—"],
+              ["Origin", originLabel(origin)],
               ["Destination", destination ? <Link key="d" href={`/locations/${destination.id}`} className="text-navy hover:underline">{destination.tradeName}</Link> : destinationLabel],
               ["Destination kind", destination ? destination.kind : destinationWarehouse ? destinationWarehouse.kind : s.destinationText ? "free text" : "—"],
               ["Scheduled", fmtDay(s.scheduledDate)],

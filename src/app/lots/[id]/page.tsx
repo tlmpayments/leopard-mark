@@ -9,9 +9,10 @@ import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
 import { listSkus } from "@/lib/domain/catalog/service";
-import { BRAND_CODES, brandCodeForSku, getLot } from "@/lib/domain/lots/service";
-import { shipmentNumber } from "../../shipments/labels";
-import { confirmLotQuantitiesAction } from "../actions";
+import { BRAND_CODES, brandCodeForSku, getLot, listPackagingEntries, lotYield } from "@/lib/domain/lots/service";
+import { originLabel } from "@/lib/domain/origins/service";
+import { shipmentNumber, todayIso } from "../../shipments/labels";
+import { addPackagingDayAction, confirmLotQuantitiesAction } from "../actions";
 
 export default async function LotPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { id } = await params;
@@ -35,6 +36,8 @@ export default async function LotPage({ params, searchParams }: { params: Promis
     .limit(50);
   const canManage = can(actor, "lot.manage");
   const brand = BRAND_CODES.find((b) => b.code === lot.brandCode);
+  const [entries, yieldInfo] = await Promise.all([listPackagingEntries(d, lot.id), lotYield(d, lot.id)]);
+  const days = Array.from(new Set(entries.map((e) => e.entry.packagedOn))).sort();
 
   const quantitiesTab = (
     <>
@@ -75,7 +78,52 @@ export default async function LotPage({ params, searchParams }: { params: Promis
           </form>
         </details>
       ) : null}
+      {canManage && !lot.legacyCode && lot.quantitiesKnown ? (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-sm text-navy">Add a packaging day (the run continued, R2-21)</summary>
+          <form action={addPackagingDayAction} className="mt-3 max-w-2xl space-y-3">
+            <input type="hidden" name="lotId" value={lot.id} />
+            <Field label="Packaged on" hint="The same lot and code; the day is kept on the entry. A different brew is a different lot (new run digit).">
+              <Input name="packagedOn" type="date" required defaultValue={todayIso()} min={lot.packagingDate} />
+            </Field>
+            <table className="w-full text-[13px]">
+              <tbody>
+                {forForm.map((s) => (
+                  <tr key={s.id} className="border-b border-rule-soft">
+                    <td className="py-1 pr-2">
+                      <Code>{s.code}</Code>
+                    </td>
+                    <td className="py-1 pr-2">
+                      {s.brand} {s.name}
+                    </td>
+                    <td className="w-28 py-1 text-right">
+                      <Input name={`qty:${s.id}`} type="number" min={0} step={1} inputMode="numeric" className="h-8 w-24 text-right" placeholder="0" aria-label={`${s.code} added quantity`} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Field label="Note">
+              <Input name="note" placeholder="e.g. Day 2 of the run, host sheet 2026-11-02" />
+            </Field>
+            <Button small variant="secondary">
+              Add to this lot
+            </Button>
+            <p className="text-xs text-ink-3">Quantities are added to the totals above and posted to stock at the facility, lot-tagged.</p>
+          </form>
+        </details>
+      ) : null}
     </>
+  );
+
+  const daysTab = (
+    <Table
+      head={["Packaged on", "SKU", "Qty", "Note", "Recorded"]}
+      widths={[LIST_WIDTHS.date, LIST_WIDTHS.code, LIST_WIDTHS.qty, undefined, "11rem"]}
+      align={["left", "left", "right", "left", "left"]}
+      empty="No per-day entries (quantities were confirmed as a total)."
+      rows={entries.map(({ entry: e, code }) => [fmtDay(e.packagedOn), <Code key="c">{code}</Code>, String(e.qty), e.note ?? "—", fmtDate(e.createdAt)])}
+    />
   );
 
   const shipmentsTab = (
@@ -103,12 +151,12 @@ export default async function LotPage({ params, searchParams }: { params: Promis
       status={lot.quantitiesKnown ? <span className="font-semibold text-navy">Quantities known</span> : <span className="text-ink-2">Quantities unconfirmed</span>}
       meta={
         <>
-          <span>{facility?.name ?? "—"}</span>
+          <span>{originLabel(facility)}</span>
           <span>
             {lot.brandCode}
             {brand ? ` ${brand.name}` : ""}
           </span>
-          <span>packaged {fmtDay(lot.packagingDate)}</span>
+          <span>packaged {days.length > 1 ? `${fmtDay(days[0])} to ${fmtDay(days[days.length - 1])}` : fmtDay(lot.packagingDate)}</span>
           {lot.legacyCode ? <span className="text-ink-3">history only</span> : null}
         </>
       }
@@ -120,9 +168,9 @@ export default async function LotPage({ params, searchParams }: { params: Promis
           <KV
             items={[
               ["Lot code", <Code key="c">{lot.lotCode}</Code>],
-              ["Facility", facility ? `${facility.lotFacilityCode ? facility.lotFacilityCode + " " : ""}${facility.name}` : "—"],
+              ["Facility", originLabel(facility)],
               ["Brand", `${lot.brandCode}${brand ? ` ${brand.name}` : ""}`],
-              ["Packaging date", fmtDay(lot.packagingDate)],
+              ["Packaging date", days.length > 1 ? `${fmtDay(lot.packagingDate)} (first day; ${days.length} days)` : fmtDay(lot.packagingDate)],
               ["Run", lot.runCode],
               ["Source", lot.source.replace(/_/g, " ")],
               ["Batch", batch ? <Link key="b" href={`/batches?focus=${batch.id}`} className="text-navy hover:underline">{batch.batchNumber}</Link> : "—"],
@@ -139,6 +187,9 @@ export default async function LotPage({ params, searchParams }: { params: Promis
                 ["Brewed", batch.brewDate ? fmtDay(batch.brewDate) : "—"],
                 ["Vessel", batch.vesselSize ?? "—"],
                 ["Brewery batch number", batch.breweryBatchNumber ?? "—"],
+                ["Batch size", yieldInfo.batchBarrels !== null ? `${yieldInfo.batchBarrels.toFixed(2)} bbl` : "not recorded"],
+                ["Packaged", `${yieldInfo.packagedBarrels.toFixed(2)} bbl (${yieldInfo.packagedUnits} units)`],
+                ["Loss", yieldInfo.lossBarrels !== null ? `${yieldInfo.lossBarrels.toFixed(2)} bbl (displayed only, R2-22)` : "needs the batch size"],
               ]}
             />
           ) : (
@@ -153,6 +204,7 @@ export default async function LotPage({ params, searchParams }: { params: Promis
       <Tabs
         tabs={[
           { id: "quantities", label: "Quantities packaged", count: quantities.length, content: quantitiesTab },
+          { id: "days", label: "Packaging days", count: days.length, content: daysTab },
           { id: "shipments", label: "Shipments using this lot", count: usedOn.length, content: shipmentsTab },
         ]}
       />

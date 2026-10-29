@@ -125,7 +125,7 @@ export interface AccountRecord {
   marketId: string;
   marketReason: string;
   kind: AccountKind;
-  status: "active" | "inactive";
+  status: "active" | "closed"; // R2-31: Active or Closed only
   /** undefined = leave whatever the database has; null = clear; id = set. */
   servedByLocationId?: string | null;
   servedByLabel?: string;

@@ -100,7 +100,7 @@ run("AC37 — upgrade from the previous revision", () => {
     const sales = (await loadActor(db, salesIdentity.employeeId))!;
     const [loc] = await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.tradeName, "Dogpatch Bottle Shop"));
     const [sku] = await db.select().from(schema.sku).where(eq(schema.sku.code, "CAN-12C"));
-    const res = await submitOrder(db, sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 1 }] });
+    const res = await submitOrder(db, sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 1 }] });
     expect(res.order.orderNumber).toMatch(/^NC-\d{6}$/);
     // Pre-existing payment relationship rows had the AP contact as payer by inheritance (old REV-08 behaviour): they are
     // kept as history, but the authority check now refuses them until intentionally assigned.

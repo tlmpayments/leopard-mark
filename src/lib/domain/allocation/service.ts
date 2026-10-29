@@ -342,6 +342,7 @@ export const MOVEMENT_SEMANTICS: Record<StockMovementKind, { direction: "increas
   route_return: { direction: "internal", label: "Route return (phase 2)", quantityLabel: "" },
   shipment_out: { direction: "internal", label: "Shipment delivered", quantityLabel: "" },
   count: { direction: "internal", label: "Physical count applied", quantityLabel: "" },
+  packaging: { direction: "internal", label: "Packaging run", quantityLabel: "" },
 };
 
 /**
@@ -355,7 +356,7 @@ export const MOVEMENT_SEMANTICS: Record<StockMovementKind, { direction: "increas
 export async function recordStockMovement(
   db: DbOrTx,
   actor: Actor,
-  input: { warehouseId: string; skuId: string; kind: StockMovementKind; qtyDelta: number; evidence: string; referenceType?: string; referenceId?: string },
+  input: { warehouseId: string; skuId: string; kind: StockMovementKind; qtyDelta: number; evidence: string; referenceType?: string; referenceId?: string; lotId?: string | null },
 ) {
   const [wh] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, input.warehouseId));
   if (!wh) throw new BusinessError("Warehouse not found");
@@ -398,6 +399,7 @@ export async function recordStockMovement(
         referenceType: input.referenceType ?? null,
         referenceId: input.referenceId ?? null,
         actorEmployeeId: actor.employeeId,
+        lotId: input.lotId ?? null,
       })
       .returning();
     await recordAudit(tx, actor, {
@@ -716,4 +718,90 @@ export async function reassignOrderWarehouse(db: DbOrTx, actor: Actor, orderId: 
     }
     return { orderId, toWarehouseId, lines: result, shortage };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Order reservations and the shipment created from the order (round 2, R2-1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The shipment created from an order is confirmed: its lines now hold the stock through shipment allocations, so the
+ * order's reservations move to `route_committed` (no longer counted in availability) rather than counting twice.
+ */
+/**
+ * Confirmation of an order's shipment (R2-1): the quantity on each shipment line moves from the order's reservation
+ * to the shipment (route_committed, so availability does not count it twice once the shipment allocation exists).
+ * Whatever the reservation holds beyond the line (units reserved after the draft was cut, or units still waiting
+ * for stock) stays in the queue as a plain reservation with its original place.
+ */
+export async function commitReservationsForShipmentLines(tx: Tx, lines: Array<{ orderLineId: string | null; qty: number }>): Promise<number> {
+  let committed = 0;
+  for (const line of lines) {
+    if (!line.orderLineId) continue;
+    let need = line.qty;
+    const rows = await tx
+      .select()
+      .from(schema.reservation)
+      .where(and(eq(schema.reservation.orderLineId, line.orderLineId), eq(schema.reservation.state, "reserved")))
+      .orderBy(schema.reservation.createdAt, schema.reservation.id)
+      .for("update");
+    for (const r of rows) {
+      if (need <= 0) break;
+      const take = Math.min(need, r.reservedQty);
+      if (take <= 0) continue;
+      need -= take;
+      committed += take;
+      const leftover = r.reservedQty - take;
+      await tx.update(schema.reservation).set({ state: "route_committed", reservedQty: take, unmetQty: 0 }).where(eq(schema.reservation.id, r.id));
+      if (leftover > 0 || r.unmetQty > 0) {
+        await tx.insert(schema.reservation).values({ orderLineId: r.orderLineId, warehouseId: r.warehouseId, skuId: r.skuId, reservedQty: leftover, unmetQty: r.unmetQty, state: "reserved", createdAt: r.createdAt });
+      }
+    }
+  }
+  return committed;
+}
+
+/** Kept for callers that commit whole lines; the shipment path uses commitReservationsForShipmentLines. */
+export async function commitReservationsForOrderLines(tx: Tx, orderLineIds: string[]): Promise<number> {
+  if (orderLineIds.length === 0) return 0;
+  const rows = await tx
+    .update(schema.reservation)
+    .set({ state: "route_committed" })
+    .where(and(inArray(schema.reservation.orderLineId, orderLineIds), eq(schema.reservation.state, "reserved")))
+    .returning({ id: schema.reservation.id });
+  return rows.length;
+}
+
+/** The shipment was voided and the order reopened (R2-7): route-committed reservations count again as reserved. */
+export async function uncommitReservationsForOrderLines(tx: Tx, orderLineIds: string[]): Promise<number> {
+  if (orderLineIds.length === 0) return 0;
+  const rows = await tx
+    .update(schema.reservation)
+    .set({ state: "reserved" })
+    .where(and(inArray(schema.reservation.orderLineId, orderLineIds), eq(schema.reservation.state, "route_committed")))
+    .returning({ id: schema.reservation.id });
+  return rows.length;
+}
+
+/**
+ * Delivered (R2-8): the committed reservations of the delivered order lines are consumed. Units the account did not
+ * keep (refused, damaged) are open demand again on the order: they are re-reserved from what is on hand at the origin
+ * (refused units never left it) and anything short waits in the queue, so the office can ship them again or cancel.
+ */
+export async function fulfilReservationsForOrderLines(tx: Tx, actor: Actor, lines: Array<{ orderLineId: string | null; delivered: number; notKept: number }>): Promise<number> {
+  let fulfilled = 0;
+  for (const line of lines) {
+    if (!line.orderLineId) continue;
+    const rows = await tx
+      .update(schema.reservation)
+      .set({ state: "fulfilled", releasedAt: new Date(), releaseReason: "Delivered" })
+      .where(and(eq(schema.reservation.orderLineId, line.orderLineId), eq(schema.reservation.state, "route_committed")))
+      .returning({ id: schema.reservation.id, warehouseId: schema.reservation.warehouseId, skuId: schema.reservation.skuId });
+    fulfilled += rows.length;
+    if (line.notKept > 0 && rows[0]) {
+      const r = await reserveForLine(tx, actor, { orderLineId: line.orderLineId, warehouseId: rows[0].warehouseId, skuId: rows[0].skuId, qty: line.notKept });
+      await recordAudit(tx, actor, { action: "allocation.re_reserve", subjectType: "reservation", subjectId: r.reservationId, current: { reservedQty: r.reservedQty, unmetQty: r.unmetQty }, reason: "Units refused or damaged at delivery stay open demand on the order (R2-8, R2-9)" });
+    }
+  }
+  return fulfilled;
 }

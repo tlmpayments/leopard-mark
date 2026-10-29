@@ -11,7 +11,7 @@ import { createWarehouse } from "@/lib/domain/markets/service";
 import { createOrigin, updateOrigin } from "@/lib/domain/origins/service";
 import { composeLotCode, lotPickerOptions, parseLotCode, recordPackagingReport } from "@/lib/domain/lots/service";
 import { confirmShipment, createShipment, deliverShipment, getShipment, listShipments, receiveTransfer, regenerateShipmentDocuments, replaceShipmentLines, updateShipmentHeader, voidShipment } from "@/lib/domain/shipments/service";
-import { addShipmentToInvoice, getInvoice, listInvoices } from "@/lib/domain/invoices/service";
+import { getInvoice, listInvoices } from "@/lib/domain/invoices/service";
 import { kegBalances, microstarReport, recordKegEvent } from "@/lib/domain/kegs/service";
 import { applyCountSession, createCountSession } from "@/lib/domain/counts/service";
 import { getCompanySettings, nextDocNumber, updateCompanySettings } from "@/lib/domain/settings/service";
@@ -254,26 +254,26 @@ describe("Acceptance 5 — invoices", () => {
     expect(fInv.lines.some((l) => l.kind === "deposit")).toBe(false);
     expect(fInv.lines.some((l) => l.kind === "info" && /Floating/.test(l.description))).toBe(true);
   });
-  it("adds a same-account shipment to an open draft within the week and refuses samples on a charged invoice (7.2, 7.3)", async () => {
+  it("issues exactly one invoice per delivery; samples take their own NC invoice (R2-15, 7.3)", async () => {
     const a = await createShipment(db, f.admin, header({ scheduledDate: "2026-12-01" }), [{ skuId: f.skus.cantinescaCase.id, lotId: lotCase, qty: 1 }]);
     const b = await createShipment(db, f.admin, header({ scheduledDate: "2026-12-03" }), [{ skuId: f.skus.cantinescaCase.id, lotId: lotCase, qty: 1 }]);
     await confirmShipment(db, f.admin, a.id);
     await confirmShipment(db, f.admin, b.id);
     const draftA = (await getShipment(db, a.id))!.invoices[0];
-    await addShipmentToInvoice(db, f.accounting, draftA.id, b.id);
-    const merged = (await getInvoice(db, draftA.id))!;
-    expect(merged.shipments.length).toBe(2);
-    expect(merged.lines.filter((l) => l.kind === "beer").length).toBe(2);
+    const draftB = (await getShipment(db, b.id))!.invoices[0];
+    expect(draftA.id).not.toBe(draftB.id);
     const sample = await createShipment(db, f.admin, header({ type: "S", scheduledDate: "2026-12-02" }), [{ skuId: f.skus.cantinescaCase.id, lotId: lotCase, qty: 1 }]);
     await confirmShipment(db, f.admin, sample.id);
-    await expect(addShipmentToInvoice(db, f.accounting, draftA.id, sample.id)).rejects.toThrow(/never share/);
-    // Issue happens only when every shipment on the draft is delivered.
+    expect((await getInvoice(db, (await getShipment(db, sample.id))!.invoices[0].id))!.invoice.series).toBe("NC");
     await deliverShipment(db, f.admin, a.id, { actualDate: "2026-12-01" });
-    expect((await getInvoice(db, draftA.id))!.invoice.status).toBe("draft");
+    expect((await getInvoice(db, draftA.id))!.invoice.status).toBe("issued");
+    expect((await getInvoice(db, draftA.id))!.invoice.invoiceDate).toBe("2026-12-01");
+    expect((await getInvoice(db, draftB.id))!.invoice.status).toBe("draft");
     await deliverShipment(db, f.admin, b.id, { actualDate: "2026-12-03" });
-    const issued = (await getInvoice(db, draftA.id))!.invoice;
+    const issued = (await getInvoice(db, draftB.id))!.invoice;
     expect(issued.status).toBe("issued");
     expect(issued.invoiceDate).toBe("2026-12-03");
+    expect((await getInvoice(db, draftB.id))!.shipments.length).toBe(1);
   });
   it("counters continue from the Sheet and widen past 999", async () => {
     expect(await nextDocNumber(db, "INV", 2027)).toBe("INV27001");
@@ -285,21 +285,23 @@ describe("Acceptance 5 — invoices", () => {
 describe("Counts, kegs by hand, MicroStar report (8.x)", () => {
   it("applies a count with lot codes and keeps movements per lot", async () => {
     const session = await createCountSession(db, f.admin, { warehouseId: destWarehouse.id, countedOn: "2026-11-30", countedBy: "EWD staff", lines: [{ skuId: f.skus.sunlightHalf.id, lotCode: "01SLG2610061", qty: 5 }, { skuId: f.skus.cantinescaCase.id, qty: 12 }] });
-    const { changes } = await applyCountSession(db, f.admin, session.id);
+    // R2-23: a variance needs a reason; it goes on each adjustment.
+    await expect(applyCountSession(db, f.admin, session.id)).rejects.toThrow(/say why/);
+    const { changes } = await applyCountSession(db, f.admin, session.id, { reason: "Month-end count sheet" });
     expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ after: 5 }), expect.objectContaining({ after: 12 })]));
     expect((await availability(db, destWarehouse.id, f.skus.sunlightHalf.id)).onHandQty).toBe(5);
     await expect(applyCountSession(db, f.admin, session.id)).rejects.toThrow(/already applied/);
   });
-  it("records an opening keg balance and reports distributor and brewery outbound kegs", async () => {
+  it("records an opening keg balance and reports kegs out to distributors per facility with the BOL (R2-25)", async () => {
     await recordKegEvent(db, f.admin, { locationId: retail.id, on: "2026-10-31", kind: "opening", halfOut: 2, note: "Counted at the bar on cut-over" });
     const b = (await kegBalances(db, f.admin, { locationId: retail.id }))[0];
     expect(b.halfBalance).toBe(2); // 1 out, 1 in from deliveries plus 2 opening
-    const dist = await microstarReport(db, f.accounting, { month: "2026-11", groupBy: "distributor" });
-    expect(dist.length).toBe(2); // the carrier delivery and the will-call pickup
-    expect(dist.find((r) => r.sixtelOut === 1)).toMatchObject({ groupName: "Big Distributor Inc", halfOut: 2, sixtelOut: 1 });
-    const brew = await microstarReport(db, f.accounting, { month: "2026-11", groupBy: "brewery" });
-    expect(brew.every((r) => r.groupName.startsWith("East Brother"))).toBe(true);
-    expect(brew.length).toBeGreaterThanOrEqual(3);
+    const rows = await microstarReport(db, f.accounting, { month: "2026-11" });
+    expect(rows.length).toBe(2); // the carrier delivery and the will-call pickup to the distributor; retail never appears
+    expect(rows.find((r) => r.sixtelOut === 1)).toMatchObject({ distributorName: "Big Distributor Inc", halfOut: 2, sixtelOut: 1 });
+    expect(rows.every((r) => r.facilityName.includes("East Brother") && r.shipmentNumber)).toBe(true);
+    const other = await microstarReport(db, f.accounting, { month: "2026-11", facilityWarehouseId: destWarehouse.id });
+    expect(other.length).toBe(0);
   });
 });
 

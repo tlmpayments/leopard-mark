@@ -1,6 +1,7 @@
 /**
  * Shipping and billing attributes of an account (decisions 2.4, 2.6, 1.2, 2.1, 7.4, 3.10, 2.5): kind, served-by
  * distributor, legacy ACC- id, region, terms and deposit overrides, fulfilment, pallet rule and receiving requirements.
+ * Round 2 adds the payment channel (R2-12), invoice on receipt (R2-30) and the floating deposit on file (R2-13).
  * Admin (location.lifecycle) maintains them; every change is audited with prior and current values.
  */
 import { eq } from "drizzle-orm";
@@ -14,13 +15,21 @@ import { BusinessError } from "@/lib/errors";
 export type AccountKind = (typeof schema.accountKindEnum.enumValues)[number];
 export type DepositMode = (typeof schema.depositModeEnum.enumValues)[number];
 export type Fulfilment = (typeof schema.fulfilmentEnum.enumValues)[number];
+export type PayBy = (typeof schema.payByEnum.enumValues)[number];
+
+/** How the account pays (R2-12). Recorded on the account and copied onto each invoice at issue; collection stays manual. */
+export const PAY_BY_LABEL: Record<PayBy, string> = {
+  fintech: "Fintech",
+  stripe: "Stripe",
+  check: "Check",
+};
 
 export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
   retail: "Retail",
   distributor: "Distributor",
   warehouse: "Warehouse",
   host: "Host brewery",
-  internal: "Familiar Ventures (internal)",
+  internal: "Internal (house account)",
   individual: "Individual",
 };
 
@@ -44,6 +53,13 @@ export interface AccountShippingPatch {
   palletRule?: string | null;
   receivingRequirements?: string | null;
   firstDeliveryOn?: string | null;
+  payBy?: PayBy | null;
+  invoiceOnReceipt?: boolean;
+  /** Floating deposit on file (R2-13): one deposit taken on the first order, settled on the last. */
+  depositTakenCents?: number | null;
+  depositTakenOn?: string | null;
+  depositSettledOn?: string | null;
+  depositSettlementNote?: string | null;
 }
 
 export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId: string, patch: AccountShippingPatch) {
@@ -90,6 +106,23 @@ export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId
     if (patch.firstDeliveryOn && !/^\d{4}-\d{2}-\d{2}$/.test(patch.firstDeliveryOn)) throw new BusinessError("First delivery date must be YYYY-MM-DD", { field: "firstDeliveryOn" });
     set.firstDeliveryOn = patch.firstDeliveryOn || null;
   }
+  if (patch.payBy !== undefined) {
+    if (patch.payBy !== null && !schema.payByEnum.enumValues.includes(patch.payBy)) throw new BusinessError("Payment channel is Fintech, Stripe or check", { field: "payBy" });
+    set.payBy = patch.payBy;
+  }
+  if (patch.invoiceOnReceipt !== undefined) set.invoiceOnReceipt = patch.invoiceOnReceipt;
+  if (patch.depositTakenCents !== undefined) {
+    if (patch.depositTakenCents !== null && (!Number.isInteger(patch.depositTakenCents) || patch.depositTakenCents < 0)) throw new BusinessError("Deposit on file must be a whole number of cents", { field: "depositTakenCents" });
+    set.depositTakenCents = patch.depositTakenCents;
+  }
+  for (const k of ["depositTakenOn", "depositSettledOn"] as const) {
+    const v = patch[k];
+    if (v === undefined) continue;
+    if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new BusinessError("Date must be YYYY-MM-DD", { field: k });
+    set[k] = v || null;
+  }
+  if (patch.depositSettlementNote !== undefined) set.depositSettlementNote = patch.depositSettlementNote?.trim() || null;
+  if (set.depositSettledOn && !(set.depositTakenCents ?? prior.depositTakenCents)) throw new BusinessError("Record the deposit taken before settling it", { field: "depositSettledOn" });
   if (Object.keys(set).length === 0) throw new BusinessError("Nothing to change");
   set.updatedAt = new Date();
   const [row] = await db.update(schema.customerLocation).set(set).where(eq(schema.customerLocation.id, locationId)).returning();

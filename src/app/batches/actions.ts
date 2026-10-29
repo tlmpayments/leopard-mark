@@ -8,10 +8,11 @@ export async function createBatchAction(form: FormData) {
     const b = await createBatch(db, actor, {
       facilityWarehouseId: str(form, "facilityWarehouseId"),
       brandCode: str(form, "brandCode"),
-      batchNumber: str(form, "batchNumber"),
+      batchNumber: opt(form, "batchNumber"),
       brewDate: opt(form, "brewDate"),
+      barrels: opt(form, "barrels"),
       vesselSize: opt(form, "vesselSize"),
-      status: (opt(form, "status") as BatchStatus | null) ?? "scheduled",
+      status: (opt(form, "status") as BatchStatus | null) ?? "in_progress",
       breweryBatchNumber: opt(form, "breweryBatchNumber"),
       notes: opt(form, "notes"),
     });

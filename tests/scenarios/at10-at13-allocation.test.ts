@@ -31,14 +31,14 @@ describe("AT10 — Reservation and cancellation", () => {
   it("submission reserves once; replay of the same submission creates no second reservation; cancellation releases unused units; loaded units are not claimed back", async () => {
     const loc = await verifiedLocation("Reserve Rooftop");
     const before = await availability(db, f.warehouse.id, f.skus.sunlightHalf.id);
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 3 }], submissionKey: "sub-1" });
-    const replay = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 3 }], submissionKey: "sub-1" });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 3 }], submissionKey: "sub-1" });
+    const replay = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 3 }], submissionKey: "sub-1" });
     expect(replay.replayed).toBe(true);
     expect(replay.order.id).toBe(res.order.id);
     let now = await availability(db, f.warehouse.id, f.skus.sunlightHalf.id);
     expect(now.availableQty).toBe(before.availableQty - 3);
     // A legitimate repeat order (new key) is a new order.
-    const repeat = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 1 }], submissionKey: "sub-2" });
+    const repeat = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 1 }], submissionKey: "sub-2" });
     expect(repeat.order.id).not.toBe(res.order.id);
     // Sales cannot cancel (D10 pending); Admin cancels undelivered demand.
     await expect(cancelUndeliveredDemand(db, f.sales, res.order.id, "changed mind")).rejects.toBeInstanceOf(AuthorizationError);
@@ -51,7 +51,7 @@ describe("AT10 — Reservation and cancellation", () => {
     expect(o?.lines[0].currentQty).toBe(0);
     expect(o?.lines[0].cancelledQty).toBe(3);
     // After load (route_committed), cancellation does not claim warehouse receipt.
-    const loaded = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 2 }] });
+    const loaded = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.sunlightHalf.id, qty: 2 }] });
     const [resv] = await db.select().from(schema.reservation).where(eq(schema.reservation.orderLineId, loaded.lines[0].id));
     await db.update(schema.reservation).set({ state: "route_committed" }).where(eq(schema.reservation.id, resv.id));
     // Loading is a phase-2 workflow (not hand-entered, REV-05): simulate its physical fact directly for this test.
@@ -71,11 +71,11 @@ describe("AT11 — Shortage", () => {
     const loc = await verifiedLocation("Shortfall Shack");
     const loc2 = await verifiedLocation("Later Lounge");
     const avail = (await availability(db, f.warehouse.id, f.skus.cantinescaSixtel.id)).availableQty;
-    const big = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaSixtel.id, qty: avail + 5 }] });
+    const big = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaSixtel.id, qty: avail + 5 }] });
     expect(big.shortage).toBe(true);
     expect(big.lines[0].reservedQty).toBe(avail);
     expect(big.lines[0].unmetQty).toBe(5);
-    const later = await submitOrder(db, f.sales, { locationId: loc2.id, lines: [{ skuId: f.skus.cantinescaSixtel.id, qty: 2 }] });
+    const later = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc2.id, lines: [{ skuId: f.skus.cantinescaSixtel.id, qty: 2 }] });
     expect(later.lines[0].reservedQty).toBe(0);
     expect(later.lines[0].unmetQty).toBe(2);
     const cases = await db.select().from(schema.exceptionCase).where(eq(schema.exceptionCase.dedupeKey, `allocation_shortage:${big.order.id}`));
@@ -140,7 +140,7 @@ describe("AT13 — Warehouse reassignment", () => {
     await expect(setWarehouseOverride(db, f.sales, loc.id, second.id, "x")).rejects.toBeInstanceOf(AuthorizationError);
     await setWarehouseOverride(db, f.admin, loc.id, second.id, "Closer to customer");
     // New warehouse has no stock: order reserves nothing, unmet retained — no duplicate availability.
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 2 }] });
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 2 }] });
     expect(res.order.warehouseId).toBe(second.id);
     expect(res.order.marketId).toBe(f.market.id);
     expect(res.lines[0].unitPriceCentsAtSubmission).toBe(3600); // market price unchanged

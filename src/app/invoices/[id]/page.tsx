@@ -1,18 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq, inArray, ne } from "drizzle-orm";
-import { ActionPanel, Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, Select, StatusBadge, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
+import { ActionPanel, Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, StatusBadge, Struck, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
 import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
-import * as schema from "@/lib/db/schema";
 import { formatCents } from "@/lib/domain/catalog/service";
-import { getInvoice } from "@/lib/domain/invoices/service";
-import { listShipments } from "@/lib/domain/shipments/service";
+import { PAY_BY_LABEL } from "@/lib/domain/customers/shipping";
+import { creditMemosForInvoice, getInvoice } from "@/lib/domain/invoices/service";
 import { TYPE_LABEL, shipmentNumber, todayIso } from "../../shipments/labels";
-import { addShipmentAction, issueInvoiceAction, markPaidAction, voidInvoiceAction } from "../actions";
+import { issueCreditMemoAction, issueInvoiceAction, markPaidAction, voidCreditMemoAction, voidInvoiceAction } from "../actions";
 
 const LINE_KIND: Record<string, string> = { beer: "Beer", deposit: "Deposit", pos: "POS", info: "Info" };
 
@@ -28,22 +26,9 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
   const canVoid = can(actor, "invoice.void", { marketId: inv.marketId }) && !inv.legacy;
   const today = todayIso();
 
-  let candidates: Awaited<ReturnType<typeof listShipments>> = [];
-  if (inv.status === "draft" && canIssue && inv.locationId) {
-    const all = await listShipments(d, actor, { destinationLocationId: inv.locationId, limit: 200 });
-    const onInvoice = new Set(shipments.map((s) => s.id));
-    const pool = all.filter(({ s }) => ["confirmed", "staged", "out", "delivered"].includes(s.status) && (inv.series === "NC") === (s.type === "S") && !onInvoice.has(s.id));
-    const ids = pool.map((p) => p.s.id);
-    const taken = ids.length
-      ? await d
-          .select({ shipmentId: schema.invoiceShipment.shipmentId })
-          .from(schema.invoiceShipment)
-          .innerJoin(schema.invoice, eq(schema.invoice.id, schema.invoiceShipment.invoiceId))
-          .where(and(inArray(schema.invoiceShipment.shipmentId, ids), ne(schema.invoice.status, "void"), ne(schema.invoice.status, "draft")))
-      : [];
-    const takenIds = new Set(taken.map((t) => t.shipmentId));
-    candidates = pool.filter((p) => !takenIds.has(p.s.id));
-  }
+  const canCredit = can(actor, "credit.issue", { marketId: inv.marketId }) && !inv.legacy && (inv.status === "issued" || inv.status === "paid");
+  const credits = await creditMemosForInvoice(d, inv.id);
+  const creditedCents = credits.filter((c) => c.status === "issued").reduce((n, c) => n + c.amountCents, 0);
 
   const invoiceTab = (
     <>
@@ -70,8 +55,62 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
         <dd className="text-right tabular-nums">{formatCents(inv.depositCents)}</dd>
         <dt className="border-t border-rule pt-1 font-semibold">Total</dt>
         <dd className="border-t border-rule pt-1 text-right font-semibold tabular-nums">{formatCents(inv.totalCents)}</dd>
+        {creditedCents > 0 ? (
+          <>
+            <dt className="text-ink-2">Credited</dt>
+            <dd className="text-right tabular-nums">{formatCents(-creditedCents)}</dd>
+            <dt className="text-ink-2">Net</dt>
+            <dd className="text-right tabular-nums">{formatCents(inv.totalCents - creditedCents)}</dd>
+          </>
+        ) : null}
       </dl>
-      {inv.status === "draft" ? <p className="mt-2 text-xs text-ink-3">Draft lines are recomputed from the shipments at issue: prices captured at confirmation, deposit per the market rule or the account&apos;s deposit mode (3.10), MicroStar information lines for distributors (7.8).</p> : null}
+      {inv.status === "draft" ? <p className="mt-2 text-xs text-ink-3">Draft lines are recomputed at issue from what was delivered: prices captured at confirmation, refused or damaged units left off (R2-8, R2-9), deposit per the market rule or the account&apos;s deposit mode (3.10), MicroStar information lines for distributors (7.8).</p> : null}
+    </>
+  );
+
+  const creditsTab = (
+    <>
+      <Table
+        caption="Credit memos"
+        head={["Number", "Date", "Reason", "Amount"]}
+        widths={[LIST_WIDTHS.number, LIST_WIDTHS.date, undefined, LIST_WIDTHS.money]}
+        align={["left", "left", "left", "right"]}
+        empty="No credit memo against this invoice."
+        rows={credits.map((c) => [
+          c.status === "void" ? <Struck key="n">{c.number}</Struck> : <span key="n" className="font-display">{c.number}</span>,
+          fmtDay(c.memoDate),
+          c.status === "void" ? `${c.reason} (void: ${c.voidReason})` : c.reason,
+          formatCents(c.amountCents),
+        ])}
+      />
+      {canCredit && credits.some((c) => c.status === "issued") ? (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-sm text-navy">Void a credit memo</summary>
+          <form action={voidCreditMemoAction} className="mt-2 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="invoiceId" value={inv.id} />
+            <Field label="Credit memo">
+              <select name="creditMemoId" required defaultValue="" className="h-9 rounded-sm border border-rule bg-paper px-2 text-sm" aria-label="Credit memo">
+                <option value="" disabled>
+                  Credit memo
+                </option>
+                {credits
+                  .filter((c) => c.status === "issued")
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.number} {formatCents(c.amountCents)}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="Reason (required)">
+              <Input name="reason" required />
+            </Field>
+            <Button small variant="danger">
+              Void credit memo
+            </Button>
+          </form>
+        </details>
+      ) : null}
     </>
   );
 
@@ -139,6 +178,24 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
               </form>
             </ActionPanel>
           ) : null}
+          {canCredit ? (
+            <ActionPanel label="Credit memo" variant="secondary">
+              <form action={issueCreditMemoAction} className="space-y-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Field label="Amount (dollars)" hint={`Against ${inv.number}; credits so far ${formatCents(creditedCents)} of ${formatCents(inv.totalCents)}.`}>
+                  <Input name="amount" type="number" step="0.01" min="0.01" required inputMode="decimal" />
+                </Field>
+                <Field label="Date">
+                  <Input name="memoDate" type="date" required defaultValue={today} />
+                </Field>
+                <Field label="Reason (required)">
+                  <Input name="reason" required placeholder="e.g. short-dated kegs, agreed with the buyer" />
+                </Field>
+                <Button small>Issue CM</Button>
+                <p className="text-xs text-ink-3">Own CM series; Owner or back office only (R2-14). The invoice itself never changes.</p>
+              </form>
+            </ActionPanel>
+          ) : null}
           {canVoid && inv.status !== "void" && inv.status !== "paid" ? (
             <ActionPanel label="Void" variant="danger">
               <form action={voidInvoiceAction} className="space-y-2">
@@ -172,6 +229,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
               ["Due date", fmtDay(inv.dueDate)],
               ["Terms", inv.termsDays != null ? `Net ${inv.termsDays}` : "market rule at issue"],
               ["FOB", inv.fobWording ?? "—"],
+              ["Pays by", inv.payBy ? PAY_BY_LABEL[inv.payBy] : location?.payBy ? `${PAY_BY_LABEL[location.payBy as keyof typeof PAY_BY_LABEL] ?? location.payBy} (account setting, copied at issue)` : "not set on the account"],
               ["Issued", inv.issuedAt ? fmtDate(inv.issuedAt) : "—"],
               ["Paid", inv.paidAt ? fmtDate(inv.paidAt) : "—"],
               ["Notes", inv.notes ? <span key="n" className="whitespace-pre-line">{inv.notes}</span> : "—"],
@@ -200,37 +258,14 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
               ))}
             </ul>
           )}
-          {inv.status === "draft" && canIssue ? (
-            <details className="mt-3">
-              <summary className="cursor-pointer text-sm text-navy">Add a shipment to this draft (same account, same week, 7.2)</summary>
-              {candidates.length === 0 ? (
-                <p className="mt-1 text-xs text-ink-3">No other confirmed or delivered shipment of this account is free to join.</p>
-              ) : (
-                <form action={addShipmentAction} className="mt-2 flex flex-wrap gap-2">
-                  <input type="hidden" name="invoiceId" value={inv.id} />
-                  <Select name="shipmentId" required defaultValue="" className="max-w-md" aria-label="Shipment">
-                    <option value="" disabled>
-                      Shipment
-                    </option>
-                    {candidates.map(({ s }) => (
-                      <option key={s.id} value={s.id}>
-                        {shipmentNumber(s)} {fmtDay(s.scheduledDate)} {s.status}
-                      </option>
-                    ))}
-                  </Select>
-                  <Button small variant="secondary">
-                    Add
-                  </Button>
-                </form>
-              )}
-            </details>
-          ) : null}
+          <p className="mt-3 text-xs text-ink-3">One invoice per delivery (R2-15).</p>
         </Card>
       </Columns>
       <Tabs
         tabs={[
           { id: "lines", label: "Lines", count: lines.length, content: invoiceTab },
           { id: "documents", label: "Documents", count: documents.length, content: documentsTab },
+          { id: "credits", label: "Credits", count: credits.length, content: creditsTab },
         ]}
       />
     </RecordPage>

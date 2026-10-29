@@ -74,8 +74,8 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
           </ul>
           {can(actor, "exception.manage") ? (
             <div className="mt-2 text-right">
-              <Link href="/admin" className="text-sm text-accent hover:underline">
-                Open the command center
+              <Link href="/admin/exceptions" className="text-sm text-accent hover:underline">
+                Open Exceptions
               </Link>
             </div>
           ) : null}

@@ -5,9 +5,13 @@
  * created when a D or S shipment to an account is confirmed; it is issued when the shipment is delivered, dated the
  * actual delivery or pickup date, with terms from the account override or the market rule. Sending and collection
  * stay manual (7.5 is open).
+ *
+ * Round 2: exactly one invoice per delivery (R2-15), lines bill the delivered quantity (R2-8), the account's payment
+ * channel is copied onto the invoice at issue (R2-12), and a credit memo in its own CM series stands against an issued
+ * invoice (R2-14).
  */
 import "@/lib/documents";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import { authorize } from "@/lib/authz/authorize";
 import { marketScopeFor, type Actor } from "@/lib/authz/actor";
@@ -65,19 +69,23 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
       .where(eq(schema.shipmentLine.shipmentId, sid))
       .orderBy(asc(schema.shipmentLine.lineNo));
     for (const { l, sku, pos, s } of rows) {
+      // Before delivery the draft shows the planned quantity; after it, what the account kept (R2-8). Refused and
+      // damaged units are never invoiced (R2-9).
+      const billed = l.deliveredQty ?? l.qty;
       n += 1;
       if (sku) {
         const unit = series === "NC" ? 0 : (l.unitPriceCents ?? 0);
-        const total = unit * l.qty;
+        const total = unit * billed;
         subtotal += total;
         if (sku.kegsPerUnit > 0) {
-          kegs += l.qty * sku.kegsPerUnit;
-          if (sku.packageKind === "keg_half") halfKegs += l.qty;
-          if (sku.packageKind === "keg_sixtel") sixtelKegs += l.qty;
+          kegs += billed * sku.kegsPerUnit;
+          if (sku.packageKind === "keg_half") halfKegs += billed;
+          if (sku.packageKind === "keg_sixtel") sixtelKegs += billed;
         }
-        lines.push({ lineNo: n, kind: "beer", shipmentLineId: l.id, skuId: sku.id, description: `${sku.brand} ${sku.name}${s.number ? ` (${s.number})` : ""}`, lotCode: l.lotCode, qty: l.qty, unitPriceCents: unit, lineTotalCents: total });
+        const outcome = l.deliveredQty !== null && billed !== l.qty ? ` (${l.qty} shipped, ${l.refusedQty ? `${l.refusedQty} refused` : ""}${l.refusedQty && l.damagedQty ? ", " : ""}${l.damagedQty ? `${l.damagedQty} damaged` : ""})` : "";
+        lines.push({ lineNo: n, kind: "beer", shipmentLineId: l.id, skuId: sku.id, description: `${sku.brand} ${sku.name}${s.number ? ` (${s.number})` : ""}${outcome}`, lotCode: l.lotCode, qty: billed, unitPriceCents: unit, lineTotalCents: total });
       } else if (pos) {
-        lines.push({ lineNo: n, kind: "pos", shipmentLineId: l.id, skuId: null, description: `${pos.name} (no charge)`, lotCode: null, qty: l.qty, unitPriceCents: 0, lineTotalCents: 0 });
+        lines.push({ lineNo: n, kind: "pos", shipmentLineId: l.id, skuId: null, description: `${pos.name} (no charge)`, lotCode: null, qty: billed, unitPriceCents: 0, lineTotalCents: 0 });
       }
     }
   }
@@ -125,58 +133,57 @@ export async function createDraftInvoiceForShipment(db: DbOrTx, actor: Actor, sh
 }
 
 /**
- * Add a delivered-or-confirmed shipment to an open draft for the same account within the same week (7.2). Samples
- * never join a charged invoice (7.3).
+ * After the office corrects a delivery (R2-38), the issued invoice is recomputed from the corrected lines under the
+ * same number and the document stored as the next revision. A paid invoice is never rewritten; the caller refuses the
+ * correction first.
  */
-export async function addShipmentToInvoice(db: DbOrTx, actor: Actor, invoiceId: string, shipmentId: string) {
+export async function recomputeIssuedInvoice(db: DbOrTx, actor: Actor, invoiceId: string, reason: string) {
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId));
   if (!inv) throw new BusinessError("Invoice not found");
-  authorize(actor, "invoice.issue", { marketId: inv.marketId });
-  if (inv.status !== "draft") throw new BusinessError("Only a draft invoice can take another shipment");
-  const { s, loc } = await loadShipmentContext(db, shipmentId);
-  if (loc.id !== inv.locationId) throw new BusinessError("The shipment belongs to a different account");
-  if ((s.type === "S") !== (inv.series === "NC")) throw new BusinessError("Samples never share an invoice with charged goods (7.3)");
-  return withTx(db, async (tx) => {
-    const current = await tx.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
-    const existingShipments = current.length ? await tx.select().from(schema.shipment).where(inArray(schema.shipment.id, current.map((c) => c.shipmentId))) : [];
-    for (const e of existingShipments) {
-      const a = new Date(e.scheduledDate + "T00:00:00Z").getTime();
-      const b = new Date(s.scheduledDate + "T00:00:00Z").getTime();
-      if (Math.abs(a - b) > 7 * 86_400_000) throw new BusinessError("Shipments on one invoice must fall within the same week (7.2)");
-    }
-    const other = await tx.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.shipmentId, shipmentId));
-    for (const o of other) {
-      const [oi] = await tx.select().from(schema.invoice).where(eq(schema.invoice.id, o.invoiceId));
-      if (oi && oi.status === "draft" && oi.id !== invoiceId) {
-        await tx.delete(schema.invoiceShipment).where(and(eq(schema.invoiceShipment.invoiceId, oi.id), eq(schema.invoiceShipment.shipmentId, shipmentId)));
-        const remaining = await tx.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, oi.id));
-        if (remaining.length === 0) await tx.update(schema.invoice).set({ status: "void", voidReason: "Merged into another draft", voidedAt: new Date(), voidedByEmployeeId: actor.employeeId }).where(eq(schema.invoice.id, oi.id));
-        else await writeLines(tx, oi.id, await compute(tx, oi.locationId!, remaining.map((r) => r.shipmentId), oi.series));
-      } else if (oi && oi.status !== "void") throw new BusinessError(`Shipment is already on ${oi.number ?? "another invoice"}`);
-    }
-    await tx.insert(schema.invoiceShipment).values({ invoiceId, shipmentId }).onConflictDoNothing();
-    const all = await tx.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
-    await writeLines(tx, invoiceId, await compute(tx, inv.locationId!, all.map((a) => a.shipmentId), inv.series));
-    await recordAudit(tx, actor, { action: "invoice.add_shipment", subjectType: "invoice", subjectId: invoiceId, current: { shipmentId }, marketId: inv.marketId });
-    return invoiceId;
-  });
+  if (inv.status === "void") return inv;
+  if (inv.status === "paid") throw new BusinessError(`${inv.number} is already paid; issue a credit memo instead of correcting the delivery`);
+  const all = await db.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
+  const c = await compute(db, inv.locationId!, all.map((a) => a.shipmentId), inv.series);
+  await writeLines(db, invoiceId, c);
+  if (inv.status === "issued") await storeInvoiceDocument(db, actor, invoiceId);
+  await recordAudit(db, actor, { action: "invoice.recompute", subjectType: "invoice", subjectId: invoiceId, prior: { totalCents: inv.totalCents }, current: { totalCents: c.totalCents }, reason, marketId: inv.marketId });
+  return (await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId)))[0];
 }
 
-/** Called inside the delivery transaction: the draft becomes an issued invoice dated the actual date (7.4). */
+/**
+ * Called inside the delivery transaction: the draft becomes an issued invoice dated the actual date (7.4). An invoice
+ * issued already at confirmation (will-call, or an account that takes the invoice with the delivery, R2-30) is
+ * recomputed for the delivered quantities and re-dated if the actual date differs; the number never changes.
+ */
 export async function issueInvoiceForShipment(db: DbOrTx, actor: Actor, shipmentId: string, actualDate: string) {
   const links = await db.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.shipmentId, shipmentId));
   let invoiceId = links[0]?.invoiceId;
   if (!invoiceId) invoiceId = await createDraftInvoiceForShipment(db, actor, shipmentId);
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId));
   if (!inv) return null;
-  if (inv.status === "issued" && inv.invoiceDate !== actualDate) {
-    // Issued at confirmation for a pickup (dated the scheduled date); the actual pickup date differs, so re-date.
-    // The number never changes (7.1); due date follows the terms; the document is regenerated with the next revision.
-    const due = new Date(actualDate + "T00:00:00Z");
-    due.setUTCDate(due.getUTCDate() + (inv.termsDays ?? 30));
-    const [row] = await db.update(schema.invoice).set({ invoiceDate: actualDate, dueDate: due.toISOString().slice(0, 10), updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId)).returning();
-    await storeInvoiceDocument(db, actor, invoiceId);
-    await recordAudit(db, actor, { action: "invoice.redate", subjectType: "invoice", subjectId: invoiceId, prior: { invoiceDate: inv.invoiceDate, dueDate: inv.dueDate }, current: { invoiceDate: actualDate, dueDate: row.dueDate }, reason: "Actual pickup date differs from the scheduled date", marketId: inv.marketId });
+  if (inv.status === "issued") {
+    const all = await db.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
+    const c = await compute(db, inv.locationId!, all.map((a) => a.shipmentId), inv.series);
+    const changed = c.totalCents !== inv.totalCents || c.lines.length !== (await db.select({ id: schema.invoiceLine.id }).from(schema.invoiceLine).where(eq(schema.invoiceLine.invoiceId, invoiceId))).length;
+    if (changed) await writeLines(db, invoiceId, c);
+    let row = inv;
+    if (inv.invoiceDate !== actualDate) {
+      const due = new Date(actualDate + "T00:00:00Z");
+      due.setUTCDate(due.getUTCDate() + (inv.termsDays ?? 30));
+      [row] = await db.update(schema.invoice).set({ invoiceDate: actualDate, dueDate: due.toISOString().slice(0, 10), updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId)).returning();
+    }
+    if (changed || inv.invoiceDate !== actualDate) {
+      await storeInvoiceDocument(db, actor, invoiceId);
+      await recordAudit(db, actor, {
+        action: changed ? "invoice.recompute" : "invoice.redate",
+        subjectType: "invoice",
+        subjectId: invoiceId,
+        prior: { invoiceDate: inv.invoiceDate, dueDate: inv.dueDate, totalCents: inv.totalCents },
+        current: { invoiceDate: actualDate, dueDate: row.dueDate, totalCents: c.totalCents },
+        reason: changed ? "Delivered quantities differ from the quantities invoiced at confirmation" : "Actual date differs from the scheduled date",
+        marketId: inv.marketId,
+      });
+    }
     return row;
   }
   if (inv.status !== "draft") return inv;
@@ -184,13 +191,14 @@ export async function issueInvoiceForShipment(db: DbOrTx, actor: Actor, shipment
   const shipments = await db.select().from(schema.shipment).where(inArray(schema.shipment.id, all.map((a) => a.shipmentId)));
   // Issue only once every shipment on the draft is delivered (the shipment being delivered is updated before this call).
   if (shipments.some((s) => s.status !== "delivered" && s.id !== shipmentId)) return inv;
-  return issueInvoice(db, actor, invoiceId, actualDate);
+  // Issuing at delivery is a consequence of the delivery (shipment.deliver), which the driver may hold (R2-38).
+  return issueInvoice(db, actor, invoiceId, actualDate, { authorized: true });
 }
 
-export async function issueInvoice(db: DbOrTx, actor: Actor, invoiceId: string, invoiceDate: string) {
+export async function issueInvoice(db: DbOrTx, actor: Actor, invoiceId: string, invoiceDate: string, opts: { authorized?: boolean } = {}) {
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId));
   if (!inv) throw new BusinessError("Invoice not found");
-  authorize(actor, "invoice.issue", { marketId: inv.marketId });
+  if (!opts.authorized) authorize(actor, "invoice.issue", { marketId: inv.marketId });
   if (inv.status !== "draft") throw new StaleStateError(`Invoice is already ${inv.status}`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) throw new BusinessError("Invoice date must be YYYY-MM-DD", { field: "invoiceDate" });
   return withTx(db, async (tx) => {
@@ -201,9 +209,11 @@ export async function issueInvoice(db: DbOrTx, actor: Actor, invoiceId: string, 
     const number = await nextDocNumber(tx, inv.series, year);
     const due = new Date(invoiceDate + "T00:00:00Z");
     due.setUTCDate(due.getUTCDate() + c.termsDays);
+    const [loc] = inv.locationId ? await tx.select({ payBy: schema.customerLocation.payBy }).from(schema.customerLocation).where(eq(schema.customerLocation.id, inv.locationId)) : [];
+    const payBy = (loc?.payBy as Invoice["payBy"]) ?? null; // R2-12: the account's channel, as it stood when issued
     const [row] = await tx
       .update(schema.invoice)
-      .set({ number, status: "issued", invoiceDate, dueDate: due.toISOString().slice(0, 10), termsDays: c.termsDays, issuedAt: new Date(), issuedByEmployeeId: actor.employeeId, updatedAt: new Date() })
+      .set({ number, status: "issued", invoiceDate, dueDate: due.toISOString().slice(0, 10), termsDays: c.termsDays, payBy, issuedAt: new Date(), issuedByEmployeeId: actor.employeeId, updatedAt: new Date() })
       .where(and(eq(schema.invoice.id, invoiceId), eq(schema.invoice.status, "draft")))
       .returning();
     if (!row) throw new StaleStateError("Invoice was issued by someone else a moment ago");
@@ -304,6 +314,7 @@ export async function buildInvoiceSnapshot(db: DbOrTx, invoiceId: string, genera
     shipmentNumbers: shipments.map((s) => s.number).filter((n): n is string => Boolean(n)),
     poNumbers: Array.from(new Set(shipments.flatMap((s) => s.poNumbers ?? []))),
     fobWording: inv.fobWording,
+    payBy: inv.payBy ?? null,
     lines: snapLines,
     subtotalCents: inv.subtotalCents,
     depositCents: inv.depositCents,
@@ -384,7 +395,68 @@ export async function getInvoice(db: DbOrTx, invoiceId: string) {
   return { invoice: inv, lines, location: location ?? null, shipments, documents };
 }
 
-/** Open drafts for the same account that a newly confirmed shipment could join (7.2). */
-export async function openDraftsForLocation(db: DbOrTx, locationId: string, series: "INV" | "NC") {
-  return db.select().from(schema.invoice).where(and(eq(schema.invoice.locationId, locationId), eq(schema.invoice.status, "draft"), eq(schema.invoice.series, series), isNull(schema.invoice.number)));
+// ---------------------------------------------------------------------------
+// Credit memos (R2-14)
+// ---------------------------------------------------------------------------
+
+export type CreditMemo = typeof schema.creditMemo.$inferSelect;
+
+/**
+ * A credit against an issued or paid invoice, in its own CM series, with a reason. Only the Owner or Daniel (the admin
+ * role) may issue one; `credit.issue` is limited to that role. The invoice itself is never rewritten.
+ */
+export async function issueCreditMemo(db: DbOrTx, actor: Actor, input: { invoiceId: string; amountCents: number; reason: string; memoDate?: string }) {
+  const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, input.invoiceId));
+  if (!inv) throw new BusinessError("Invoice not found");
+  authorize(actor, "credit.issue", { marketId: inv.marketId });
+  if (inv.status !== "issued" && inv.status !== "paid") throw new BusinessError(`A credit memo stands against an issued invoice; ${inv.number ?? "this one"} is ${inv.status}`);
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new BusinessError("Enter the credit amount in dollars and cents, more than zero", { field: "amount" });
+  const reason = input.reason.trim();
+  if (!reason) throw new BusinessError("A reason is required", { field: "reason" });
+  const memoDate = input.memoDate ?? new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(memoDate)) throw new BusinessError("Date must be YYYY-MM-DD", { field: "memoDate" });
+  return withTx(db, async (tx) => {
+    const issued = await tx.select({ total: sql<number>`coalesce(sum(${schema.creditMemo.amountCents}), 0)::int` }).from(schema.creditMemo).where(and(eq(schema.creditMemo.invoiceId, inv.id), eq(schema.creditMemo.status, "issued")));
+    if ((issued[0]?.total ?? 0) + input.amountCents > inv.totalCents) throw new BusinessError(`Credits against ${inv.number} would exceed its total of ${(inv.totalCents / 100).toFixed(2)}`, { field: "amount" });
+    const number = await nextDocNumber(tx, "CM", Number(memoDate.slice(0, 4)));
+    const [row] = await tx
+      .insert(schema.creditMemo)
+      .values({ number, invoiceId: inv.id, locationId: inv.locationId, marketId: inv.marketId, amountCents: input.amountCents, reason, memoDate, status: "issued", issuedByEmployeeId: actor.employeeId })
+      .returning();
+    await recordAudit(tx, actor, { action: "credit.issue", subjectType: "credit_memo", subjectId: row.id, current: { number, invoiceId: inv.id, invoiceNumber: inv.number, amountCents: input.amountCents }, reason, marketId: inv.marketId });
+    return row;
+  });
+}
+
+export async function voidCreditMemo(db: DbOrTx, actor: Actor, creditMemoId: string, reason: string) {
+  const [cm] = await db.select().from(schema.creditMemo).where(eq(schema.creditMemo.id, creditMemoId));
+  if (!cm) throw new BusinessError("Credit memo not found");
+  authorize(actor, "credit.issue", { marketId: cm.marketId ?? undefined });
+  if (cm.status === "void") throw new StaleStateError("Credit memo is already void");
+  if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
+  const [row] = await db.update(schema.creditMemo).set({ status: "void", voidReason: reason.trim(), voidedAt: new Date(), voidedByEmployeeId: actor.employeeId }).where(eq(schema.creditMemo.id, creditMemoId)).returning();
+  await recordAudit(db, actor, { action: "credit.void", subjectType: "credit_memo", subjectId: creditMemoId, prior: { status: "issued" }, current: { status: "void" }, reason: reason.trim(), marketId: cm.marketId ?? undefined });
+  return row;
+}
+
+export async function creditMemosForInvoice(db: DbOrTx, invoiceId: string) {
+  return db.select().from(schema.creditMemo).where(eq(schema.creditMemo.invoiceId, invoiceId)).orderBy(desc(schema.creditMemo.memoDate), desc(schema.creditMemo.issuedAt));
+}
+
+export async function listCreditMemos(db: DbOrTx, actor: Actor, f: { locationId?: string; limit?: number } = {}) {
+  const scope = marketScopeFor(actor, ["owner", "admin", "accounting", "sales"]);
+  const conds = [];
+  if (actor.kind !== "system" && !actor.grants.some((g) => g.role === "owner") && scope !== "all") {
+    if (scope.length === 0) return [];
+    conds.push(inArray(schema.creditMemo.marketId, scope));
+  }
+  if (f.locationId) conds.push(eq(schema.creditMemo.locationId, f.locationId));
+  return db
+    .select({ cm: schema.creditMemo, invoice: schema.invoice, location: schema.customerLocation })
+    .from(schema.creditMemo)
+    .innerJoin(schema.invoice, eq(schema.invoice.id, schema.creditMemo.invoiceId))
+    .leftJoin(schema.customerLocation, eq(schema.customerLocation.id, schema.creditMemo.locationId))
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(desc(schema.creditMemo.memoDate), desc(schema.creditMemo.issuedAt))
+    .limit(f.limit ?? 200);
 }

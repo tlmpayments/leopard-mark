@@ -45,7 +45,7 @@ describe("REV-03 / AC06 — samples cannot consume units promised to customers",
   it("20 on hand fully reserved → a 5-unit sample is refused; after a partial reservation only the unreserved units can be sampled", async () => {
     const sku = await freshSku("S-AC06");
     const loc = await verifiedLocation("Sample Denied");
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 20 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 20 }] });
     await expect(recordSampleWithdrawal(db, f.sales, { marketId: f.market.id, skuId: sku.id, qty: 5, withdrawnOn: "2026-09-17" })).rejects.toThrow(/Only 0 unreserved/);
     let a = await availability(db, f.warehouse.id, sku.id);
     expect(a.onHandQty).toBe(20);
@@ -53,7 +53,7 @@ describe("REV-03 / AC06 — samples cannot consume units promised to customers",
     expect(a.deficitQty).toBe(0);
     // Partial reservation: 20 on hand, 12 reserved → 8 available; 9 refused, 8 allowed.
     const sku2 = await freshSku("S-AC06b");
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku2.id, qty: 12 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku2.id, qty: 12 }] });
     await expect(recordSampleWithdrawal(db, f.sales, { marketId: f.market.id, skuId: sku2.id, qty: 9, withdrawnOn: "2026-09-17" })).rejects.toThrow(/Only 8 unreserved/);
     await recordSampleWithdrawal(db, f.sales, { marketId: f.market.id, skuId: sku2.id, qty: 8, withdrawnOn: "2026-09-17" });
     a = await availability(db, f.warehouse.id, sku2.id);
@@ -89,8 +89,8 @@ describe("REV-05 / AC09 — movement semantics by kind; physical shortfall stays
     const sku = await freshSku("S-AC09b");
     const loc = await verifiedLocation("Deficit Deli");
     const loc2 = await verifiedLocation("Deficit Diner");
-    const o1 = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 12 }] });
-    const o2 = await submitOrder(db, f.sales, { locationId: loc2.id, lines: [{ skuId: sku.id, qty: 6 }] });
+    const o1 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 12 }] });
+    const o2 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc2.id, lines: [{ skuId: sku.id, qty: 6 }] });
     await recordStockMovement(db, f.admin, { warehouseId: f.warehouse.id, skuId: sku.id, kind: "damage", qtyDelta: -10, evidence: "water damage on 10 cases" });
     const a = await availability(db, f.warehouse.id, sku.id);
     expect(a.onHandQty).toBe(10);
@@ -129,7 +129,7 @@ describe("REV-04 / AC07 / AC08 — sample transitions are claimed once", () => {
     expect((await availability(db, f.warehouse.id, sku.id)).onHandQty).toBe(17);
     // Correction that takes MORE cannot dip into reserved units.
     const loc = await verifiedLocation("Sample Corr");
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 17 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 17 }] });
     await expect(correctSampleWithdrawal(db, f.sales, c1.id, 5, "actually five")).rejects.toThrow(/unreserved/);
   });
 });
@@ -140,11 +140,11 @@ describe("REV-09 / AC10 — released stock goes to older waiting demand first", 
     const la = await verifiedLocation("A Ale");
     const lb = await verifiedLocation("B Bar");
     const lc = await verifiedLocation("C Cafe");
-    const a = await submitOrder(db, f.sales, { locationId: la.id, lines: [{ skuId: sku.id, qty: 20 }] });
-    const b = await submitOrder(db, f.sales, { locationId: lb.id, lines: [{ skuId: sku.id, qty: 5 }] });
+    const a = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: la.id, lines: [{ skuId: sku.id, qty: 20 }] });
+    const b = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: lb.id, lines: [{ skuId: sku.id, qty: 5 }] });
     expect(b.lines[0].unmetQty).toBe(5);
     await cancelUndeliveredDemand(db, f.admin, a.order.id, "customer cancelled");
-    const c = await submitOrder(db, f.sales, { locationId: lc.id, lines: [{ skuId: sku.id, qty: 5 }] });
+    const c = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: lc.id, lines: [{ skuId: sku.id, qty: 5 }] });
     const bNow = await getOrder(db, b.order.id);
     expect(bNow?.lines[0].reservedQty).toBe(5);
     expect(bNow?.lines[0].unmetQty).toBe(0);
@@ -158,10 +158,10 @@ describe("REV-09 / AC10 — released stock goes to older waiting demand first", 
     const la = await verifiedLocation("A2 Ale");
     const lb = await verifiedLocation("B2 Bar");
     const lc = await verifiedLocation("C2 Cafe");
-    const a = await submitOrder(db, f.sales, { locationId: la.id, lines: [{ skuId: sku.id, qty: 20 }] });
-    const b = await submitOrder(db, f.sales, { locationId: lb.id, lines: [{ skuId: sku.id, qty: 5 }] });
+    const a = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: la.id, lines: [{ skuId: sku.id, qty: 20 }] });
+    const b = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: lb.id, lines: [{ skuId: sku.id, qty: 5 }] });
     await adminAmendQuantity(db, f.admin, a.lines[0].id, 17, "customer reduced");
-    const c = await submitOrder(db, f.sales, { locationId: lc.id, lines: [{ skuId: sku.id, qty: 5 }] });
+    const c = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: lc.id, lines: [{ skuId: sku.id, qty: 5 }] });
     expect((await getOrder(db, b.order.id))?.lines[0].reservedQty).toBe(3);
     expect((await getOrder(db, b.order.id))?.lines[0].unmetQty).toBe(2);
     expect(c.lines[0].reservedQty).toBe(0);
@@ -176,7 +176,7 @@ describe("REV-10 / AC11 — stale transitions are refused with the current state
   it("amendment after cancellation gets no reservation; cancel twice; archived SKU cannot be increased; closed location refuses capture", async () => {
     const sku = await freshSku("S-AC11");
     const loc = await verifiedLocation("Stale State Saloon");
-    const o = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 4 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 4 }] });
     await cancelUndeliveredDemand(db, f.admin, o.order.id, "changed mind");
     await expect(adminAmendQuantity(db, f.admin, o.lines[0].id, 3, "stale form")).rejects.toThrow(/cancelled; it cannot be amended/);
     const after = await getOrder(db, o.order.id);
@@ -186,14 +186,14 @@ describe("REV-10 / AC11 — stale transitions are refused with the current state
     await expect(cancelUndeliveredDemand(db, f.admin, o.order.id, "again")).rejects.toBeInstanceOf(StaleStateError);
     await expect(requestOrderChange(db, f.sales, { orderLineId: o.lines[0].id, kind: "amend_qty", requestedQty: 2, reason: "late" })).rejects.toBeInstanceOf(StaleStateError);
     // Archived SKU: existing demand keeps, increase refused.
-    const o2 = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }] });
+    const o2 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }] });
     await archiveSku(db, f.admin, sku.id, "discontinued");
     await expect(adminAmendQuantity(db, f.admin, o2.lines[0].id, 5, "more")).rejects.toThrow(/archived/);
     await adminAmendQuantity(db, f.admin, o2.lines[0].id, 1, "less is fine");
     expect((await getOrder(db, o2.order.id))?.lines[0].currentQty).toBe(1);
     // Closed location: capture refused, existing demand can only shrink.
     await setLocationStatus(db, f.admin, loc.id, "closed", "closed down");
-    await expect(submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] })).rejects.toThrow(/closed/);
+    await expect(submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] })).rejects.toThrow(/closed/);
     await expect(adminAmendQuantity(db, f.admin, o2.lines[0].id, 3, "more")).rejects.toThrow(/closed/);
   });
 });
@@ -202,12 +202,12 @@ describe("AC12 — submission keys", () => {
   it("same key + same payload replays; same key + changed payload is refused naming the original; a new key is a new order", async () => {
     const sku = await freshSku("S-AC12");
     const loc = await verifiedLocation("Replay Ramen");
-    const first = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-1", notes: "hi" });
-    const replay = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-1", notes: "hi" });
+    const first = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-1", notes: "hi" });
+    const replay = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-1", notes: "hi" });
     expect(replay.replayed).toBe(true);
     expect(replay.order.id).toBe(first.order.id);
-    await expect(submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 3 }], submissionKey: "k-1", notes: "hi" })).rejects.toThrow(new RegExp(`already recorded as ${first.order.orderNumber} with different content`));
-    const fresh = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-2", notes: "hi" });
+    await expect(submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 3 }], submissionKey: "k-1", notes: "hi" })).rejects.toThrow(new RegExp(`already recorded as ${first.order.orderNumber} with different content`));
+    const fresh = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 2 }], submissionKey: "k-2", notes: "hi" });
     expect(fresh.order.id).not.toBe(first.order.id);
     expect((await db.select().from(schema.order).where(eq(schema.order.locationId, loc.id))).length).toBe(2);
   });
@@ -218,7 +218,7 @@ describe("§4.6 / AC25 — future default versus reassignment of an existing ord
     const sku = await freshSku("S-AC25");
     const second = await createWarehouse(db, f.admin, { marketId: f.market.id, name: "Second NC", isPrimary: false });
     const loc = await verifiedLocation("Reassign Rest");
-    const o = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 5 }] });
+    const o = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 5 }] });
     expect(o.order.warehouseId).toBe(f.warehouse.id);
     // Future default: existing order untouched.
     await setWarehouseOverride(db, f.admin, loc.id, second.id, "closer next time");
@@ -258,7 +258,7 @@ describe("AC26 — transfers", () => {
     const sku = await freshSku("S-AC26");
     const second = await createWarehouse(db, f.admin, { marketId: f.market.id, name: "Third NC", isPrimary: false });
     const loc = await verifiedLocation("Transfer Tavern");
-    await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: sku.id, qty: 18 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: sku.id, qty: 18 }] });
     await expect(recordTransferDeparture(db, f.admin, { fromWarehouseId: f.warehouse.id, toWarehouseId: second.id, skuId: sku.id, qty: 5, evidence: "van" })).rejects.toThrow(/Only 2 unreserved/);
     await expect(recordTransferDeparture(db, f.admin, { fromWarehouseId: f.warehouse.id, toWarehouseId: f.warehouse.id, skuId: sku.id, qty: 1, evidence: "van" })).rejects.toBeInstanceOf(BusinessError);
   });

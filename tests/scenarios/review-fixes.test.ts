@@ -35,8 +35,8 @@ describe("Override scope (non-negotiable 9, U09–U11)", () => {
   it("an override covers only the hold it names, only its named order, and never a hold created later", async () => {
     const loc = await verifiedLocation("Override Outpost");
     const h1 = await createHold(db, f.admin, { locationId: loc.id, kind: "admin_manual", cause: "Pause A" });
-    const o1 = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
-    const o2 = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
+    const o1 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
+    const o2 = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 3 }] });
     // holdId is mandatory
     await expect(grantOverride(db, f.admin, { locationId: loc.id, holdId: "00000000-0000-0000-0000-000000000000", scope: "x", reason: "x" })).rejects.toThrow(/one active hold/);
     await grantOverride(db, f.admin, { locationId: loc.id, holdId: h1.id, orderId: o1.order.id, scope: `Order ${o1.order.orderNumber}`, reason: "customer confirmed" });
@@ -105,7 +105,7 @@ describe("Jobs: unknown ≠ success (non-negotiable 8)", () => {
 describe("Amendment reassesses minimum and shortage (§13)", () => {
   it("reducing an order below $90 opens the below-minimum case; restoring resolves it", async () => {
     const loc = await verifiedLocation("Amend Arms");
-    const res = await submitOrder(db, f.sales, { locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] }); // $180
+    const res = await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: loc.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] }); // $180
     expect(res.minimum.verdict).toBe("meets");
     await adminAmendQuantity(db, f.admin, res.lines[0].id, 2, "customer reduced"); // $72
     let cases = await db.select().from(schema.exceptionCase).where(eq(schema.exceptionCase.dedupeKey, `below_minimum:${res.order.id}`));

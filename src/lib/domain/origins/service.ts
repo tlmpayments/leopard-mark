@@ -28,6 +28,12 @@ export const ORIGIN_CODES: ReadonlyArray<{ code: string; name: string; kind: Ori
   { code: "RAD", name: "Radford Warehouse", kind: "warehouse", lotFacilityCode: null },
 ];
 
+/** How an origin reads everywhere (R2-34): "EBB East Brother Beer", the three-letter code then the name, never a facility number. */
+export function originLabel(o: { originCode: string | null; name: string } | null | undefined): string {
+  if (!o) return "—";
+  return o.originCode ? `${o.originCode} ${o.name}` : o.name;
+}
+
 const CODE_RE = /^[A-Z]{3}$/;
 const FACILITY_RE = /^\d{2}$/;
 
@@ -68,6 +74,9 @@ export interface OriginPatch {
   addressPostalCode?: string | null;
   addressText?: string | null;
   fulfillmentContact?: string | null;
+  /** End-of-day pull sheet (R2-29): where the warehouse receives it and at what local time; sending is behind the company switch. */
+  pullSheetEmail?: string | null;
+  pullSheetSendTime?: string | null;
 }
 
 /** Admin maintains origins (warehouse.manage). Codes are validated; the primary flag stays unique per market. */
@@ -114,6 +123,16 @@ export async function updateOrigin(db: DbOrTx, actor: Actor, id: string, patch: 
     "fulfillmentContact",
   ] as const) {
     if (patch[k] !== undefined) (set as Record<string, unknown>)[k] = patch[k];
+  }
+  if (patch.pullSheetEmail !== undefined) {
+    const email = patch.pullSheetEmail?.trim().toLowerCase() || null;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BusinessError("Pull sheet email must be an email address", { field: "pullSheetEmail" });
+    set.pullSheetEmail = email;
+  }
+  if (patch.pullSheetSendTime !== undefined) {
+    const t = patch.pullSheetSendTime?.trim() || null;
+    if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new BusinessError("Send time is HH:MM, 24-hour, local to the warehouse's market", { field: "pullSheetSendTime" });
+    set.pullSheetSendTime = t;
   }
   if (patch.isPrimary !== undefined) {
     const marketId = patch.marketId ?? prior.marketId;

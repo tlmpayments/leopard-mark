@@ -23,12 +23,24 @@ import {
 import { customerLocation } from "./customer";
 import { market, sku, warehouse } from "./market";
 
+/**
+ * How the order reached the office (R2-2). "sales" is the Phase 1 value (a rep's own entry) and stays for history;
+ * the office-entered kinds record the channel so rep self-entry can be added later without a model change.
+ */
 export const orderSourceEnum = pgEnum("order_source", [
   "sales",
   "email",
   "standing",
   "customer_link", // deferred (phase 5) — value reserved, never produced now
+  "phone",
+  "text",
+  "slack",
+  "rep",
+  "po",
 ]);
+
+/** Shortfall handling at submit (R2-5): ship what is on hand and keep the rest open, or hold the whole order. */
+export const shortfallDecisionEnum = pgEnum("shortfall_decision", ["ship_available", "hold"]);
 
 /** Progress dimension only (brief §6); never encodes money or holds. */
 export const orderDemandStateEnum = pgEnum("order_demand_state", [
@@ -36,6 +48,8 @@ export const orderDemandStateEnum = pgEnum("order_demand_state", [
   "partially_fulfilled",
   "fulfilled",
   "cancelled",
+  /** Held at submit because stock was short (R2-5): no shipment until the office releases it. */
+  "held",
 ]);
 
 export const reservationStateEnum = pgEnum("reservation_state", [
@@ -90,8 +104,19 @@ export const order = pgTable(
     /** Flagged, not rejected (O13). Criterion is D09 → only set by a person or a selected policy. */
     abnormalFlag: boolean("abnormal_flag").notNull().default(false),
     abnormalReason: text("abnormal_reason"),
-    /** $90 minimum evaluation snapshot; basis remains D11-unselected. */
+    /** $90 minimum evaluation snapshot; basis remains D11-unselected. Evaluated for rep-entered orders only (R2-6). */
     minimumEvaluation: jsonb("minimum_evaluation"),
+    /** Samples: an order with no charge (R2-27) ships as an S shipment and is invoiced on the NC series. */
+    noCharge: boolean("no_charge").notNull().default(false),
+    /** Will-call: the account collects at the origin (R2-10); copied to the shipment. */
+    pickup: boolean("pickup").notNull().default(false),
+    /** Distributor PO numbers the order was created from (R2-11); printed on the shipment. */
+    poNumbers: text("po_numbers").array(),
+    /** Recorded when stock was short at submit (R2-5): what the office chose, who, and why. */
+    shortfallDecision: shortfallDecisionEnum("shortfall_decision"),
+    shortfallReason: text("shortfall_reason"),
+    shortfallDecidedByEmployeeId: uuid("shortfall_decided_by_employee_id"),
+    shortfallDecidedAt: timestamp("shortfall_decided_at", { withTimezone: true }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     cancelReason: text("cancel_reason"),
     cancelledByEmployeeId: uuid("cancelled_by_employee_id"),

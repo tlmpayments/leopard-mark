@@ -14,12 +14,13 @@ import * as schema from "@/lib/db/schema";
 import { type DbOrTx, type Tx, withTx } from "@/lib/db/types";
 import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException } from "@/lib/exceptions/service";
-import { availability, lockPosition } from "@/lib/domain/allocation/service";
+import { availability, commitReservationsForShipmentLines, fulfilReservationsForOrderLines, lockPosition, uncommitReservationsForOrderLines } from "@/lib/domain/allocation/service";
 import { currentPrice } from "@/lib/domain/catalog/service";
 import { originAddressLines } from "@/lib/domain/origins/service";
 import { yymmdd } from "@/lib/domain/lots/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
-import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
+import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, recomputeIssuedInvoice, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
+import { cancelUndeliveredDemand } from "@/lib/domain/orders/service";
 import { recordKegEventForShipment } from "@/lib/domain/kegs/service";
 import { renderPdf } from "@/lib/documents/render";
 import type { ShipmentSnapshot, SnapshotLine } from "@/lib/documents/types";
@@ -39,7 +40,8 @@ export interface ShipmentHeaderInput {
   destinationWarehouseId?: string | null;
   destinationText?: string | null;
   pickup?: boolean;
-  scheduledDate: string; // YYYY-MM-DD
+  /** YYYY-MM-DD; a draft created from an order carries none until the office confirms (R2-3). */
+  scheduledDate?: string | null;
   poNumbers?: string[] | null;
   appointment?: string | null;
   carrier?: string | null;
@@ -63,6 +65,8 @@ export interface ShipmentLineInput {
   lotId?: string | null;
   qty: number;
   lotReason?: string | null;
+  /** The order line this shipment line fulfils (R2-1). */
+  orderLineId?: string | null;
 }
 
 const EDITABLE_AFTER_CONFIRMATION: ReadonlyArray<keyof ShipmentHeaderInput> = [
@@ -121,7 +125,7 @@ async function validateHeader(db: DbOrTx, input: ShipmentHeaderInput) {
   const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, input.originWarehouseId));
   if (!origin) throw new BusinessError("Origin not found", { field: "originWarehouseId" });
   if (!origin.active) throw new BusinessError(`${origin.name} is inactive`, { field: "originWarehouseId" });
-  isoDate(input.scheduledDate, "scheduledDate");
+  if (input.scheduledDate) isoDate(input.scheduledDate, "scheduledDate");
   let destinationKind: string | null = null;
   if (input.type === "T") {
     if (!input.destinationWarehouseId) throw new BusinessError("A transfer needs a destination origin (warehouse or brewery)", { field: "destinationWarehouseId" });
@@ -146,7 +150,7 @@ function cleanLines(lines: ShipmentLineInput[]): ShipmentLineInput[] {
     if (!l.skuId && !l.posItemId) throw new BusinessError("Each line needs a SKU or a POS item", { field: "lines" });
     if (l.skuId && l.posItemId) throw new BusinessError("A line is either a SKU or a POS item, not both", { field: "lines" });
     if (!Number.isInteger(l.qty) || l.qty <= 0) throw new BusinessError("Quantities must be positive whole numbers", { field: "lines" });
-    out.push({ skuId: l.skuId ?? null, posItemId: l.posItemId ?? null, lotId: l.skuId ? (l.lotId ?? null) : null, qty: l.qty, lotReason: l.lotReason?.trim() || null });
+    out.push({ skuId: l.skuId ?? null, posItemId: l.posItemId ?? null, lotId: l.skuId ? (l.lotId ?? null) : null, qty: l.qty, lotReason: l.lotReason?.trim() || null, orderLineId: l.orderLineId ?? null });
   }
   return out;
 }
@@ -174,7 +178,7 @@ async function writeLines(tx: Tx, shipmentId: string, lines: ShipmentLineInput[]
       if (lot.legacyCode) throw new BusinessError(`Lot ${lot.lotCode} is history only and cannot be selected (1.7)`, { field: "lines" });
       lotCode = lot.lotCode;
     }
-    await tx.insert(schema.shipmentLine).values({ shipmentId, lineNo: n, skuId: l.skuId ?? null, posItemId: l.posItemId ?? null, lotId: l.lotId ?? null, lotCode, qty: l.qty, weightLb: weight, lotReason: l.lotReason ?? null });
+    await tx.insert(schema.shipmentLine).values({ shipmentId, lineNo: n, skuId: l.skuId ?? null, posItemId: l.posItemId ?? null, lotId: l.lotId ?? null, lotCode, qty: l.qty, weightLb: weight, lotReason: l.lotReason ?? null, orderLineId: l.orderLineId ?? null });
   }
 }
 
@@ -182,9 +186,10 @@ async function writeLines(tx: Tx, shipmentId: string, lines: ShipmentLineInput[]
 // Create / edit (draft, and logistics fields after confirmation)
 // ---------------------------------------------------------------------------
 
-export async function createShipment(db: DbOrTx, actor: Actor, header: ShipmentHeaderInput, lines: ShipmentLineInput[] = []) {
+export async function createShipment(db: DbOrTx, actor: Actor, header: ShipmentHeaderInput, lines: ShipmentLineInput[] = [], opts: { authorized?: boolean } = {}) {
   const marketId = await scopingMarket(db, header);
-  authorize(actor, "shipment.manage", { marketId });
+  // `authorized`: the order service creating an order's draft (R2-1) was already permitted by order.submit.
+  if (!opts.authorized) authorize(actor, "shipment.manage", { marketId });
   const { template } = await validateHeader(db, header);
   const clean = cleanLines(lines);
   return withTx(db, async (tx) => {
@@ -198,7 +203,7 @@ export async function createShipment(db: DbOrTx, actor: Actor, header: ShipmentH
         destinationText: header.destinationText?.trim() || null,
         pickup: header.pickup ?? false,
         template,
-        scheduledDate: header.scheduledDate,
+        scheduledDate: header.scheduledDate ?? null,
         poNumbers: header.poNumbers?.map((p) => p.trim()).filter(Boolean) ?? null,
         appointment: header.appointment ?? null,
         carrier: header.carrier ?? null,
@@ -236,7 +241,7 @@ export async function updateShipmentHeader(db: DbOrTx, actor: Actor, shipmentId:
     destinationWarehouseId: patch.destinationWarehouseId === undefined ? prior.destinationWarehouseId : patch.destinationWarehouseId,
     destinationText: patch.destinationText === undefined ? prior.destinationText : patch.destinationText,
     pickup: patch.pickup ?? prior.pickup,
-    scheduledDate: patch.scheduledDate ?? prior.scheduledDate,
+    scheduledDate: patch.scheduledDate === undefined ? prior.scheduledDate : patch.scheduledDate,
     poNumbers: patch.poNumbers === undefined ? prior.poNumbers : patch.poNumbers,
     appointment: patch.appointment === undefined ? prior.appointment : patch.appointment,
     carrier: patch.carrier === undefined ? prior.carrier : patch.carrier,
@@ -335,6 +340,7 @@ async function checkConfirmable(db: DbOrTx, s: Shipment, lines: ShipmentLineInpu
   const [origin] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, s.originWarehouseId));
   if (!origin) throw new BusinessError("Origin not found");
   if (!origin.originCode) throw new BusinessError(`${origin.name} has no origin code; set one (for example EBB) on the origin before confirming (2.2)`);
+  if (!s.scheduledDate) throw new BusinessError("Set the scheduled date before confirming (R2-3)", { field: "scheduledDate" });
   if (lines.length === 0) throw new BusinessError("Add at least one line before confirming");
   for (const l of lines) {
     if (l.skuId && !l.lotId) throw new BusinessError("Every beer line needs a lot chosen from the list before confirmation (4.1)");
@@ -406,7 +412,7 @@ async function capturePrices(tx: Tx, s: Shipment) {
       const override = await tx
         .select()
         .from(schema.priceOverride)
-        .where(and(eq(schema.priceOverride.locationId, dest.id), eq(schema.priceOverride.skuId, l.skuId), isNull(schema.priceOverride.effectiveTo)))
+        .where(and(eq(schema.priceOverride.locationId, dest.id), eq(schema.priceOverride.skuId, l.skuId), sql`(${schema.priceOverride.effectiveTo} is null or ${schema.priceOverride.effectiveTo} > now())`))
         .orderBy(desc(schema.priceOverride.effectiveFrom))
         .limit(1);
       if (override[0]) price = override[0].priceCents;
@@ -421,21 +427,31 @@ async function capturePrices(tx: Tx, s: Shipment) {
   }
 }
 
-export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: string) {
-  const prior = await mustLoad(db, shipmentId);
-  authorize(actor, "shipment.confirm", { marketId: prior.marketId });
-  if (prior.status !== "draft") throw new StaleStateError(`Shipment is already ${prior.status}`);
-  if (prior.legacy) throw new BusinessError("Imported history cannot be confirmed");
+/**
+ * Confirmation assigns the number and, for a draft created from an order, takes the scheduled date the office sets
+ * now (R2-3); the order's reservations move to route-committed so the shipment's own allocation is the one counted.
+ */
+export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: string, opts: { scheduledDate?: string | null } = {}) {
+  const loaded = await mustLoad(db, shipmentId);
+  authorize(actor, "shipment.confirm", { marketId: loaded.marketId });
+  if (loaded.status !== "draft") throw new StaleStateError(`Shipment is already ${loaded.status}`);
+  if (loaded.legacy) throw new BusinessError("Imported history cannot be confirmed");
+  if (opts.scheduledDate) isoDate(opts.scheduledDate, "scheduledDate");
   return withTx(db, async (tx) => {
+    let prior = loaded;
+    if (opts.scheduledDate && opts.scheduledDate !== prior.scheduledDate) {
+      [prior] = await tx.update(schema.shipment).set({ scheduledDate: opts.scheduledDate, updatedAt: new Date() }).where(eq(schema.shipment.id, shipmentId)).returning();
+    }
     const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId));
     const origin = await checkConfirmable(tx, prior, lines);
-    const number = await nextNumber(tx, origin.originCode!, prior.type, prior.originWarehouseId, prior.scheduledDate);
+    const number = await nextNumber(tx, origin.originCode!, prior.type, prior.originWarehouseId, prior.scheduledDate!);
     const [row] = await tx
       .update(schema.shipment)
       .set({ number, status: "confirmed", confirmedAt: new Date(), confirmedByEmployeeId: actor.employeeId, updatedAt: new Date() })
       .where(and(eq(schema.shipment.id, shipmentId), eq(schema.shipment.status, "draft")))
       .returning();
     if (!row) throw new StaleStateError("Shipment was confirmed by someone else a moment ago");
+    await commitReservationsForShipmentLines(tx, lines.map((l) => ({ orderLineId: l.orderLineId, qty: l.qty })));
     await allocate(tx, actor, row);
     await capturePrices(tx, row);
     for (const l of lines) {
@@ -459,7 +475,9 @@ export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: stri
       const invoiceId = await createDraftInvoiceForShipment(tx, actor, row.id);
       // Will-call / distributor pickup (owner review, Oct 28): the numbered invoice travels with the BOL in the pickup
       // pack, so it is issued now, dated the scheduled pickup date; delivery re-dates it if the actual date differs.
-      if (row.pickup) await issueInvoice(tx, actor, invoiceId, row.scheduledDate);
+      // An account set to invoice on receipt (R2-30) takes the numbered invoice in the delivery pack the same way.
+      const [dest] = await tx.select({ invoiceOnReceipt: schema.customerLocation.invoiceOnReceipt }).from(schema.customerLocation).where(eq(schema.customerLocation.id, row.destinationLocationId));
+      if (row.pickup || dest?.invoiceOnReceipt) await issueInvoice(tx, actor, invoiceId, row.scheduledDate!);
     }
     await storeDocuments(tx, actor, row.id, ["bol", "picking_ticket"]);
     await recordAudit(tx, actor, { action: "shipment.confirm", subjectType: "shipment", subjectId: row.id, prior: { status: "draft" }, current: { status: "confirmed", number }, marketId: row.marketId });
@@ -489,45 +507,85 @@ async function transition(db: DbOrTx, actor: Actor, shipmentId: string, from: Sh
   return row;
 }
 
+export interface DeliverLineInput {
+  lineId: string;
+  deliveredQty: number;
+  refusedQty?: number;
+  damagedQty?: number;
+  damageReason?: string | null;
+}
+
 export interface DeliverInput {
   actualDate: string; // YYYY-MM-DD
   kegPickup?: { halfIn: number; sixtelIn: number } | null;
   note?: string | null;
+  /** Per-line outcome (R2-8, R2-9). Omitted lines are delivered in full. */
+  lines?: DeliverLineInput[] | null;
+}
+
+/** A Driver/Service-only person (R2-38): sees and delivers assigned stops only; the office corrects afterwards. */
+function driverOnly(actor: Actor): boolean {
+  return actor.kind !== "system" && actor.grants.length > 0 && actor.grants.every((g) => g.role === "driver_service");
+}
+
+function resolveDeliveredLines(lines: ShipmentLine[], input: DeliverInput) {
+  const given = new Map((input.lines ?? []).map((l) => [l.lineId, l]));
+  for (const id of given.keys()) if (!lines.some((l) => l.id === id)) throw new BusinessError("A delivered line does not belong to this shipment", { field: "lines" });
+  return lines.map((l) => {
+    const g = given.get(l.id);
+    const delivered = g ? g.deliveredQty : l.qty;
+    const refused = g?.refusedQty ?? 0;
+    const damaged = g?.damagedQty ?? 0;
+    for (const v of [delivered, refused, damaged]) if (!Number.isInteger(v) || v < 0) throw new BusinessError("Delivered, refused and damaged quantities must be whole numbers of zero or more", { field: "lines" });
+    if (delivered + refused + damaged !== l.qty) throw new BusinessError(`Line ${l.lineNo}: delivered ${delivered} + refused ${refused} + damaged ${damaged} must equal the ${l.qty} shipped`, { field: "lines" });
+    if (damaged > 0 && !g?.damageReason?.trim()) throw new BusinessError(`Line ${l.lineNo}: say why ${damaged} unit${damaged === 1 ? " was" : "s were"} damaged`, { field: "lines" });
+    if (l.posItemId && (refused > 0 || damaged > 0)) throw new BusinessError(`Line ${l.lineNo}: POS items are delivered in full`, { field: "lines" });
+    return { line: l, delivered, refused, damaged, damageReason: g?.damageReason?.trim() || null };
+  });
 }
 
 /**
- * The office sets the actual date (5.11): allocations are consumed, `shipment_out` movements are written per line
- * (transfers: `transfer_out` plus in-transit at the destination), the keg event is recorded, and the invoice is issued
+ * The office, or the assigned driver from the phone (R2-38), marks delivered with the actual date (5.11) and what
+ * each line came to (R2-8, R2-9): delivered units leave the origin as `shipment_out`, damaged units as `damage` with
+ * the reason, refused units never leave and stay on hand; allocations are consumed, the keg event is posted for the
+ * kegs delivered, order lines record what was delivered, and the invoice is issued for the delivered quantities,
  * dated the actual date (7.4). The number never changes when the actual date differs from the scheduled date.
  */
 export async function deliverShipment(db: DbOrTx, actor: Actor, shipmentId: string, input: DeliverInput) {
   const prior = await mustLoad(db, shipmentId);
   authorize(actor, "shipment.deliver", { marketId: prior.marketId });
+  if (driverOnly(actor) && prior.driverEmployeeId !== actor.employeeId) throw new BusinessError("Only the driver assigned to this stop can mark it delivered");
   if (!["confirmed", "staged", "out"].includes(prior.status)) throw new StaleStateError(`Shipment is ${prior.status}; only a confirmed, staged or out shipment can be delivered`);
   isoDate(input.actualDate, "actualDate");
   if (input.kegPickup) {
     for (const v of [input.kegPickup.halfIn, input.kegPickup.sixtelIn]) if (!Number.isInteger(v) || v < 0) throw new BusinessError("Empty keg counts must be whole numbers", { field: "kegPickup" });
   }
   return withTx(db, async (tx) => {
-    const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId));
-    const bySku = new Map<string, { qty: number; lotIds: Array<{ lotId: string | null; qty: number }> }>();
-    for (const l of lines) {
-      if (!l.skuId) continue;
-      const e = bySku.get(l.skuId) ?? { qty: 0, lotIds: [] };
-      e.qty += l.qty;
-      e.lotIds.push({ lotId: l.lotId, qty: l.qty });
-      bySku.set(l.skuId, e);
+    const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId)).orderBy(asc(schema.shipmentLine.lineNo));
+    const outcomes = resolveDeliveredLines(lines, input);
+    for (const o of outcomes) {
+      await tx.update(schema.shipmentLine).set({ deliveredQty: o.delivered, refusedQty: o.refused, damagedQty: o.damaged, damageReason: o.damageReason }).where(eq(schema.shipmentLine.id, o.line.id));
+    }
+    const bySku = new Map<string, { out: number; damaged: number; parts: Array<{ lotId: string | null; delivered: number; damaged: number; reason: string | null }> }>();
+    for (const o of outcomes) {
+      if (!o.line.skuId) continue;
+      const e = bySku.get(o.line.skuId) ?? { out: 0, damaged: 0, parts: [] };
+      e.out += o.delivered;
+      e.damaged += o.damaged;
+      e.parts.push({ lotId: o.line.lotId, delivered: o.delivered, damaged: o.damaged, reason: o.damageReason });
+      bySku.set(o.line.skuId, e);
     }
     const sortedSkus = Array.from(bySku.keys()).sort();
     for (const skuId of sortedSkus) {
       const e = bySku.get(skuId)!;
+      const leaving = e.out + e.damaged;
       const pos = await lockPosition(tx, prior.originWarehouseId, skuId);
-      const newOnHand = pos.onHandQty - e.qty;
+      const newOnHand = pos.onHandQty - leaving;
       if (newOnHand < 0) {
         const [sku] = await tx.select().from(schema.sku).where(eq(schema.sku.id, skuId));
         await openException(tx, actor, {
           category: "allocation_discrepancy",
-          title: `Delivered ${e.qty} × ${sku?.code ?? skuId} on ${prior.number} with only ${pos.onHandQty} on record at the origin`,
+          title: `Delivered ${leaving} × ${sku?.code ?? skuId} on ${prior.number} with only ${pos.onHandQty} on record at the origin`,
           cause: "Stock evidence is missing or stale; the on-hand position was floored at zero. Apply a physical count (8.1).",
           marketId: prior.marketId,
           ownerRole: "admin",
@@ -536,24 +594,43 @@ export async function deliverShipment(db: DbOrTx, actor: Actor, shipmentId: stri
           links: [{ subjectType: "shipment", subjectId: prior.id }],
         });
       }
-      await tx.update(schema.stockPosition).set({ onHandQty: Math.max(0, newOnHand), updatedAt: new Date() }).where(eq(schema.stockPosition.id, pos.id));
-      for (const part of e.lotIds) {
-        await tx.insert(schema.stockMovement).values({
-          warehouseId: prior.originWarehouseId,
-          skuId,
-          kind: prior.type === "T" ? "transfer_out" : "shipment_out",
-          qtyDelta: -part.qty,
-          referenceType: "shipment",
-          referenceId: prior.id,
-          evidence: `${prior.number} delivered ${input.actualDate}`,
-          actorEmployeeId: actor.employeeId,
-          lotId: part.lotId,
-          shipmentId: prior.id,
-        });
+      await tx
+        .update(schema.stockPosition)
+        .set({ onHandQty: Math.max(0, newOnHand), unavailableQty: pos.unavailableQty + e.damaged, updatedAt: new Date() })
+        .where(eq(schema.stockPosition.id, pos.id));
+      for (const part of e.parts) {
+        if (part.delivered > 0) {
+          await tx.insert(schema.stockMovement).values({
+            warehouseId: prior.originWarehouseId,
+            skuId,
+            kind: prior.type === "T" ? "transfer_out" : "shipment_out",
+            qtyDelta: -part.delivered,
+            referenceType: "shipment",
+            referenceId: prior.id,
+            evidence: `${prior.number} delivered ${input.actualDate}`,
+            actorEmployeeId: actor.employeeId,
+            lotId: part.lotId,
+            shipmentId: prior.id,
+          });
+        }
+        if (part.damaged > 0) {
+          await tx.insert(schema.stockMovement).values({
+            warehouseId: prior.originWarehouseId,
+            skuId,
+            kind: "damage",
+            qtyDelta: -part.damaged,
+            referenceType: "shipment",
+            referenceId: prior.id,
+            evidence: `${prior.number} damaged at delivery ${input.actualDate}: ${part.reason ?? "no reason"}`,
+            actorEmployeeId: actor.employeeId,
+            lotId: part.lotId,
+            shipmentId: prior.id,
+          });
+        }
       }
-      if (prior.type === "T" && prior.destinationWarehouseId) {
+      if (prior.type === "T" && prior.destinationWarehouseId && e.out > 0) {
         const dest = await lockPosition(tx, prior.destinationWarehouseId, skuId);
-        await tx.update(schema.stockPosition).set({ inTransitQty: dest.inTransitQty + e.qty, updatedAt: new Date() }).where(eq(schema.stockPosition.id, dest.id));
+        await tx.update(schema.stockPosition).set({ inTransitQty: dest.inTransitQty + e.out, updatedAt: new Date() }).where(eq(schema.stockPosition.id, dest.id));
       }
     }
     await releaseAllocations(tx, shipmentId, "Delivered");
@@ -566,33 +643,150 @@ export async function deliverShipment(db: DbOrTx, actor: Actor, shipmentId: stri
     if (input.kegPickup) {
       await tx.insert(schema.shipmentKegPickup).values({ shipmentId, halfIn: input.kegPickup.halfIn, sixtelIn: input.kegPickup.sixtelIn }).onConflictDoUpdate({ target: schema.shipmentKegPickup.shipmentId, set: { halfIn: input.kegPickup.halfIn, sixtelIn: input.kegPickup.sixtelIn } });
     }
+    await recordOrderDelivery(tx, actor, outcomes.map((o) => ({ orderLineId: o.line.orderLineId, delivered: o.delivered, notKept: o.refused + o.damaged })));
     if ((row.type === "D" || row.type === "S") && row.destinationLocationId) {
       await recordKegEventForShipment(tx, actor, row.id);
       await issueInvoiceForShipment(tx, actor, row.id, input.actualDate);
     }
-    await recordAudit(tx, actor, { action: "shipment.deliver", subjectType: "shipment", subjectId: shipmentId, prior: { status: prior.status }, current: { status: "delivered", actualDate: input.actualDate, kegPickup: input.kegPickup ?? null }, marketId: prior.marketId });
+    const refusedOrDamaged = outcomes.filter((o) => o.refused > 0 || o.damaged > 0).map((o) => ({ lineNo: o.line.lineNo, delivered: o.delivered, refused: o.refused, damaged: o.damaged, reason: o.damageReason }));
+    await recordAudit(tx, actor, { action: "shipment.deliver", subjectType: "shipment", subjectId: shipmentId, prior: { status: prior.status }, current: { status: "delivered", actualDate: input.actualDate, kegPickup: input.kegPickup ?? null, exceptions: refusedOrDamaged, byDriver: driverOnly(actor) }, marketId: prior.marketId });
     return mustLoad(tx, shipmentId);
   });
 }
 
-/** Void keeps the number as a permanent gap (5.4); allocations are released; a draft invoice is voided. */
-export async function voidShipment(db: DbOrTx, actor: Actor, shipmentId: string, reason: string) {
+/** Order lines record what was delivered (R2-1, R2-8): reservations are consumed; refused or damaged units stay open demand on the order. */
+async function recordOrderDelivery(tx: Tx, actor: Actor, delivered: Array<{ orderLineId: string | null; delivered: number; notKept: number }>) {
+  const byLine = new Map<string, { delivered: number; notKept: number }>();
+  for (const d of delivered) {
+    if (!d.orderLineId) continue;
+    const e = byLine.get(d.orderLineId) ?? { delivered: 0, notKept: 0 };
+    e.delivered += d.delivered;
+    e.notKept += d.notKept;
+    byLine.set(d.orderLineId, e);
+  }
+  if (byLine.size === 0) return;
+  const orderIds = new Set<string>();
+  for (const [orderLineId, q] of byLine) {
+    const [line] = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.id, orderLineId)).for("update");
+    if (!line) continue;
+    const next = Math.min(line.currentQty, line.deliveredQty + q.delivered);
+    await tx.update(schema.orderLine).set({ deliveredQty: next }).where(eq(schema.orderLine.id, orderLineId));
+    orderIds.add(line.orderId);
+  }
+  await fulfilReservationsForOrderLines(
+    tx,
+    actor,
+    Array.from(byLine.entries()).map(([orderLineId, q]) => ({ orderLineId, delivered: q.delivered, notKept: q.notKept })),
+  );
+  for (const orderId of orderIds) {
+    const lines = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, orderId));
+    const allDone = lines.every((l) => l.deliveredQty >= l.currentQty);
+    const anyDone = lines.some((l) => l.deliveredQty > 0);
+    const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId));
+    if (!ord || ord.demandState === "cancelled") continue;
+    const next = allDone ? "fulfilled" : anyDone ? "partially_fulfilled" : ord.demandState;
+    if (next !== ord.demandState) {
+      await tx.update(schema.order).set({ demandState: next, updatedAt: new Date() }).where(eq(schema.order.id, orderId));
+      await recordAudit(tx, actor, { action: "order.delivery_recorded", subjectType: "order", subjectId: orderId, prior: { demandState: ord.demandState }, current: { demandState: next }, marketId: ord.marketId });
+    }
+  }
+}
+
+export interface CorrectDeliveryInput {
+  lines: DeliverLineInput[];
+  reason: string;
+}
+
+/**
+ * The office corrects a delivery recorded from the phone (R2-38): per-line quantities are restated, the stock
+ * difference is posted as a signed adjustment with the reason, the order lines follow, and the invoice (not yet
+ * paid) is recomputed for the delivered quantities and stored with the next revision mark.
+ */
+export async function correctDelivery(db: DbOrTx, actor: Actor, shipmentId: string, input: CorrectDeliveryInput) {
+  const prior = await mustLoad(db, shipmentId);
+  authorize(actor, "shipment.deliver", { marketId: prior.marketId });
+  if (driverOnly(actor)) throw new BusinessError("Corrections after delivery are made by the office");
+  if (prior.status !== "delivered") throw new StaleStateError("Only a delivered shipment can be corrected");
+  if (!input.reason.trim()) throw new BusinessError("Say why the delivery is corrected", { field: "reason" });
+  return withTx(db, async (tx) => {
+    const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId)).orderBy(asc(schema.shipmentLine.lineNo));
+    const outcomes = resolveDeliveredLines(lines, { actualDate: prior.actualDate!, lines: input.lines });
+    const links = await tx.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.shipmentId, shipmentId));
+    for (const l of links) {
+      const [inv] = await tx.select().from(schema.invoice).where(eq(schema.invoice.id, l.invoiceId));
+      if (inv && inv.status === "paid") throw new BusinessError(`${inv.number} is paid; issue a credit memo instead of correcting the delivery`);
+    }
+    const changes: Array<{ lineNo: number; before: { delivered: number; refused: number; damaged: number }; after: { delivered: number; refused: number; damaged: number } }> = [];
+    for (const o of outcomes) {
+      const before = { delivered: o.line.deliveredQty ?? o.line.qty, refused: o.line.refusedQty, damaged: o.line.damagedQty };
+      const after = { delivered: o.delivered, refused: o.refused, damaged: o.damaged };
+      if (before.delivered === after.delivered && before.refused === after.refused && before.damaged === after.damaged && (o.line.damageReason ?? null) === o.damageReason) continue;
+      changes.push({ lineNo: o.line.lineNo, before, after });
+      await tx.update(schema.shipmentLine).set({ deliveredQty: o.delivered, refusedQty: o.refused, damagedQty: o.damaged, damageReason: o.damageReason }).where(eq(schema.shipmentLine.id, o.line.id));
+      if (o.line.skuId) {
+        const leavingDelta = after.delivered + after.damaged - (before.delivered + before.damaged);
+        const damagedDelta = after.damaged - before.damaged;
+        if (leavingDelta !== 0 || damagedDelta !== 0) {
+          const pos = await lockPosition(tx, prior.originWarehouseId, o.line.skuId);
+          await tx
+            .update(schema.stockPosition)
+            .set({ onHandQty: Math.max(0, pos.onHandQty - leavingDelta), unavailableQty: Math.max(0, pos.unavailableQty + damagedDelta), updatedAt: new Date() })
+            .where(eq(schema.stockPosition.id, pos.id));
+          if (leavingDelta !== 0) {
+            await tx.insert(schema.stockMovement).values({ warehouseId: prior.originWarehouseId, skuId: o.line.skuId, kind: "adjustment", qtyDelta: -leavingDelta, referenceType: "shipment", referenceId: prior.id, evidence: `${prior.number} delivery corrected: ${input.reason.trim()}`, actorEmployeeId: actor.employeeId, lotId: o.line.lotId, shipmentId: prior.id });
+          }
+        }
+      }
+      if (o.line.orderLineId) {
+        const [ol] = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.id, o.line.orderLineId)).for("update");
+        if (ol) await tx.update(schema.orderLine).set({ deliveredQty: Math.min(ol.currentQty, Math.max(0, ol.deliveredQty + (after.delivered - before.delivered))) }).where(eq(schema.orderLine.id, ol.id));
+      }
+    }
+    if (changes.length === 0) throw new BusinessError("Nothing changed");
+    for (const l of links) await recomputeIssuedInvoice(tx, actor, l.invoiceId, `Delivery corrected on ${prior.number}: ${input.reason.trim()}`);
+    if (prior.destinationLocationId && (prior.type === "D" || prior.type === "S")) await recordKegEventForShipment(tx, actor, prior.id, { replace: true });
+    await storeDocuments(tx, actor, shipmentId, ["bol"], { bumpRevision: true });
+    await recordAudit(tx, actor, { action: "shipment.correct_delivery", subjectType: "shipment", subjectId: shipmentId, current: { changes }, reason: input.reason.trim(), marketId: prior.marketId });
+    return mustLoad(tx, shipmentId);
+  });
+}
+
+/**
+ * Void keeps the number as a permanent gap (5.4); allocations are released; a draft invoice is voided. When the
+ * shipment came from an order (R2-7), the order returns to open (its reservations count again and a new draft can
+ * be created) or is cancelled, as the office chooses.
+ */
+export async function voidShipment(db: DbOrTx, actor: Actor, shipmentId: string, reason: string, opts: { order?: "reopen" | "cancel" | "none" } = {}) {
   const prior = await mustLoad(db, shipmentId);
   authorize(actor, "shipment.void", { marketId: prior.marketId });
-  if (prior.status === "delivered") throw new BusinessError("A delivered shipment cannot be voided; record a correction instead");
+  if (prior.status === "delivered") throw new BusinessError("A delivered shipment cannot be voided; correct the delivery or issue a credit memo instead");
   if (prior.status === "voided") throw new StaleStateError("Shipment is already voided");
   if (!reason.trim()) throw new BusinessError("A reason is required to void", { field: "reason" });
   return withTx(db, async (tx) => {
-    await releaseAllocations(tx, shipmentId, `Voided: ${reason.trim()}`);
     const [row] = await tx
       .update(schema.shipment)
       .set({ status: "voided", voidedAt: new Date(), voidedByEmployeeId: actor.employeeId, voidReason: reason.trim(), updatedAt: new Date() })
       .where(and(eq(schema.shipment.id, shipmentId), sql`${schema.shipment.status} <> 'delivered' and ${schema.shipment.status} <> 'voided'`))
       .returning();
     if (!row) throw new StaleStateError("Shipment changed a moment ago");
+    await releaseAllocations(tx, shipmentId, `Voided: ${reason.trim()}`);
+    const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId));
+    const orderLineIds = lines.map((l) => l.orderLineId).filter((x): x is string => Boolean(x));
+    const linkedOrders = await tx.select().from(schema.shipmentOrder).where(eq(schema.shipmentOrder.shipmentId, shipmentId));
+    const orderChoice = linkedOrders.length && opts.order !== "none" ? (opts.order ?? "reopen") : null;
+    if (orderChoice) {
+      // The reservations committed at confirmation count as plain reservations again (stock released from this shipment).
+      await uncommitReservationsForOrderLines(tx, orderLineIds);
+      for (const lo of linkedOrders) {
+        const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, lo.orderId));
+        if (!ord || ord.demandState === "cancelled" || ord.demandState === "fulfilled") continue;
+        if (orderChoice === "cancel") await cancelUndeliveredDemand(tx, actor, lo.orderId, `Shipment ${prior.number ?? "draft"} voided: ${reason.trim()}`);
+        else await recordAudit(tx, actor, { action: "order.reopened", subjectType: "order", subjectId: lo.orderId, current: { shipmentVoided: prior.number ?? "draft" }, reason: reason.trim(), marketId: prior.marketId });
+      }
+    }
     await voidDraftInvoicesForShipment(tx, actor, shipmentId, `Shipment voided: ${reason.trim()}`);
     if (row.number) await storeDocuments(tx, actor, shipmentId, ["bol"], { bumpRevision: true });
-    await recordAudit(tx, actor, { action: "shipment.void", subjectType: "shipment", subjectId: shipmentId, prior: { status: prior.status }, current: { status: "voided", number: row.number }, reason: reason.trim(), marketId: prior.marketId });
+    await recordAudit(tx, actor, { action: "shipment.void", subjectType: "shipment", subjectId: shipmentId, prior: { status: prior.status }, current: { status: "voided", number: row.number, order: orderChoice }, reason: reason.trim(), marketId: prior.marketId });
     return row;
   });
 }
@@ -820,7 +1014,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     voided: s.status === "voided",
     type: s.type,
     pickup: s.pickup,
-    scheduledDate: s.scheduledDate,
+    scheduledDate: s.scheduledDate ?? null,
     actualDate: s.actualDate,
     shipper: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, phone: settings.officePhone },
     shipFrom: { name: origin.name, lines: originAddressLines(origin), originCode: origin.originCode, contact: origin.shippingContactName, phone: origin.shippingContactPhone },

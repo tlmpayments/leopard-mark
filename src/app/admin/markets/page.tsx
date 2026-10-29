@@ -5,7 +5,9 @@ import { can } from "@/lib/authz/authorize";
 import { getDb } from "@/lib/db/client";
 import { warehouseAvailability } from "@/lib/domain/allocation/service";
 import { listSkus, formatCents } from "@/lib/domain/catalog/service";
+import { WEEKDAY_NAMES } from "@/lib/domain/markets/billing";
 import { listWarehouses, visibleMarkets } from "@/lib/domain/markets/service";
+import { originLabel } from "@/lib/domain/origins/service";
 import { confirmSellerAction, createMarketAction, createWarehouseAction, stockMovementAction, transferDepartureAction, transferReceiptAction } from "../actions";
 import { createOriginAction, updateMarketBillingAction, updateOriginAction } from "./origins-actions";
 import { ORIGIN_KIND_LABEL, WEEKDAYS } from "./origins-fields";
@@ -117,6 +119,15 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                   <Field label="Regions (one per line)" hint="Sheet regions become a sub-list under the market.">
                     <Textarea name="regionList" rows={3} defaultValue={(m.regionList ?? []).join("\n")} />
                   </Field>
+                  <Field label="Route days (R2-4)" hint="Optional; shown when scheduling, never enforced.">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                      {WEEKDAY_NAMES.map((day) => (
+                        <label key={day} className="flex items-center gap-1">
+                          <input type="checkbox" name="routeDays" value={day} defaultChecked={(m.routeDays ?? []).includes(day)} /> {day}
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
                   <div className="flex items-end">
                     <Button small variant="secondary">
                       Save billing rules
@@ -154,8 +165,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
               {warehouses.map((w) => (
                 <details key={w.id} className="border-t border-rule pt-2">
                   <summary className="cursor-pointer text-sm">
-                    Edit {w.originCode ? `${w.originCode} · ` : ""}
-                    {w.name}
+                    Edit {originLabel(w)}
                   </summary>
                   <form action={updateOriginAction} className="mt-2 grid gap-2 sm:grid-cols-3">
                     <input type="hidden" name="originId" value={w.id} />
@@ -182,7 +192,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                         <option value="">No market (Prost, Real Ale)</option>
                         {markets.map((m) => (
                           <option key={m.id} value={m.id}>
-                            {m.code} · {m.name}
+                            {m.code} {m.name}
                           </option>
                         ))}
                       </Select>
@@ -236,6 +246,12 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                     </Field>
                     <Field label="Shipping contact phone">
                       <Input name="shippingContactPhone" defaultValue={w.shippingContactPhone ?? ""} />
+                    </Field>
+                    <Field label="Pull sheet email (R2-29)" hint="Where the end-of-day sheet goes when auto-send is on.">
+                      <Input name="pullSheetEmail" type="email" defaultValue={w.pullSheetEmail ?? ""} />
+                    </Field>
+                    <Field label="Pull sheet send time" hint="HH:MM, local to the market; sends are off until the company switch is on.">
+                      <Input name="pullSheetSendTime" type="time" defaultValue={w.pullSheetSendTime ?? ""} />
                     </Field>
                     <Field label="Address line 1">
                       <Input name="addressLine1" defaultValue={w.addressLine1 ?? ""} />

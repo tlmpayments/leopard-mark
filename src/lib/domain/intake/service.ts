@@ -58,7 +58,7 @@ export async function recordIntakeRequest(
 export async function convertIntakeToOrder(
   db: DbOrTx,
   actor: Actor,
-  input: { intakeId: string; locationId: string; lines: OrderLineInput[]; requestedDate?: string | null; notes?: string | null },
+  input: { intakeId: string; locationId: string; lines: OrderLineInput[]; requestedDate?: string | null; notes?: string | null; shortfallDecision?: "ship_available" | "hold" | null; shortfallReason?: string | null; poNumbers?: string[] | null },
 ) {
   const [pre] = await db.select().from(schema.orderIntakeRequest).where(eq(schema.orderIntakeRequest.id, input.intakeId));
   if (!pre) throw new BusinessError("Intake request not found");
@@ -82,6 +82,9 @@ export async function convertIntakeToOrder(
       source: "email",
       submissionKey: `intake:${req.id}`,
       intakeRequestId: req.id,
+      poNumbers: input.poNumbers ?? null,
+      shortfallDecision: input.shortfallDecision ?? null,
+      shortfallReason: input.shortfallReason ?? null,
     });
     if (result.replayed) throw new StaleStateError(`This email already produced ${result.order.orderNumber}.`);
     await tx

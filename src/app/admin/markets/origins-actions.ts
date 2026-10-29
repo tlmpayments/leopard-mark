@@ -47,6 +47,8 @@ export async function updateOriginAction(form: FormData) {
       addressPostalCode: opt(form, "addressPostalCode"),
       addressText: opt(form, "addressText"),
       fulfillmentContact: opt(form, "fulfillmentContact"),
+      pullSheetEmail: opt(form, "pullSheetEmail"),
+      pullSheetSendTime: opt(form, "pullSheetSendTime"),
     });
     return "Origin saved";
   });
@@ -72,6 +74,7 @@ export async function updateMarketBillingAction(form: FormData) {
         .split(/\r?\n|,/)
         .map((r) => r.trim())
         .filter(Boolean),
+      routeDays: form.getAll("routeDays").filter((v): v is string => typeof v === "string"),
     });
     return "Market billing rules saved; blank account overrides inherit them (7.4)";
   });

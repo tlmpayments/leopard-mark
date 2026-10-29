@@ -146,7 +146,7 @@ describe("REV-07 / AC16 — 'license not applicable' is derived from D02, not fr
     expect(r.releasable).toBe(false);
     // Capture still works while the delivery condition is unresolved.
     const { submitOrder } = await import("@/lib/domain/orders/service");
-    await submitOrder(db, f.sales, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
+    await submitOrder(db, f.sales, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] });
     // D02 that requires verification only in MA (i.e. NC exempt) but scoped to MA only → NC still unselected.
     const wrong = await recordSelection(db, f.owner, { decisionId: "D02", kind: "production", selection: { verification_required_markets: ["MA"] }, scope: "MA only", marketIds: [f.market2.id], effectiveFrom: new Date(0) });
     expect((await licenseVerificationRequirement(db, f.market.id)).basis).toBe("unselected");

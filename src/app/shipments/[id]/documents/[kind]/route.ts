@@ -8,17 +8,18 @@ import { buildInvoiceSnapshot, latestInvoiceDocument, type Invoice } from "@/lib
 import { getShipment, latestDocument } from "@/lib/domain/shipments/service";
 
 /**
- * GET /shipments/[id]/documents/bol | picking_ticket | pickup_pack
+ * GET /shipments/[id]/documents/bol | picking_ticket | pickup_pack | delivery_pack
  *
  * Streams the latest stored document for the shipment as an inline PDF (docs/SHIPMENTS_SPEC.md §4, 6.5, 6.7). The
  * bytes stored at confirmation are served as they are; when the renderer was unavailable at that moment the stored
  * snapshot is rendered now, so the document still shows what was true when it was issued. The pickup pack is the
- * bill of lading followed by the shipment's invoice in one PDF.
+ * bill of lading followed by the shipment's invoice in one PDF. The delivery pack is the bill of lading alone, plus the
+ * invoice only when the account is set to take its invoice on receipt (R2-30).
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const KINDS = ["bol", "picking_ticket", "pickup_pack"] as const;
+const KINDS = ["bol", "picking_ticket", "pickup_pack", "delivery_pack"] as const;
 type Kind = (typeof KINDS)[number];
 
 function isKind(value: string): value is Kind {
@@ -46,17 +47,18 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (isDriverOnly(actor) && detail.shipment.driverEmployeeId !== actor.employeeId) return textResponse("This stop is not assigned to you", 403);
 
   const shipment = detail.shipment;
-  if (kind === "pickup_pack") {
+  if (kind === "pickup_pack" || kind === "delivery_pack") {
     const bol = await latestDocument(db, shipment.id, "bol");
     if (!bol) return textResponse("No bill of lading yet; the documents exist from confirmation onward", 404);
-    const invoice = invoiceForPack(detail.invoices);
+    const withInvoice = kind === "pickup_pack" || Boolean(detail.destination?.invoiceOnReceipt);
+    const invoice = withInvoice ? invoiceForPack(detail.invoices) : null;
     let invoiceSnapshot: InvoiceSnapshot | null = null;
     if (invoice) {
       const stored = invoice.status === "draft" ? null : await latestInvoiceDocument(db, invoice.id);
       invoiceSnapshot = stored ? (stored.snapshot as InvoiceSnapshot) : await buildInvoiceSnapshot(db, invoice.id, actor.displayName);
     }
     const pdf = await renderDocument({ kind: "pickup_pack", bol: bol.snapshot as ShipmentSnapshot, invoice: invoiceSnapshot });
-    return pdfResponse(pdf, safeFilename([bol.number ?? "draft", bol.revision > 0 ? `R${bol.revision}` : null, "pickup-pack"]));
+    return pdfResponse(pdf, safeFilename([bol.number ?? "draft", bol.revision > 0 ? `R${bol.revision}` : null, kind === "pickup_pack" ? "pickup-pack" : "delivery-pack"]));
   }
 
   const doc = await latestDocument(db, shipment.id, kind);

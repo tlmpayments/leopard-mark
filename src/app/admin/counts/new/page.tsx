@@ -3,7 +3,7 @@ import { flashFrom, param, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
 import { listSkus } from "@/lib/domain/catalog/service";
-import { listOrigins } from "@/lib/domain/origins/service";
+import { listOrigins, originLabel } from "@/lib/domain/origins/service";
 import { todayIso } from "../../../shipments/labels";
 import { createCountSessionAction } from "../actions";
 
@@ -29,8 +29,7 @@ export default async function NewCountPage({ searchParams }: { searchParams: Sea
                 </option>
                 {origins.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.originCode ? `${o.originCode} · ` : ""}
-                    {o.name}
+                    {originLabel(o)}
                   </option>
                 ))}
               </Select>

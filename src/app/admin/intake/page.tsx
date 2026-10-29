@@ -67,7 +67,21 @@ export default async function IntakePage({ searchParams }: { searchParams: Searc
                   </label>
                 ))}
               </div>
-              <Input name="requestedDate" type="date" />
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Field label="Requested date">
+                  <Input name="requestedDate" type="date" />
+                </Field>
+                <Field label="If the origin is short (R2-5)" hint="Ask refuses and shows the shortfall; the other two record your decision.">
+                  <Select name="shortfallDecision" defaultValue="">
+                    <option value="">Ask me</option>
+                    <option value="ship_available">Ship what is on hand</option>
+                    <option value="hold">Hold the order</option>
+                  </Select>
+                </Field>
+                <Field label="Reason (when shipping short)">
+                  <Input name="shortfallReason" placeholder="e.g. buyer agreed to take the rest next week" />
+                </Field>
+              </div>
               <Button small>Convert</Button>
             </form>
           </details>

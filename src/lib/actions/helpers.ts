@@ -65,11 +65,13 @@ export interface FormState {
   fieldErrors?: Record<string, string>;
   values?: Record<string, string>;
   ok?: string;
+  /** The origin cannot cover the order as typed (R2-5): the form shows the lines and asks for a decision. */
+  shortfall?: { originName: string; lines: Array<{ skuId: string; skuName: string; requested: number; available: number; short: number }> };
 }
 
 export async function runFormAction(
   form: FormData,
-  handler: (ctx: { db: Db; actor: Actor }) => Promise<{ redirectTo: string; ok?: string }>,
+  handler: (ctx: { db: Db; actor: Actor; values: Record<string, string> }) => Promise<{ redirectTo: string; ok?: string } | { state: FormState }>,
 ): Promise<FormState> {
   const actor = await requireActor();
   let redirectTo: string | null = null;
@@ -77,7 +79,8 @@ export async function runFormAction(
   const values: Record<string, string> = {};
   for (const [k, v] of form.entries()) if (typeof v === "string") values[k] = v;
   try {
-    const r = await handler({ db: await getDb(), actor });
+    const r = await handler({ db: await getDb(), actor, values });
+    if ("state" in r) return { ...r.state, values: r.state.values ?? values };
     redirectTo = r.redirectTo;
     ok = r.ok;
   } catch (err) {

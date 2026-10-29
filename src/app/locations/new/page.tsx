@@ -11,7 +11,7 @@ export default async function NewLocationPage({ searchParams }: { searchParams: 
   const markets = await visibleMarkets(await getDb(), actor, ["owner", "admin", "sales"]);
   const flash = await flashFrom(searchParams);
   return (
-    <Page title="New account" subtitle="No preapproval or underwriting. License verification and ACH setup follow — capture now.">
+    <Page title="New account" subtitle="The minimum is the trade name, a delivery address, one contact and the market (R2-20). The ABC license is checked before the first retail delivery; everything else is optional and can follow." wide={false}>
       <Flash {...flash} />
       <LocationForm markets={markets.map((m) => ({ id: m.id, name: m.name, code: m.code }))} action={createLocationFormAction} />
     </Page>

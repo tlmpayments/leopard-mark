@@ -98,8 +98,9 @@ describe("Five roles and confirmed powers (brief §5, AT80)", () => {
     expect(can(f.admin, "decision.select_production")).toBe(false); // Owner selects policy
     expect(can(f.driver, "order.submit")).toBe(false);
     expect(can(f.driver, "finance.view")).toBe(false);
-    expect(can(f.accounting, "credit.issue")).toBe(true);
+    expect(can(f.accounting, "credit.issue")).toBe(false); // R2-14: Owner or back office only
     expect(can(f.admin, "credit.issue")).toBe(true);
+    expect(can(f.driver, "shipment.deliver")).toBe(true); // R2-38: own assigned stops, enforced by the service
     expect(can(f.sales, "credit.request")).toBe(true);
     expect(can(f.sales, "order.submit", { marketId: f.market.id })).toBe(true);
     expect(can(f.sales, "order.submit", { marketId: f.market2.id })).toBe(false);
@@ -108,6 +109,6 @@ describe("Five roles and confirmed powers (brief §5, AT80)", () => {
 
   it("an unauthorized Sales rep in another market cannot submit demand there", async () => {
     const { location } = await makeLocation(db, f.sales, f.market.id, "Scope Saloon");
-    await expect(submitOrder(db, f.sales2, { locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] })).rejects.toBeInstanceOf(AuthorizationError);
+    await expect(submitOrder(db, f.sales2, { shortfallDecision: "ship_available", shortfallReason: "test: ships what is on hand", locationId: location.id, lines: [{ skuId: f.skus.cantinescaCase.id, qty: 1 }] })).rejects.toBeInstanceOf(AuthorizationError);
   });
 });
