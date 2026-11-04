@@ -37,11 +37,12 @@ UPDATE "company_settings" SET
   "updated_at" = now();--> statement-breakpoint
 -- 24-oz cans keep the 12-oz shelf life (180 days).
 UPDATE "sku" SET "shelf_life_days" = 180 WHERE "package_kind" = 'case_24oz_can' AND "shelf_life_days" IS NULL;--> statement-breakpoint
--- How each account pays, from the master workbook's payment column (Fintech, Stripe ACH).
+-- How each account pays, from the master workbook's payment column (Fintech, Stripe ACH). Accounts served by a
+-- distributor (the Matagrano territory) buy through it and are not billed by us, so they get no pay-by.
 UPDATE "customer_location" AS l SET "pay_by" = 'fintech', "updated_at" = now()
-FROM "payment_relationship" AS p WHERE p."location_id" = l."id" AND p."channel" = 'fintech' AND l."pay_by" IS NULL;--> statement-breakpoint
+FROM "payment_relationship" AS p WHERE p."location_id" = l."id" AND p."channel" = 'fintech' AND l."pay_by" IS NULL AND l."served_by_location_id" IS NULL;--> statement-breakpoint
 UPDATE "customer_location" AS l SET "pay_by" = 'stripe', "updated_at" = now()
-FROM "payment_relationship" AS p WHERE p."location_id" = l."id" AND p."channel" = 'stripe_ach' AND l."pay_by" IS NULL;--> statement-breakpoint
+FROM "payment_relationship" AS p WHERE p."location_id" = l."id" AND p."channel" = 'stripe_ach' AND l."pay_by" IS NULL AND l."served_by_location_id" IS NULL;--> statement-breakpoint
 -- Matagrano is the one account that pays by check; HDI, Mancini, Martignetti and The Black Cat (MarginEdge) send EFT.
 UPDATE "customer_location" SET "pay_by" = 'check', "updated_at" = now() WHERE "id" = '105dbdab-b759-b7ab-f684-955a64a8e22c' AND "pay_by" IS NULL;--> statement-breakpoint
 UPDATE "customer_location" SET "pay_by" = 'eft', "updated_at" = now()

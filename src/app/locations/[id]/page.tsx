@@ -810,7 +810,14 @@ export default async function LocationPage({ params, searchParams }: { params: P
               loc.depositTakenCents != null ? `${formatCents(loc.depositTakenCents)} taken ${loc.depositTakenOn ? fmtDay(loc.depositTakenOn) : ""}${loc.depositSettledOn ? `, settled ${fmtDay(loc.depositSettledOn)}${loc.depositSettlementNote ? ` (${loc.depositSettlementNote})` : ""}` : ", open"}` : loc.depositMode === "floating" ? "none recorded yet (R2-13)" : "—",
             ],
             ["Terms", loc.termsDaysOverride != null ? `Net ${loc.termsDaysOverride} (account override)` : `Market rule (Net ${market?.termsDays ?? 30})`],
-            ["Pays by", loc.payBy ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy : "not set"],
+            [
+              "Pays by",
+              loc.payBy
+                ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy
+                : servedBy && loc.kind !== "distributor"
+                  ? `Not billed by us: buys through ${servedBy.tradeName}`
+                  : "not set",
+            ],
             ["Invoice on receipt", loc.invoiceOnReceipt ? "Yes: the invoice travels in the delivery pack" : "No"],
             ["Leave without signature", loc.deliverWithoutSignature ? "Yes: printed on the delivery receipt" : "No: get a signature"],
             ...(isDistributorAcct

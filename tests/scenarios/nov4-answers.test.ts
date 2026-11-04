@@ -142,6 +142,12 @@ describe("migration 0009 settings and payment data", () => {
     const fin = (await makeLocation(db, f.owner, f.market.id, "Fintech Test Bar")).location;
     const ach = (await makeLocation(db, f.owner, f.market.id, "Stripe Test Bar")).location;
     const set = (await makeLocation(db, f.owner, f.market.id, "Already Set Bar")).location;
+    // A bar in a distributor's territory buys through the distributor and is not billed by us.
+    const dist = (await makeLocation(db, f.owner, f.market.id, "Territory Test Distributor")).location;
+    await updateAccountShipping(db, f.owner, dist.id, { kind: "distributor", depositMode: "none" });
+    const served = (await makeLocation(db, f.owner, f.market.id, "Served Test Bar")).location;
+    await updateAccountShipping(db, f.owner, served.id, { servedByLocationId: dist.id });
+    await db.update(schema.paymentRelationship).set({ channel: "fintech" }).where(eq(schema.paymentRelationship.locationId, served.id));
     await db.update(schema.paymentRelationship).set({ channel: "fintech" }).where(eq(schema.paymentRelationship.locationId, fin.id));
     await db.update(schema.paymentRelationship).set({ channel: "stripe_ach" }).where(eq(schema.paymentRelationship.locationId, ach.id));
     await db.update(schema.paymentRelationship).set({ channel: "fintech" }).where(eq(schema.paymentRelationship.locationId, set.id));
@@ -151,6 +157,7 @@ describe("migration 0009 settings and payment data", () => {
     expect(await payBy(fin.id)).toBe("fintech");
     expect(await payBy(ach.id)).toBe("stripe");
     expect(await payBy(set.id)).toBe("eft"); // a choice already made is kept
+    expect(await payBy(served.id)).toBeNull();
   });
 });
 

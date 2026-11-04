@@ -91,7 +91,7 @@ export default async function LocationsPage({ searchParams }: { searchParams: Se
               Direct
             </span>
           ),
-          loc.payBy ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy : "—",
+          loc.payBy ? PAY_BY_LABEL[loc.payBy as PayBy] ?? loc.payBy : loc.servedByLocationId && loc.kind !== "distributor" ? <span key="pb" className="text-ink-3">via distributor</span> : "—",
           <StatusBadge key="st" value={loc.status} />,
         ])}
       />
