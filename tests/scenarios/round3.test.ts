@@ -20,7 +20,7 @@ import { recordPackagingReport } from "@/lib/domain/lots/service";
 import { adminAmendQuantity, getOrder, submitOrder } from "@/lib/domain/orders/service";
 import { updateOrigin } from "@/lib/domain/origins/service";
 import { FREIGHT_LANES, getCompanySettings, upsertFreightLane, upsertPosItem } from "@/lib/domain/settings/service";
-import { confirmShipment, createShipment, deliverShipment, getShipment } from "@/lib/domain/shipments/service";
+import { buildShipmentSnapshot, confirmShipment, createShipment, deliverShipment, getShipment } from "@/lib/domain/shipments/service";
 import { createTestDb } from "../support/db";
 import { buildFixture, makeLocation, type Fixture } from "../support/fixtures";
 
@@ -248,5 +248,20 @@ describe("POS charged and cost-tracked; account spend; weekly counts", () => {
     const ebb = rows.find((r) => r.warehouse.id === f.warehouse.id)!;
     expect(ebb.lastCountedOn).toBeNull();
     expect(ebb.overdue).toBe(true);
+  });
+});
+
+describe("Distributor details", () => {
+  it("the delivery documents name the receiving contact before the buyer", async () => {
+    // The fixture account already has a buyer; it is the contact until a receiving contact exists.
+    const s = await createShipment(db, f.admin, { type: "D", originWarehouseId: f.warehouse.id, destinationLocationId: mart.id, scheduledDate: "2026-11-24" }, [{ skuId: f.skus.cantinescaCase.id, lotId: lot, qty: 1 }]);
+    const before = (await buildShipmentSnapshot(db, s.id, "bol", "test")).shipTo.contact;
+    expect(before).toBeTruthy();
+    expect(before).not.toBe("Manny Receiving");
+    const [recv] = await db.insert(schema.contact).values({ name: "Manny Receiving", email: "dock@example.test", phone: "222" }).returning();
+    await db.insert(schema.locationContact).values({ locationId: mart.id, contactId: recv.id, contactRole: "receiving" });
+    const snap = await buildShipmentSnapshot(db, s.id, "bol", "test");
+    expect(snap.shipTo.contact).toBe("Manny Receiving");
+    expect(snap.shipTo.phone).toBe("222");
   });
 });

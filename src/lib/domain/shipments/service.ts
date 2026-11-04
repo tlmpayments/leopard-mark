@@ -980,12 +980,15 @@ async function partyForLocation(db: DbOrTx, locationId: string) {
     .where(and(eq(schema.locationAddress.locationId, locationId), eq(schema.locationAddress.kind, "delivery"), eq(schema.locationAddress.current, true)))
     .limit(1);
   const [lic] = await db.select().from(schema.licenseVerification).where(and(eq(schema.licenseVerification.locationId, locationId), eq(schema.licenseVerification.current, true)));
-  const contact = await db
-    .select({ c: schema.contact })
+  // The ship-to contact is whoever receives the delivery: a receiving contact when the account has one (distributor
+  // warehouses), otherwise the buyer.
+  const contacts = await db
+    .select({ c: schema.contact, role: schema.locationContact.contactRole })
     .from(schema.locationContact)
     .innerJoin(schema.contact, eq(schema.contact.id, schema.locationContact.contactId))
-    .where(and(eq(schema.locationContact.locationId, locationId), eq(schema.locationContact.contactRole, "buyer"), eq(schema.locationContact.current, true)))
-    .limit(1);
+    .where(and(eq(schema.locationContact.locationId, locationId), inArray(schema.locationContact.contactRole, ["receiving", "buyer"]), eq(schema.locationContact.current, true)))
+    .orderBy(asc(schema.locationContact.fromAt));
+  const contact = [...contacts.filter((r) => r.role === "receiving"), ...contacts.filter((r) => r.role === "buyer")];
   const a = addr[0]?.a;
   return {
     loc,
