@@ -358,7 +358,7 @@ export async function planImport(db: DbOrTx, n: NormalizedImport): Promise<Impor
         addressState: o.addressState,
         addressPostalCode: o.addressPostalCode,
       },
-      fill: { active: o.active, fulfillmentContact: o.fulfillmentContact, shippingContactEmail: o.shippingContactEmail, shippingContactPhone: o.shippingContactPhone, appointmentRequired: o.appointmentRequired, loadingDock: o.loadingDock, hours: o.hours },
+      fill: { active: o.active, productionArrangement: o.productionArrangement, fulfillmentContact: o.fulfillmentContact, shippingContactEmail: o.shippingContactEmail, shippingContactPhone: o.shippingContactPhone, appointmentRequired: o.appointmentRequired, loadingDock: o.loadingDock, hours: o.hours },
     });
     rows.push({ entity: "origins", id, label: `${o.originCode ? o.originCode + " · " : ""}${o.name}`, action: c.action, insert: { id, ...c.insert }, set: c.set, changes: c.changes, children: [], marketId: ridOrNull(o.marketId) });
   }

@@ -17,13 +17,16 @@ import { BusinessError } from "@/lib/errors";
 export const DEFAULT_SETTINGS = {
   id: COMPANY_SETTINGS_ID,
   legalName: "Familiar Ventures, LLC",
-  dba: "The Leopard Mark Brewing Company",
+  dba: "The Leopard Mark Beverage Group",
   arEmail: "ar@theleopardmark.com",
+  ordersEmail: "orders@theleopardmark.com",
+  operationsEmail: "operations@theleopardmark.com",
   retailFooter: "Keg deposits and case CRV will be collected when applicable. Empty kegs collected are credited to this account's keg balance.",
-  distributorFooter: "Keg deposits are remitted by the distributor to MicroStar; CRV, where the state applies it, is remitted by the distributor to the state. Wording to be confirmed against the current distributor document (question 6.4).",
+  distributorFooter: "Keg deposits are remitted by the distributor to MicroStar; CRV, where the state applies it, is remitted by the distributor to the state.",
   fixedLines: ["Keep refrigerated. Beer is perishable: store cold at all times."],
-  nmfcKeg: "88900 (Beer, in kegs) — proposed, verify before use",
-  nmfcCan: "88900 (Beer, canned) — proposed, verify before use",
+  // Freight class codes are not used on our BOLs (owner, Nov 4 2026); blank prints nothing.
+  nmfcKeg: null,
+  nmfcCan: null,
   nmfcStatus: "proposed",
   markingConvention:
     "Lot code = facility (2 digits) + brand (3 letters) + packaging date (yymmdd) + run (1 character), e.g. 01CNT2610071. " +
@@ -81,6 +84,8 @@ export type SettingsPatch = Partial<
     | "officePostalCode"
     | "officePhone"
     | "arEmail"
+    | "ordersEmail"
+    | "operationsEmail"
     | "retailFooter"
     | "distributorFooter"
     | "fixedLines"
@@ -102,6 +107,14 @@ export async function updateCompanySettings(db: DbOrTx, actor: Actor, patch: Set
   const prior = await getCompanySettings(db);
   if (patch.legalName !== undefined && !patch.legalName.trim()) throw new BusinessError("Legal name is required", { field: "legalName" });
   if (patch.dba !== undefined && !patch.dba.trim()) throw new BusinessError("DBA is required", { field: "dba" });
+  for (const field of ["arEmail", "ordersEmail", "operationsEmail"] as const) {
+    const v = patch[field];
+    if (v === undefined) continue;
+    const email = v?.trim().toLowerCase() || null;
+    if (field === "arEmail" && !email) throw new BusinessError("The AR email is required", { field });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BusinessError("Enter an email address", { field });
+    patch = { ...patch, [field]: email };
+  }
   if (patch.nmfcStatus !== undefined && !["proposed", "approved"].includes(patch.nmfcStatus)) throw new BusinessError("NMFC status must be proposed or approved", { field: "nmfcStatus" });
   if (patch.fuelSurchargePct !== undefined) {
     const pct = Number(patch.fuelSurchargePct);

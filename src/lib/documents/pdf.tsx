@@ -183,6 +183,8 @@ interface IssuerBlock {
   dba: string;
   lines: string[];
   arEmail: string;
+  /** Shipment documents print the operations contact here instead of the AR email. */
+  contactEmail?: string | null;
   phone?: string | null;
 }
 
@@ -213,7 +215,7 @@ function Header({ issuer, title, subtitle, number, meta }: { issuer: IssuerBlock
             <Text key={i}>{text(l, "")}</Text>
           ))}
           {issuer.phone ? <Text>{text(issuer.phone)}</Text> : null}
-          <Text>{text(issuer.arEmail, "")}</Text>
+          <Text>{text(issuer.contactEmail || issuer.arEmail, "")}</Text>
         </View>
       </View>
       <View style={styles.titleBlock}>
@@ -785,7 +787,8 @@ function InvoiceDocument({ inv }: { inv: InvoiceSnapshot }) {
           <Text>{text(inv.issuer.remitTo)}</Text>
         </View>
       ) : null}
-      <Text style={{ marginTop: 10 }}>Questions: {text(inv.issuer.arEmail)}</Text>
+      <Text style={{ marginTop: 10 }}>Billing questions and remittances: {text(inv.issuer.arEmail)}</Text>
+      {inv.issuer.ordersEmail ? <Text>To reorder: {text(inv.issuer.ordersEmail)}</Text> : null}
       <PageFooter left={`${title.charAt(0)}${title.slice(1).toLowerCase()} ${number}`} generatedAt={inv.generatedAt} generatedBy={inv.generatedBy} />
     </Page>
   );

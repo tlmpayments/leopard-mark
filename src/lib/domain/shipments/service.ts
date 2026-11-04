@@ -429,13 +429,14 @@ async function capturePrices(tx: Tx, s: Shipment) {
 
 /**
  * Round 3 warnings at confirmation; none of them blocks the shipment.
- * - R2-50: a retail account's second delivery with no payment method on file (Fintech, Stripe or check).
+ * - R2-50: a retail account's second delivery with no payment method on file (Fintech, Stripe, EFT or check). An
+ *   account served by a distributor is not billed by us (owner, Nov 4 2026), so it never raises this warning.
  * - Martignetti's 5-pallet minimum (freight per unit): a smaller shipment opens a warning.
  */
 async function confirmationWarnings(tx: Tx, actor: Actor, row: Shipment) {
   if (row.type !== "D" || !row.destinationLocationId) return;
   const dest = await loadDestination(tx, row.destinationLocationId);
-  if (dest.kind === "retail" && !dest.payBy) {
+  if (dest.kind === "retail" && !dest.payBy && !dest.servedByLocationId) {
     const [{ n }] = await tx
       .select({ n: sql<number>`count(*)::int` })
       .from(schema.shipment)
@@ -444,7 +445,7 @@ async function confirmationWarnings(tx: Tx, actor: Actor, row: Shipment) {
       await openException(tx, actor, {
         category: "payment_setup_missing",
         title: `${dest.tradeName}: second delivery (${row.number}) with no payment method on file`,
-        cause: "Payment setup (Fintech or ACH) is required before the second delivery (R2-50). This is a warning; the shipment was confirmed.",
+        cause: "A payment method (Fintech, Stripe, EFT or check) is required before the second delivery (R2-50). This is a warning; the shipment was confirmed.",
         marketId: row.marketId,
         ownerRole: "admin",
         nextAction: "Set the account's payment method, or confirm with the Owner that delivery goes ahead.",
@@ -1073,7 +1074,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     pickup: s.pickup,
     scheduledDate: s.scheduledDate ?? null,
     actualDate: s.actualDate,
-    shipper: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, phone: settings.officePhone },
+    shipper: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, contactEmail: settings.operationsEmail ?? null, phone: settings.officePhone },
     shipFrom: { name: origin.name, lines: originAddressLines(origin), originCode: origin.originCode, contact: origin.shippingContactName, phone: origin.shippingContactPhone },
     shipTo,
     poNumbers: s.poNumbers ?? [],

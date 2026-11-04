@@ -4,7 +4,7 @@
  * normalisation already in production from the October 28 load (tools/import/gen_import.py) plus the decisions that
  * came into force afterwards (served-by, kinds, distributors, people).
  */
-import type { OriginKind } from "@/lib/domain/origins/service";
+import type { OriginKind, ProductionArrangement } from "@/lib/domain/origins/service";
 import type { PackageKind } from "./types";
 
 /** Price list date of the October 28 load; part of the price row ids, so it stays fixed. */
@@ -25,6 +25,7 @@ export interface OriginRule {
   originCode: string | null;
   lotFacilityCode: string | null;
   kind: OriginKind;
+  productionArrangement: ProductionArrangement | null;
   marketCode: string | null;
   isPrimary: boolean;
   active: boolean;
@@ -34,23 +35,24 @@ export interface OriginRule {
 }
 
 export const ORIGIN_RULES: ReadonlyArray<OriginRule> = [
-  { key: "P_CA_Richmond", name: "East Brother Beer", originCode: "EBB", lotFacilityCode: "01", kind: "brewery", marketCode: "NORCAL-D", isPrimary: true, active: true, note: "Brewery and lot facility 01; Matagrano pickup origin" },
-  { key: "P_CA_Huntington Beach", name: "Beachwood Brewing", originCode: "BWD", lotFacilityCode: "02", kind: "brewery", marketCode: "SOCAL", isPrimary: false, active: true, note: "Brewery, lot facility 02" },
-  { key: "P_CO_Northglenn", name: "Prost Brewing", originCode: "PRO", lotFacilityCode: "03", kind: "brewery", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 03; no market covers Colorado (2.2)" },
-  { key: "P_NY_Garnerville", name: "Round Table Brewing", originCode: "RTB", lotFacilityCode: "04", kind: "brewery", marketCode: "CT", isPrimary: false, active: true, note: "Brewery, lot facility 04; placed in Connecticut (NY has no market)" },
-  { key: "P_CA_San Diego", name: "AleSmith Brewing", originCode: "ALE", lotFacilityCode: "05", kind: "brewery", marketCode: "SOCAL", isPrimary: false, active: true, note: "Brewery, lot facility 05" },
-  { key: "P_MA_Framingham", name: "Jack's Abby Brewing", originCode: "JAB", lotFacilityCode: "06", kind: "brewery", marketCode: "MA", isPrimary: false, active: true, note: "Brewery, lot facility 06; Radford is the MA primary warehouse (2.3)" },
-  { key: "P_TX_Blanco", name: "Real Ale Brewing", originCode: "REA", lotFacilityCode: "07", kind: "brewery", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 07; no market covers Texas (2.2)" },
-  { key: "W_CA_Windsor 01", name: "Express Wine Delivery", originCode: "EWD", lotFacilityCode: null, kind: "warehouse", marketCode: "NORCAL-SD", isPrimary: true, active: true, note: "North Bay primary warehouse" },
-  { key: "W_CA_Wilmington 01", name: "Balmuth & Co.", originCode: "WLA", lotFacilityCode: null, kind: "warehouse", marketCode: "SOCAL", isPrimary: true, active: true, note: "SoCal primary warehouse" },
-  { key: "W_CA_Benecia 01", name: "SC Warehouses (Benicia)", originCode: null, lotFacilityCode: null, kind: "warehouse", marketCode: "NORCAL-SD", isPrimary: false, active: false, note: "Inactive pending question 2.3" },
-  { key: "W_CA_San Francisco 01", name: "Envision Cold Storage (San Francisco)", originCode: null, lotFacilityCode: null, kind: "cold_storage", marketCode: "NORCAL-SD", isPrimary: false, active: false, note: "Inactive pending question 2.3" },
+  { key: "P_CA_Richmond", name: "East Brother Beer", originCode: "EBB", lotFacilityCode: "01", kind: "brewery", productionArrangement: "alternating_proprietorship", marketCode: "NORCAL-D", isPrimary: true, active: true, note: "Brewery and lot facility 01; Matagrano pickup origin" },
+  { key: "P_CA_Huntington Beach", name: "Beachwood Brewing", originCode: "BWD", lotFacilityCode: "02", kind: "brewery", productionArrangement: "alternating_proprietorship", marketCode: "SOCAL", isPrimary: false, active: true, note: "Brewery, lot facility 02" },
+  { key: "P_CO_Northglenn", name: "Prost Brewing", originCode: "PRO", lotFacilityCode: "03", kind: "brewery", productionArrangement: "alternating_proprietorship", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 03; no market covers Colorado (2.2)" },
+  { key: "P_NY_Garnerville", name: "Round Table Brewing", originCode: "RTB", lotFacilityCode: "04", kind: "brewery", productionArrangement: "alternating_proprietorship", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 04; limited New York production, no market (no NY sales; can supply MA or CT but is never a default)" },
+  { key: "P_CA_San Diego", name: "AleSmith Brewing", originCode: "ALE", lotFacilityCode: "05", kind: "brewery", productionArrangement: "contract", marketCode: "SOCAL", isPrimary: false, active: true, note: "Brewery, lot facility 05" },
+  { key: "P_MA_Framingham", name: "Jack's Abby Brewing", originCode: "JAB", lotFacilityCode: "06", kind: "brewery", productionArrangement: "alternating_proprietorship", marketCode: "MA", isPrimary: false, active: true, note: "Brewery, lot facility 06; Radford is the MA primary warehouse (2.3)" },
+  { key: "P_TX_Blanco", name: "Real Ale Brewing", originCode: "REA", lotFacilityCode: "07", kind: "brewery", productionArrangement: "contract", marketCode: null, isPrimary: false, active: true, note: "Brewery, lot facility 07; no market covers Texas (2.2)" },
+  { key: "W_CA_Windsor 01", name: "Express Wine Delivery", originCode: "EWD", lotFacilityCode: null, kind: "warehouse", productionArrangement: null, marketCode: "NORCAL-SD", isPrimary: true, active: true, note: "North Bay primary warehouse" },
+  { key: "W_CA_Wilmington 01", name: "Balmuth & Co.", originCode: "WLA", lotFacilityCode: null, kind: "warehouse", productionArrangement: null, marketCode: "SOCAL", isPrimary: true, active: true, note: "SoCal primary warehouse" },
+  { key: "W_CA_Benecia 01", name: "SC Warehouses (Benicia)", originCode: null, lotFacilityCode: null, kind: "warehouse", productionArrangement: null, marketCode: "NORCAL-SD", isPrimary: false, active: false, note: "Inactive pending question 2.3" },
+  { key: "W_CA_San Francisco 01", name: "Envision Cold Storage (San Francisco)", originCode: null, lotFacilityCode: null, kind: "cold_storage", productionArrangement: null, marketCode: "NORCAL-SD", isPrimary: false, active: false, note: "Inactive pending question 2.3" },
   {
     key: "RAD",
     name: "Radford Warehouse",
     originCode: "RAD",
     lotFacilityCode: null,
     kind: "warehouse",
+    productionArrangement: null,
     marketCode: "MA",
     isPrimary: true,
     active: true,

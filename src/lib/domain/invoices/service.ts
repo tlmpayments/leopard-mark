@@ -411,7 +411,7 @@ export async function buildInvoiceSnapshot(db: DbOrTx, invoiceId: string, genera
     invoiceDate: inv.invoiceDate,
     dueDate: inv.dueDate,
     termsDays: inv.termsDays,
-    issuer: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, remitTo: settings.printRemitTo ? settings.remitTo : null },
+    issuer: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, ordersEmail: settings.ordersEmail ?? null, remitTo: settings.printRemitTo ? settings.remitTo : null },
     billTo,
     shipTo,
     shipmentNumbers: shipments.map((s) => s.number).filter((n): n is string => Boolean(n)),

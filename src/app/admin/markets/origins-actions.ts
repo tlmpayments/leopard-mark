@@ -2,13 +2,19 @@
 
 import { num, opt, runAction, str } from "@/lib/actions/helpers";
 import { updateMarketBilling } from "@/lib/domain/markets/billing";
-import { createOrigin, updateOrigin, type OriginKind } from "@/lib/domain/origins/service";
+import { createOrigin, updateOrigin, type OriginKind, type ProductionArrangement } from "@/lib/domain/origins/service";
 import { BusinessError } from "@/lib/errors";
 import { WEEKDAYS } from "./origins-fields";
 
 function triState(form: FormData, key: string): boolean | null {
   const v = str(form, key);
   return v === "yes" ? true : v === "no" ? false : null;
+}
+
+function arrangementFrom(form: FormData): ProductionArrangement | null {
+  const v = str(form, "productionArrangement");
+  if (v === "alternating_proprietorship" || v === "contract") return v;
+  return null;
 }
 
 function kindFrom(form: FormData): OriginKind {
@@ -30,6 +36,7 @@ export async function updateOriginAction(form: FormData) {
       originCode: opt(form, "originCode"),
       lotFacilityCode: opt(form, "lotFacilityCode"),
       kind: kindFrom(form),
+      productionArrangement: arrangementFrom(form),
       marketId: opt(form, "marketId"),
       active: str(form, "active") === "on",
       isPrimary: str(form, "isPrimary") === "on",
@@ -60,7 +67,7 @@ export async function updateOriginAction(form: FormData) {
 
 export async function createOriginAction(form: FormData) {
   return runAction("/admin/markets", async ({ db, actor }) => {
-    const o = await createOrigin(db, actor, { name: str(form, "name"), kind: kindFrom(form), marketId: opt(form, "marketId"), originCode: opt(form, "originCode"), lotFacilityCode: opt(form, "lotFacilityCode"), addressText: opt(form, "addressText"), isPrimary: str(form, "isPrimary") === "on" });
+    const o = await createOrigin(db, actor, { name: str(form, "name"), kind: kindFrom(form), marketId: opt(form, "marketId"), originCode: opt(form, "originCode"), lotFacilityCode: opt(form, "lotFacilityCode"), addressText: opt(form, "addressText"), isPrimary: str(form, "isPrimary") === "on", productionArrangement: str(form, "productionArrangement") ? arrangementFrom(form) : undefined });
     return `Origin ${o.name} created; open it below to complete address, hours and contacts`;
   });
 }

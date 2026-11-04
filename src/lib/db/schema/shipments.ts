@@ -423,7 +423,7 @@ export const kegEvent = pgTable(
 
 export const invoiceSeriesEnum = pgEnum("invoice_series", ["INV", "NC"]);
 /** How the account pays, copied from the account at issue (R2-12); collection itself stays outside the system. */
-export const payByEnum = pgEnum("pay_by", ["fintech", "stripe", "check"]);
+export const payByEnum = pgEnum("pay_by", ["fintech", "stripe", "check", "eft"]);
 export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "paid", "void"]);
 
 export const invoice = pgTable(
@@ -549,17 +549,22 @@ export const COMPANY_SETTINGS_ID = "00000000-0000-0000-0000-000000000001";
 export const companySettings = pgTable("company_settings", {
   id: uuid("id").primaryKey(),
   legalName: text("legal_name").notNull().default("Familiar Ventures, LLC"),
-  dba: text("dba").notNull().default("The Leopard Mark Brewing Company"),
+  dba: text("dba").notNull().default("The Leopard Mark Beverage Group"),
   officeLine1: text("office_line1"),
   officeLine2: text("office_line2"),
   officeCity: text("office_city"),
   officeState: text("office_state"),
   officePostalCode: text("office_postal_code"),
   officePhone: text("office_phone"),
+  /** Billing contact printed on invoices: questions and remittances go to accounts receivable (owner, Nov 4 2026). */
   arEmail: text("ar_email").notNull().default("ar@theleopardmark.com"),
+  /** Printed on invoices as the address for reorders (owner, Nov 4 2026). */
+  ordersEmail: text("orders_email"),
+  /** Contact printed on every BOL and shipment document (owner, Nov 4 2026); falls back to the AR email when blank. */
+  operationsEmail: text("operations_email"),
   /** Printed on the retail delivery receipt only (6.4). */
   retailFooter: text("retail_footer"),
-  /** Keg deposit and CRV wording for distributor documents; placeholder until the owner's example arrives (6.4). */
+  /** Keg deposit and CRV wording for distributor documents (6.4). */
   distributorFooter: text("distributor_footer"),
   /** Fixed lines on freight documents, e.g. keep cold (6.3). */
   fixedLines: text("fixed_lines").array(),

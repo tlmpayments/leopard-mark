@@ -49,6 +49,8 @@ export const stockMovementKindEnum = pgEnum("stock_movement_kind", [
 
 /** Origin kinds (2.4, 2.2): a brewery is also a lot facility; warehouses and cold storage hold stock only. */
 export const originKindEnum = pgEnum("origin_kind", ["brewery", "warehouse", "cold_storage"]);
+/** How Familiar Ventures produces at a host brewery: as alternating proprietor (producer of record) or under contract. */
+export const productionArrangementEnum = pgEnum("production_arrangement", ["alternating_proprietorship", "contract"]);
 
 export const market = pgTable("market", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -127,6 +129,11 @@ export const warehouse = pgTable(
     deliveryDays: text("delivery_days").array(),
     /** Beer may stay this many days after packaging before it must move (Jack's Abby: 10); a warning opens three days before. */
     maxDaysOnHand: integer("max_days_on_hand"),
+    /**
+     * Breweries only: alternating proprietorship (Familiar Ventures is the producer of record and reports the
+     * production) or contract brewed (the host is the brewer). Null for warehouses and cold storage.
+     */
+    productionArrangement: productionArrangementEnum("production_arrangement"),
     addressLine1: text("address_line1"),
     addressLine2: text("address_line2"),
     addressCity: text("address_city"),
