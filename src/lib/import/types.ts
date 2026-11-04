@@ -4,7 +4,7 @@
  * the database when the diff runs (diff.ts), so a row that already exists under a natural key is updated, never doubled.
  */
 import type { AccountKind, Fulfilment } from "@/lib/domain/customers/shipping";
-import type { OriginKind } from "@/lib/domain/origins/service";
+import type { OriginKind, ProductionArrangement } from "@/lib/domain/origins/service";
 
 export interface Flag {
   entity: string;
@@ -34,6 +34,8 @@ export interface OriginRecord {
   originCode: string | null;
   lotFacilityCode: string | null;
   kind: OriginKind;
+  /** Breweries: alternating proprietorship or contract brewed (owner, Nov 4 2026); null for warehouses. */
+  productionArrangement: ProductionArrangement | null;
   marketCode: string | null;
   marketId: string | null;
   isPrimary: boolean;

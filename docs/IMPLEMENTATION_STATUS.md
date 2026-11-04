@@ -297,6 +297,19 @@ Real Ale added as origin REA (placeholder code, no market). Invoices are still s
 auto-ingest (R2-42), the Express Wine Delivery cover warning, the approval queue, keg count at the stop, signed BOL
 upload, the CA sales-by-format report, the samples write-off report and route optimisation.
 
+Distributor details (November 4) are in migration `0008_distributor_details`: billing addresses, AP and receiving
+contacts for HDI, Mancini, Matagrano and Martignetti, Martignetti's item numbers as SKU aliases, and delivery
+documents naming the receiving contact before the buyer.
+
+Origin arrangements (November 4 answers) are in migration `0009_origin_arrangement`: every brewery records its
+production arrangement, alternating proprietorship (East Brother, Beachwood, Prost, Round Table, Jack's Abby; the
+Massachusetts approval is in) or contract brewed (AleSmith, Real Ale), shown and edited in the origins editor and
+refused on warehouses. Prost (PRO, lot facility 03, Northglenn CO) is created with no market, since nothing is sold in
+Colorado. Round Table loses its Connecticut market: limited New York production, no New York sales, never a market
+default. Connecticut distributors default to Radford, the warehouse that serves Massachusetts and Connecticut; a
+shipment can still be sent direct from Jack's Abby or Round Table. Tests: `tests/scenarios/origin-arrangement.test.ts`
+(replays the migration's data statements).
+
 Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
 phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution
 view beyond assigned stops, proof of delivery, line cleaning / service (10.7), credits and collections, host

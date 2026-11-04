@@ -7,7 +7,7 @@ import { warehouseAvailability } from "@/lib/domain/allocation/service";
 import { listSkus, formatCents } from "@/lib/domain/catalog/service";
 import { WEEKDAY_NAMES } from "@/lib/domain/markets/billing";
 import { listWarehouses, visibleMarkets } from "@/lib/domain/markets/service";
-import { originLabel } from "@/lib/domain/origins/service";
+import { PRODUCTION_ARRANGEMENT_LABEL, originLabel } from "@/lib/domain/origins/service";
 import { confirmSellerAction, createMarketAction, createWarehouseAction, stockMovementAction, transferDepartureAction, transferReceiptAction } from "../actions";
 import { createOriginAction, updateMarketBillingAction, updateOriginAction } from "./origins-actions";
 import { ORIGIN_KIND_LABEL, WEEKDAYS } from "./origins-fields";
@@ -142,7 +142,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
 
       <Card title="Origins (breweries, warehouses, cold storage) · 2.2, 2.11">
         <Table
-          head={["Code", "Name", "Kind", "Lot facility", "Market", "Active", "Appointment / dock / liftgate", "Shipping contact"]}
+          head={["Code", "Name", "Kind", "Production", "Lot facility", "Market", "Active", "Appointment / dock / liftgate", "Shipping contact"]}
           rows={warehouses.map((w) => [
             <span key="c" className="font-mono">
               {w.originCode ?? <Badge tone="warn">no code</Badge>}
@@ -151,6 +151,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
               {w.name} {w.isPrimary ? <Badge tone="good">primary</Badge> : null}
             </span>,
             ORIGIN_KIND_LABEL[w.kind] ?? w.kind,
+            w.productionArrangement ? PRODUCTION_ARRANGEMENT_LABEL[w.productionArrangement] : w.kind === "brewery" ? <Badge key="pa" tone="warn">not set</Badge> : "—",
             w.lotFacilityCode ?? "—",
             w.marketId ? (markets.find((m) => m.id === w.marketId)?.code ?? "") : <span key="m" className="text-xs text-muted">none</span>,
             w.active ? "yes" : "no",
@@ -158,7 +159,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
             [w.shippingContactName, w.shippingContactPhone].filter(Boolean).join(" · ") || "—",
           ])}
         />
-        <p className="mt-1 text-xs text-muted">An origin needs a three-letter code before a shipment from it can be confirmed; a brewery needs a two-digit lot facility code before a packaging run can be recorded. An origin may exist without a market (Prost, Real Ale). Dock, liftgate, appointment and hours are optional (2.11).</p>
+        <p className="mt-1 text-xs text-muted">An origin needs a three-letter code before a shipment from it can be confirmed; a brewery needs a two-digit lot facility code before a packaging run can be recorded. An origin may exist without a market (Prost, Round Table, Real Ale). A brewery is either an alternating proprietorship (we are the producer of record) or contract brewed (the host is the brewer). Dock, liftgate, appointment and hours are optional (2.11).</p>
         {canOrigins ? (
           <>
             <div className="mt-3 grid gap-3">
@@ -187,9 +188,19 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                         ))}
                       </Select>
                     </Field>
+                    <Field label="Production (breweries)" hint="Alternating proprietorship: we are the producer of record. Contract: the host brews for us.">
+                      <Select name="productionArrangement" defaultValue={w.productionArrangement ?? ""}>
+                        <option value="">Not set (warehouses)</option>
+                        {Object.entries(PRODUCTION_ARRANGEMENT_LABEL).map(([k, label]) => (
+                          <option key={k} value={k}>
+                            {label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
                     <Field label="Market">
                       <Select name="marketId" defaultValue={w.marketId ?? ""}>
-                        <option value="">No market (Prost, Real Ale)</option>
+                        <option value="">No market (Prost, Round Table, Real Ale)</option>
                         {markets.map((m) => (
                           <option key={m.id} value={m.id}>
                             {m.code} {m.name}
@@ -323,6 +334,14 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
                 </Select>
                 <Input name="originCode" maxLength={3} placeholder="Code (EBB)" className="uppercase" aria-label="Origin code" />
                 <Input name="lotFacilityCode" maxLength={2} placeholder="Lot code (01)" aria-label="Lot facility code" />
+                <Select name="productionArrangement" defaultValue="" aria-label="Production arrangement">
+                  <option value="">Production: known code or none</option>
+                  {Object.entries(PRODUCTION_ARRANGEMENT_LABEL).map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
                 <Button small variant="secondary">
                   Add origin
                 </Button>

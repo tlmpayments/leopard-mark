@@ -13,19 +13,25 @@ import { BusinessError } from "@/lib/errors";
 
 export type Origin = typeof schema.warehouse.$inferSelect;
 export type OriginKind = (typeof schema.originKindEnum.enumValues)[number];
+export type ProductionArrangement = (typeof schema.productionArrangementEnum.enumValues)[number];
+
+export const PRODUCTION_ARRANGEMENT_LABEL: Record<ProductionArrangement, string> = {
+  alternating_proprietorship: "Alternating proprietorship",
+  contract: "Contract brewed",
+};
 
 /** Confirmed origin codes (2.2). Kept here so the import and the UI agree. */
-export const ORIGIN_CODES: ReadonlyArray<{ code: string; name: string; kind: OriginKind; lotFacilityCode: string | null }> = [
-  { code: "EBB", name: "East Brother Beer", kind: "brewery", lotFacilityCode: "01" },
-  { code: "BWD", name: "Beachwood Brewing", kind: "brewery", lotFacilityCode: "02" },
-  { code: "PRO", name: "Prost Brewing", kind: "brewery", lotFacilityCode: "03" },
-  { code: "RTB", name: "Round Table Brewing", kind: "brewery", lotFacilityCode: "04" },
-  { code: "ALE", name: "AleSmith Brewing", kind: "brewery", lotFacilityCode: "05" },
-  { code: "JAB", name: "Jack's Abby Brewing", kind: "brewery", lotFacilityCode: "06" },
-  { code: "REA", name: "Real Ale Brewing", kind: "brewery", lotFacilityCode: "07" },
-  { code: "EWD", name: "Express Wine Delivery", kind: "warehouse", lotFacilityCode: null },
-  { code: "WLA", name: "Balmuth & Co.", kind: "warehouse", lotFacilityCode: null },
-  { code: "RAD", name: "Radford Warehouse", kind: "warehouse", lotFacilityCode: null },
+export const ORIGIN_CODES: ReadonlyArray<{ code: string; name: string; kind: OriginKind; lotFacilityCode: string | null; arrangement: ProductionArrangement | null }> = [
+  { code: "EBB", name: "East Brother Beer", kind: "brewery", lotFacilityCode: "01", arrangement: "alternating_proprietorship" },
+  { code: "BWD", name: "Beachwood Brewing", kind: "brewery", lotFacilityCode: "02", arrangement: "alternating_proprietorship" },
+  { code: "PRO", name: "Prost Brewing", kind: "brewery", lotFacilityCode: "03", arrangement: "alternating_proprietorship" },
+  { code: "RTB", name: "Round Table Brewing", kind: "brewery", lotFacilityCode: "04", arrangement: "alternating_proprietorship" },
+  { code: "ALE", name: "AleSmith Brewing", kind: "brewery", lotFacilityCode: "05", arrangement: "contract" },
+  { code: "JAB", name: "Jack's Abby Brewing", kind: "brewery", lotFacilityCode: "06", arrangement: "alternating_proprietorship" },
+  { code: "REA", name: "Real Ale Brewing", kind: "brewery", lotFacilityCode: "07", arrangement: "contract" },
+  { code: "EWD", name: "Express Wine Delivery", kind: "warehouse", lotFacilityCode: null, arrangement: null },
+  { code: "WLA", name: "Balmuth & Co.", kind: "warehouse", lotFacilityCode: null, arrangement: null },
+  { code: "RAD", name: "Radford Warehouse", kind: "warehouse", lotFacilityCode: null, arrangement: null },
 ];
 
 /** How an origin reads everywhere (R2-34): "EBB East Brother Beer", the three-letter code then the name, never a facility number. */
@@ -82,6 +88,8 @@ export interface OriginPatch {
   leadDays?: number;
   deliveryDays?: string[] | null;
   maxDaysOnHand?: number | null;
+  /** Breweries only (owner, Nov 4 2026): alternating proprietorship or contract brewed. */
+  productionArrangement?: ProductionArrangement | null;
 }
 
 /** Admin maintains origins (warehouse.manage). Codes are validated; the primary flag stays unique per market. */
@@ -158,6 +166,12 @@ export async function updateOrigin(db: DbOrTx, actor: Actor, id: string, patch: 
     if (v != null && (!Number.isInteger(v) || v < 1 || v > 365)) throw new BusinessError("Most days on hand must be a whole number from 1 to 365", { field: "maxDaysOnHand" });
     set.maxDaysOnHand = v ?? null;
   }
+  if (patch.productionArrangement !== undefined || patch.kind !== undefined) {
+    const kind = patch.kind ?? prior.kind;
+    const arrangement = patch.productionArrangement !== undefined ? patch.productionArrangement : prior.productionArrangement;
+    if (arrangement && kind !== "brewery") throw new BusinessError("Only a brewery has a production arrangement", { field: "productionArrangement" });
+    if (patch.productionArrangement !== undefined) set.productionArrangement = patch.productionArrangement;
+  }
   if (patch.isPrimary !== undefined) {
     const marketId = patch.marketId ?? prior.marketId;
     if (patch.isPrimary && !marketId) throw new BusinessError("An origin without a market cannot be the market's primary warehouse", { field: "isPrimary" });
@@ -182,7 +196,7 @@ export async function updateOrigin(db: DbOrTx, actor: Actor, id: string, patch: 
 export async function createOrigin(
   db: DbOrTx,
   actor: Actor,
-  input: { name: string; kind: OriginKind; marketId?: string | null; originCode?: string | null; lotFacilityCode?: string | null; addressText?: string | null; isPrimary?: boolean },
+  input: { name: string; kind: OriginKind; marketId?: string | null; originCode?: string | null; lotFacilityCode?: string | null; addressText?: string | null; isPrimary?: boolean; productionArrangement?: ProductionArrangement | null },
 ) {
   authorize(actor, "warehouse.manage", { marketId: input.marketId ?? null });
   if (!input.name.trim()) throw new BusinessError("Name is required", { field: "name" });
@@ -191,6 +205,10 @@ export async function createOrigin(
   if (code && (await originByCode(db, code))) throw new BusinessError(`Origin code ${code} is already in use`, { field: "originCode" });
   const fc = input.lotFacilityCode?.trim() || null;
   if (fc && !FACILITY_RE.test(fc)) throw new BusinessError("Lot facility code must be two digits", { field: "lotFacilityCode" });
+  // A known brewery code brings its confirmed arrangement unless one is given.
+  const arrangement =
+    input.productionArrangement !== undefined ? input.productionArrangement : input.kind === "brewery" ? (ORIGIN_CODES.find((c) => c.code === code)?.arrangement ?? null) : null;
+  if (arrangement && input.kind !== "brewery") throw new BusinessError("Only a brewery has a production arrangement", { field: "productionArrangement" });
   if (input.isPrimary && input.marketId) await db.update(schema.warehouse).set({ isPrimary: false }).where(eq(schema.warehouse.marketId, input.marketId));
   const [row] = await db
     .insert(schema.warehouse)
@@ -202,6 +220,7 @@ export async function createOrigin(
       lotFacilityCode: fc,
       addressText: input.addressText ?? null,
       isPrimary: Boolean(input.isPrimary && input.marketId),
+      productionArrangement: arrangement,
     })
     .returning();
   await recordAudit(db, actor, { action: "origin.create", subjectType: "warehouse", subjectId: row.id, current: input, marketId: row.marketId });

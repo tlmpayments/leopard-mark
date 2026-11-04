@@ -135,6 +135,7 @@ function normalizeOrigins(loc: Sheet | null, ctx: NormalizeContext): OriginRecor
       originCode: rule.originCode,
       lotFacilityCode: rule.lotFacilityCode,
       kind: rule.kind,
+      productionArrangement: rule.productionArrangement,
       marketCode: rule.marketCode,
       marketId,
       isPrimary: rule.isPrimary,
