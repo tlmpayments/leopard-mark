@@ -20,16 +20,17 @@ lists every problem (`configurationProblems()`). Required for a production deplo
 
 ```
 FV_ENV=production  APP_BASE_URL=https://<domain>  DATABASE_URL=…  SESSION_SECRET=…  CRON_SECRET=…
-[GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  GOOGLE_ALLOWED_HD=<workspace domain>]   # optional: adds "Continue with Google"
+[GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  GOOGLE_ALLOWED_HD=<workspace domain>]   # "Continue with Google", and the client Gmail mailboxes connect through (section 7a)
 [STRIPE_SECRET_KEY=rk_live_…  STRIPE_WEBHOOK_SECRET=whsec_…]                           # round 4: collection through Stripe (section 7)
-[GOOGLE_SERVICE_ACCOUNT_KEY=<service-account JSON>]                                    # round 4: orders@ intake and approved sends (section 7a)
 ```
 Employees sign in with their **company email + PIN**; no identity provider is required for live use.
 Do **not** set `DEV_AUTH_BYPASS`, `FV_DEMO`, `FV_STRIPE_FAKE` or a `TEST_DATABASE_URL` on any Vercel environment.
-Preview deployments use `FV_ENV=development` or `test`; they still refuse fixture access. **The preview shares the
-production database**, so a preview never carries `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` or
-`GOOGLE_SERVICE_ACCOUNT_KEY`: with them absent every Stripe or Gmail step waits truthfully (nothing is charged,
-nothing is read, nothing is sent). The in-memory Stripe stand-in (`FV_STRIPE_FAKE=true`, used by `npm run demo`
+Preview deployments use `FV_ENV=development` or `test`; they still refuse fixture access. **Each preview gets its own
+Neon branch** (the Neon integration's *Create database branch for deployment: Preview*), copied from production when
+the preview is built, so nothing a preview does reaches the production database. A preview carries only the Stripe
+**test** keys (`rk_test_…` and the Sandbox webhook secret, Preview environment only), never a live key; the Google
+client is Production only, so a preview reads and sends no mail. Never put a Stripe key on a preview while preview
+branching is off. The in-memory Stripe stand-in (`FV_STRIPE_FAKE=true`, used by `npm run demo`
 and the tests) is refused on any deployment by `src/lib/integrations/stripe/gateway.ts`.
 
 **Request body size**: `next.config.ts` sets `experimental.serverActions.bodySizeLimit` to `8mb` so the
@@ -216,18 +217,29 @@ Integrations with the evidence):
 
 ## 7a. Gmail (round 4): the orders@ mailbox and approved sends
 
-A Google Workspace **service account with domain-wide delegation** (`GOOGLE_SERVICE_ACCOUNT_KEY`, the JSON key,
-pasted into Vercel by the Owner), granted the scopes `https://www.googleapis.com/auth/gmail.readonly` (reading
-`orders@theleopardmark.com`) and `https://www.googleapis.com/auth/gmail.send` (sending as `orders@` and
-`operations@`). The mailbox and sender addresses are company settings; the switches are off by default:
-*Read the orders@ mailbox* (intake), *Send approved emails automatically* (transport). With the send switch off
-an approved email is shown on Approvals for a person to send by hand and record. Integrations → *Check Gmail*
-reads the mailbox profile and records the result; nothing is sent by a check.
+One mailbox at a time, never a domain-wide key (owner, November 4). The portal's Google client (`GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`; an **Internal** OAuth client in the company's Google Cloud project with the Gmail API
+enabled) is the only credential in Vercel. Its **Authorized redirect URIs** list both
+`https://<domain>/api/auth/google/callback` (staff sign-in) and `https://<domain>/api/integrations/gmail/callback`
+(connecting a mailbox).
+
+On Integrations, the Owner clicks **Connect mailbox** for each company address and signs in to that mailbox at
+Google: `orders@` is asked for `gmail.readonly` (intake) and `gmail.send` (approved customer email), `operations@`
+for `gmail.send` only (approved BOLs). The callback keeps the refresh token Google returns, encrypted (AES-256-GCM,
+keyed from `SESSION_SECRET`; rotating `SESSION_SECRET` means connecting the mailboxes again), only if the mailbox
+that signed in is the one asked for and every needed scope was allowed. **Disconnect** revokes the sign-in with
+Google. A mailbox nobody connected, or one whose sign-in Google refused, makes its mail wait with a case; nothing
+fails silently.
+
+The mailbox and sender addresses are company settings; the switches are off by default: *Read the orders@ mailbox*
+(intake), *Send approved emails automatically* (transport). With the send switch off an approved email is shown on
+Approvals for a person to send by hand and record. Integrations, *Check Gmail* reads the mailbox profile and records
+the result; nothing is sent by a check.
 
 ## 8. Activation boundaries (no live finance)
 
-* **Round 4 boundary**: with no `STRIPE_SECRET_KEY` nothing charges, mirrors or credits; with no
-  `GOOGLE_SERVICE_ACCOUNT_KEY` nothing is read from or sent through Gmail. With the keys present, every debit,
+* **Round 4 boundary**: with no `STRIPE_SECRET_KEY` nothing charges, mirrors or credits; with no connected
+  mailbox nothing is read from or sent through Gmail. With the keys present, every debit,
   Stripe invoice copy, credit note and email is an **approval item** a person decides, unless the Owner turns a
   company policy on (*approve emails / Stripe invoices / credit notes automatically*) or an account's
   *debit without approving each one* switch on. Stripe's own emails stay off (section 7). No Connect, no Stripe
@@ -246,7 +258,7 @@ reads the mailbox profile and records the result; nothing is sent by a check.
 | Google Identity | `GET /api/auth/google/callback` | built |
 | Stripe | `POST /api/webhooks/stripe` | built (signature-verified, idempotent record, consequences applied: round 4) |
 | Stripe hosted setup return | `GET /customer/setup` | built (public page; the bank arrives by webhook, never through the return) |
-| Gmail | none (service account, no OAuth callback) | built: read `orders@`, send approved emails |
+| Gmail mailbox connection | `GET /api/integrations/gmail/callback` (add to the Google client's redirect URIs) | built: connect `orders@` (read, send) and `operations@` (send) |
 | QuickBooks Online | `/api/oauth/qbo/callback` | reserved, not built (R1 deferred) |
 | OptimoRoute / Slack / Google Address | none needed | boundary only |
 
@@ -368,8 +380,9 @@ on November 4); `0010_round4` is the one pending, listed on the state card until
    *The Leopard Mark Beverage Group* (it was *Brewing Company*); invoices already marked paid get the collection
    state *paid outside Stripe* so they are never debited; one audit row. Nothing is deleted or renumbered.
 3. **Keys** (Owner, by hand in Vercel, production only): `STRIPE_SECRET_KEY` (restricted, live),
-   `STRIPE_WEBHOOK_SECRET`, `GOOGLE_SERVICE_ACCOUNT_KEY`; then redeploy. Register the webhook endpoint and set
-   the Dashboard settings in section 7. Previews get none of these.
+   `STRIPE_WEBHOOK_SECRET`, plus `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` if not already there; then
+   redeploy. Register the webhook endpoint and set the Dashboard settings in section 7. Previews get only the Stripe
+   test keys. Then, on Integrations, the Owner connects `orders@` and `operations@` (section 7a).
 4. **Integrations**: *Check connectivity* (Stripe) and *Check Gmail*; both record their result. Nothing is
    created, read or sent by a check.
 5. **Company settings** (Owner): confirm every round 4 switch is **off** (approve emails / Stripe invoices /

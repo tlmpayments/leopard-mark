@@ -80,10 +80,11 @@ export const PROVIDERS: ProviderDefinition[] = [
     internalKeeps: "Approval items (what may go out, who approved it, the evidence), intake requests, the chosen sender per purpose",
     phase: 1,
     built: "adapter",
-    requiredEnv: ["GOOGLE_SERVICE_ACCOUNT_KEY"],
+    // The portal's Internal Google client; each mailbox is then connected by the Owner signing in to it once.
+    requiredEnv: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
     optionalEnv: [],
     scopes: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"],
-    credentialEnv: "GOOGLE_SERVICE_ACCOUNT_KEY",
+    credentialEnv: "GOOGLE_CLIENT_SECRET",
   },
   {
     provider: "google_address",

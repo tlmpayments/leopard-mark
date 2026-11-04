@@ -203,7 +203,8 @@ Leopard Mark Ops*; option codes in brackets):
   payouts and the monthly CFO export as plain CSVs [F2 to F4]; C2 matching of the ACH app's customers and the
   hand-made invoices (suggested only on a unique billing email; never on a shared email or a duplicated name;
   confirming writes identifiers and the default bank) [C2]; card by exception per account (Admin) [B9].
-* **Gmail** service account with domain-wide delegation: `orders@` intake with attachments (PDF text read),
+* **Gmail**, one mailbox at a time (owner, Nov 4: the Owner clicks *Connect mailbox* on Integrations and signs in;
+  the refresh token is kept encrypted, Disconnect revokes it with Google): `orders@` intake with attachments (PDF text read),
   known-sender drafts (contact email, company domain, item-number aliases, SKU codes, brand and package, PO,
   requested date), the same draft for a pasted email; approved sends from `orders@` and `operations@` with
   PDF attachments; checks that send nothing.
@@ -226,7 +227,7 @@ Leopard Mark Ops*; option codes in brackets):
 | Google Identity (optional) | Yes | No — not needed: sign-in is email + PIN | No | `ACCESS_*` gates apply to email + PIN sign-in too; need real staff | IG03 unselected | not required for live use |
 | Stripe | Yes (round 4: customers, hosted setup, invoice copies, debits, credit notes, webhooks applied, reconciliation, payouts; approval queue in front) | No (Owner pastes the restricted key; previews never) | No (the stand-in only) | No — `STRIPE_CUSTOMER_ASSOCIATION`, `STRIPE_HOSTED_SETUP` unproven until the Sandbox proof in DEPLOYMENT §7 | SD01–SD10, D01, D05, D06 unselected; the Owner's rule: nothing leaves without a person | **No** until the Sandbox proof and the Owner's switch |
 | OptimoRoute | Boundary only | No | not applicable | No (`OR_*`) | IG01, D19–D21 unselected | **No** — phase 2 |
-| Gmail | Yes (round 4: service account, `orders@` read, approved sends; checks send nothing) | No (Owner pastes the service-account key) | No | No (`NOTICE_SINGLE_SENDER`; the test transport only) | D32/IG04 unselected; the send switch is off | **No** until delegation is granted and the check passes |
+| Gmail | Yes (round 4: per-mailbox sign-in, `orders@` read and send, `operations@` send; checks send nothing) | No (the Google client is in Vercel; the Owner connects `orders@` and `operations@` on Integrations) | No | No (`NOTICE_SINGLE_SENDER`; the test transport only) | D32/IG04 unselected; the send switch is off | **No** until both mailboxes are connected and the check passes |
 | Google Address | Boundary only | No | not applicable | No (`GOOGLE_CONTENT_RIGHTS`) | IG05 unselected | **No** |
 | Slack | Boundary only | No | not applicable | No (`SLACK_NO_MUTATION`) | IG07/D27/D32 unselected | **No** |
 | QuickBooks Online | Not implemented | No | not applicable | No (`QBO_MODEL`) | IG06/D25/D29/D30/D33 unselected | **No** — phase 3 |

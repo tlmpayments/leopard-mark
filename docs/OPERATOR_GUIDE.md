@@ -520,7 +520,7 @@ Withdraw a single selection with a reason; the previous effective selection appl
 | Webhook returns 400 | signature or `STRIPE_WEBHOOK_SECRET` problem | fix the secret; Stripe retries; duplicates are recorded once |
 | an approval item **failed** | the Stripe call or the send failed; the reason is on the item | fix the cause (a missing bank, a stale key, Gmail not connected) and *Approve again*; nothing ran twice (idempotency keys) |
 | an approval item stays **Running** | a worker died mid-run | after 15 minutes, *release if stuck* puts it back to approved; check Stripe first for the object it may have created |
-| Gmail *Check* fails | service account key, delegation or scopes | the error names the step; delegation needs both scopes on the Workspace admin side |
+| Gmail *Check* fails | the mailbox is not connected, or Google no longer accepts its sign-in | the Owner clicks *Reconnect* on Integrations and signs in to that mailbox, allowing every box Google shows |
 | invoice stuck in **processing** | Stripe has not reported the debit's result | wait for the webhook (four business days for ACH); the nightly reconciliation opens a case if Stripe and the portal disagree |
 | "Email or PIN not recognised" | unknown email, no PIN set, or wrong PIN (deliberately the same message) | check the person row: *no PIN* → set one; otherwise reset the PIN; refusals are audited with the real cause |
 | "Too many attempts" | PIN locked after five failures | wait, or reset the PIN |

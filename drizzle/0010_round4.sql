@@ -39,6 +39,18 @@ CREATE TABLE "intake_attachment" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "mailbox_connection" (
+	"mailbox" text PRIMARY KEY NOT NULL,
+	"scopes" text[] NOT NULL,
+	"refresh_token_enc" text,
+	"connected_by_employee_id" uuid,
+	"connected_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"last_used_at" timestamp with time zone,
+	"last_error" text,
+	"disconnected_at" timestamp with time zone,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "mailbox_sync" (
 	"mailbox" text PRIMARY KEY NOT NULL,
 	"history_id" text,
@@ -216,4 +228,4 @@ CREATE INDEX "invoice_stripe_idx" ON "invoice" USING btree ("stripe_invoice_id")
 UPDATE "invoice" SET "collection_state" = 'out_of_band' WHERE "status" = 'paid' AND "collection_state" = 'none';
 --> statement-breakpoint
 INSERT INTO "audit_event" ("actor_kind", "action", "subject_type", "subject_id", "current", "reason")
-VALUES ('system', 'migration.0010_round4', 'company_settings', '00000000-0000-0000-0000-000000000001', '{"added":["approval_item","payment","stripe_customer_match","stripe_invoice_match","stripe_payout","stripe_balance_transaction","mailbox_sync","intake_attachment"],"invoice_status":"processing added"}'::jsonb, 'Round 4: approval queue, Stripe as the money ledger, orders@ intake, split shipments, reports');
+VALUES ('system', 'migration.0010_round4', 'company_settings', '00000000-0000-0000-0000-000000000001', '{"added":["approval_item","payment","stripe_customer_match","stripe_invoice_match","stripe_payout","stripe_balance_transaction","mailbox_sync","mailbox_connection","intake_attachment"],"invoice_status":"processing added"}'::jsonb, 'Round 4: approval queue, Stripe as the money ledger, orders@ intake, split shipments, reports');

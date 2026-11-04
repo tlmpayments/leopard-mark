@@ -1,5 +1,5 @@
 /**
- * The orders@ mailbox into Email intake (Round 4). A read-only poll through the Gmail service account: new messages
+ * The orders@ mailbox into Email intake (Round 4). A read-only poll through the mailbox the Owner connected: new messages
  * become intake requests with the original text and attachments kept, and for a known sender a pre-filled draft. The
  * mailbox is never written to and nothing is sent back; any acknowledgement goes through the approval queue.
  */
@@ -116,7 +116,7 @@ export async function pollIntakeMailbox(db: DbOrTx, now: Date = new Date()): Pro
   try {
     let pageToken: string | null = null;
     for (let page = 0; page < 10; page += 1) {
-      const list = await listMessages(mailbox, { q: `in:inbox -from:${mailbox} after:${sinceEpoch}`, maxResults: 50, pageToken });
+      const list = await listMessages(db, mailbox, { q: `in:inbox -from:${mailbox} after:${sinceEpoch}`, maxResults: 50, pageToken });
       for (const ref of list.messages ?? []) {
         fetched += 1;
         const [dup] = await db.select({ id: schema.orderIntakeRequest.id, receivedAt: schema.orderIntakeRequest.receivedAt }).from(schema.orderIntakeRequest).where(eq(schema.orderIntakeRequest.sourceReference, ref.id));
@@ -124,9 +124,9 @@ export async function pollIntakeMailbox(db: DbOrTx, now: Date = new Date()): Pro
           if (!newest || dup.receivedAt > newest) newest = dup.receivedAt;
           continue;
         }
-        const parsed = parseMessage(await getMessage(mailbox, ref.id));
+        const parsed = parseMessage(await getMessage(db, mailbox, ref.id));
         if (parsed.from && parsed.from.toLowerCase() === mailbox.toLowerCase()) continue;
-        const r = await recordIntakeFromMail(db, mailbox, parsed, (attachmentId) => getAttachment(mailbox, ref.id, attachmentId));
+        const r = await recordIntakeFromMail(db, mailbox, parsed, (attachmentId) => getAttachment(db, mailbox, ref.id, attachmentId));
         if (r.recorded) recorded += 1;
         if (!newest || parsed.receivedAt > newest) newest = parsed.receivedAt;
       }
@@ -145,7 +145,7 @@ export async function pollIntakeMailbox(db: DbOrTx, now: Date = new Date()): Pro
       title: "The orders@ mailbox could not be read",
       cause: message,
       ownerRole: "admin",
-      nextAction: "Check the Gmail connection on the Integrations screen (service account key and Workspace delegation).",
+      nextAction: "Check the mailbox on the Integrations screen; if it is not connected, the Owner connects it (Connect mailbox).",
       dedupeKey: `mailbox_poll_failed:${mailbox}`,
     });
   }

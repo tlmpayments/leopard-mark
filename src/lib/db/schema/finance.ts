@@ -220,6 +220,25 @@ export const mailboxSync = pgTable("mailbox_sync", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * A company mailbox the Owner connected by signing in to it once (owner, Nov 4 2026: one mailbox at a time, never a
+ * domain-wide key). Google returns a refresh token for exactly the scopes granted at that sign-in; it is stored
+ * encrypted and only ever used for that mailbox. Disconnecting revokes it with Google and clears it here.
+ */
+export const mailboxConnection = pgTable("mailbox_connection", {
+  mailbox: text("mailbox").primaryKey(),
+  /** The scopes Google granted, e.g. gmail.readonly and gmail.send. */
+  scopes: text("scopes").array().notNull(),
+  /** AES-256-GCM, keyed from SESSION_SECRET; never shown, logged or exported. Null once disconnected. */
+  refreshTokenEnc: text("refresh_token_enc"),
+  connectedByEmployeeId: uuid("connected_by_employee_id"),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** An attachment kept with an intake email (a PDF purchase order, an order-form workbook), with the text pulled from it. */
 export const intakeAttachment = pgTable(
   "intake_attachment",

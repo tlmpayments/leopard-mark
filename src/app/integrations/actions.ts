@@ -8,6 +8,7 @@ import { recordGateStatus, type GateStatus } from "@/lib/integrations/gates";
 import { providerStatuses, recordActivation, type Provider } from "@/lib/integrations/registry";
 import { checkStripeConnection } from "@/lib/integrations/stripe/adapter";
 import { checkGmailConnection } from "@/lib/integrations/gmail/adapter";
+import { disconnectMailbox } from "@/lib/integrations/gmail/connection";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { importStripeCustomersForMatching, importStripeInvoicesForMatching, syncPayouts } from "@/lib/domain/collection";
 
@@ -69,5 +70,13 @@ export async function syncPayoutsAction() {
     authorize(actor, "integration.manage");
     const r = await syncPayouts(db);
     return `${r.payouts} payout(s) and ${r.transactions} balance transaction(s) pulled from Stripe.`;
+  });
+}
+
+export async function disconnectMailboxAction(form: FormData) {
+  return runAction("/integrations", async ({ db, actor }) => {
+    const mailbox = String(form.get("mailbox") ?? "");
+    const r = await disconnectMailbox(db, actor, mailbox, String(form.get("reason") ?? ""));
+    return r.revoked ? `${mailbox} disconnected; Google revoked the sign-in.` : `${mailbox} disconnected here. Google did not confirm the revocation; remove the portal's access under that mailbox's Google Account, Security, Third-party connections.`;
   });
 }

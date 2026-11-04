@@ -58,7 +58,7 @@ export async function setupLinkFor(db: DbOrTx, item: ApprovalItem): Promise<stri
 registerApprovalExecutor("email", async (db: Db, item: ApprovalItem) => {
   const settings = await getCompanySettings(db);
   if (!settings.sendEmailAutomatically) throw new ProviderUnavailableError("Automatic email sending is switched off; send it by hand and record the outcome, or turn the switch on in Company settings");
-  if (!gmailConfigured()) throw new ProviderUnavailableError("Gmail is not connected (GOOGLE_SERVICE_ACCOUNT_KEY); the email waits");
+  if (!gmailConfigured()) throw new ProviderUnavailableError("Gmail is not connected (the Google client is not configured); the email waits");
   const payload = item.payload as unknown as EmailPayload;
   let text = payload.body;
   const result: Record<string, unknown> = {};
@@ -70,6 +70,6 @@ registerApprovalExecutor("email", async (db: Db, item: ApprovalItem) => {
   }
   const attachments = await resolveAttachments(db, SYSTEM_ACTOR, payload);
   const from = senderAddress(item.sender, settings);
-  const r = await sendEmail({ from, to: payload.to, cc: payload.cc, subject: payload.subject, text, attachments, replyTo: from });
+  const r = await sendEmail(db, { from, to: payload.to, cc: payload.cc, subject: payload.subject, text, attachments, replyTo: from });
   return { ...result, messageId: r.id, threadId: r.threadId, from, to: payload.to, attachments: attachments.map((a) => a.filename) };
 });

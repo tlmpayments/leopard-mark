@@ -1363,7 +1363,7 @@ async function journey24() {
   j.step("Integrations: Gmail not connected (truthfully), Stripe shown as the in-memory stand-in");
   await page.goto(`${BASE}/integrations`);
   await expectText(page, /Gmail \(orders@ intake and approved sends\)/i, "Gmail listed");
-  await expectText(page, /missing: GOOGLE_SERVICE_ACCOUNT_KEY/i, "Gmail truthfully not connected");
+  await expectText(page, /missing: GOOGLE_CLIENT_ID/i, "Gmail truthfully not connected");
   await expectText(page, /in-memory stand-in \(FV_STRIPE_FAKE\); no key/i, "the demo says Stripe is a stand-in, never a real account");
   await shot(page, "j24-04-integrations");
   j.end();

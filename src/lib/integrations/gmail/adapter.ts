@@ -1,90 +1,31 @@
-import { SignJWT, importPKCS8 } from "jose";
 import type { DbOrTx } from "@/lib/db/types";
 import { credentialFingerprint, recordConnectionCheck } from "../registry";
+import { GMAIL_SCOPE_READ, GMAIL_SCOPE_SEND, googleClientConfigured, mailboxAccessToken } from "./connection";
 
 /**
- * Gmail through a Google Workspace service account with domain-wide delegation (Round 4). Two uses, both narrow:
+ * Gmail for one mailbox at a time (Round 4; owner, Nov 4 2026). Two uses, both narrow:
  *   - read the orders@ mailbox into Email intake (scope gmail.readonly), nothing is ever written to that mailbox;
  *   - send an APPROVED email as orders@ or operations@ (scope gmail.send), only while the company switch
  *     `sendEmailAutomatically` is on. The portal never sends anything a person has not approved.
  *
- * Credentials: GOOGLE_SERVICE_ACCOUNT_KEY holds the service account's JSON key (client_email + private_key), pasted into
- * Vercel by the Owner. The Workspace admin authorises the service account's client id for the two scopes. The
- * mailbox addresses live in company settings; the key is never printed or logged.
+ * Credentials: the portal's Google client (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, an Internal client) plus a
+ * sign-in the Owner gives each mailbox on the Integrations screen (connection.ts). There is no domain-wide key: the
+ * portal can reach only the mailboxes someone signed in to, with only the scopes granted then.
  */
 
-export const GMAIL_SCOPE_READ = "https://www.googleapis.com/auth/gmail.readonly";
-export const GMAIL_SCOPE_SEND = "https://www.googleapis.com/auth/gmail.send";
+export { GMAIL_SCOPE_READ, GMAIL_SCOPE_SEND };
 
-interface ServiceAccount {
-  clientEmail: string;
-  privateKey: string;
-}
-
-function serviceAccount(): ServiceAccount | null {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (raw && raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw) as { client_email?: string; private_key?: string };
-      if (parsed.client_email && parsed.private_key) return { clientEmail: parsed.client_email, privateKey: parsed.private_key.replace(/\\n/g, "\n") };
-    } catch {
-      return null;
-    }
-  }
-  const email = process.env.GOOGLE_SA_CLIENT_EMAIL;
-  const key = process.env.GOOGLE_SA_PRIVATE_KEY;
-  if (email && key) return { clientEmail: email, privateKey: key.replace(/\\n/g, "\n") };
-  return null;
-}
-
+/** The Google client is configured; each mailbox still needs its own connection before anything is read or sent. */
 export function gmailConfigured(): boolean {
-  return serviceAccount() !== null || Boolean(testTransport);
+  return googleClientConfigured() || Boolean(testTransport);
 }
 
 export function gmailFingerprint(): string | null {
-  const sa = serviceAccount();
-  return sa ? credentialFingerprint(sa.privateKey) : testTransport ? "test-transport" : null;
+  return googleClientConfigured() ? credentialFingerprint(process.env.GOOGLE_CLIENT_SECRET) : testTransport ? "test-transport" : null;
 }
 
-const tokens = new Map<string, { token: string; expiresAt: number }>();
-
-/** An access token for the delegated mailbox user and scope, cached until shortly before it expires. */
-async function accessToken(subject: string, scope: string): Promise<string> {
-  const sa = serviceAccount();
-  if (!sa) throw new GmailNotConnectedError();
-  const key = `${subject}|${scope}`;
-  const cached = tokens.get(key);
-  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
-  const pk = await importPKCS8(sa.privateKey, "RS256");
-  const now = Math.floor(Date.now() / 1000);
-  const jwt = await new SignJWT({ scope })
-    .setProtectedHeader({ alg: "RS256", typ: "JWT" })
-    .setIssuer(sa.clientEmail)
-    .setSubject(subject)
-    .setAudience("https://oauth2.googleapis.com/token")
-    .setIssuedAt(now)
-    .setExpirationTime(now + 3600)
-    .sign(pk);
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
-  });
-  if (!res.ok) throw new Error(`Google token exchange failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
-  const body = (await res.json()) as { access_token: string; expires_in: number };
-  tokens.set(key, { token: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 });
-  return body.access_token;
-}
-
-export class GmailNotConnectedError extends Error {
-  constructor(message = "Gmail is not connected: GOOGLE_SERVICE_ACCOUNT_KEY is not configured.") {
-    super(message);
-    this.name = "GmailNotConnectedError";
-  }
-}
-
-async function gmailFetch<T>(mailbox: string, scope: string, path: string, init: RequestInit = {}): Promise<T> {
-  const token = await accessToken(mailbox, scope);
+async function gmailFetch<T>(db: DbOrTx, mailbox: string, scope: string, path: string, init: RequestInit = {}): Promise<T> {
+  const token = await mailboxAccessToken(db, mailbox, scope);
   const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(mailbox)}/${path}`, {
     ...init,
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) },
@@ -131,25 +72,25 @@ export interface ParsedMessage {
   attachments: Array<{ attachmentId: string; filename: string; mime: string | null; size: number }>;
 }
 
-export async function listMessages(mailbox: string, opts: { q?: string; maxResults?: number; pageToken?: string | null } = {}) {
+export async function listMessages(db: DbOrTx, mailbox: string, opts: { q?: string; maxResults?: number; pageToken?: string | null } = {}) {
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   params.set("maxResults", String(opts.maxResults ?? 25));
   if (opts.pageToken) params.set("pageToken", opts.pageToken);
-  return gmailFetch<{ messages?: Array<{ id: string; threadId: string }>; nextPageToken?: string; resultSizeEstimate?: number }>(mailbox, GMAIL_SCOPE_READ, `messages?${params}`);
+  return gmailFetch<{ messages?: Array<{ id: string; threadId: string }>; nextPageToken?: string; resultSizeEstimate?: number }>(db, mailbox, GMAIL_SCOPE_READ, `messages?${params}`);
 }
 
-export async function getMessage(mailbox: string, id: string): Promise<GmailMessage> {
-  return gmailFetch<GmailMessage>(mailbox, GMAIL_SCOPE_READ, `messages/${id}?format=full`);
+export async function getMessage(db: DbOrTx, mailbox: string, id: string): Promise<GmailMessage> {
+  return gmailFetch<GmailMessage>(db, mailbox, GMAIL_SCOPE_READ, `messages/${id}?format=full`);
 }
 
-export async function getAttachment(mailbox: string, messageId: string, attachmentId: string): Promise<Buffer> {
-  const r = await gmailFetch<{ data?: string; size?: number }>(mailbox, GMAIL_SCOPE_READ, `messages/${messageId}/attachments/${attachmentId}`);
+export async function getAttachment(db: DbOrTx, mailbox: string, messageId: string, attachmentId: string): Promise<Buffer> {
+  const r = await gmailFetch<{ data?: string; size?: number }>(db, mailbox, GMAIL_SCOPE_READ, `messages/${messageId}/attachments/${attachmentId}`);
   return Buffer.from((r.data ?? "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
 
-export async function getProfile(mailbox: string) {
-  return gmailFetch<{ emailAddress: string; messagesTotal: number; historyId: string }>(mailbox, GMAIL_SCOPE_READ, "profile");
+export async function getProfile(db: DbOrTx, mailbox: string, scope: string = GMAIL_SCOPE_READ) {
+  return gmailFetch<{ emailAddress: string; messagesTotal: number; historyId: string }>(db, mailbox, scope, "profile");
 }
 
 function decodeBody(data?: string): string {
@@ -266,21 +207,21 @@ export function setGmailTestTransport(fn: ((e: OutgoingEmail) => Promise<SendRes
   testTransport = fn;
 }
 
-export async function sendEmail(e: OutgoingEmail): Promise<SendResult> {
+export async function sendEmail(db: DbOrTx, e: OutgoingEmail): Promise<SendResult> {
   if (testTransport) return testTransport(e);
   const raw = Buffer.from(buildMime(e), "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const r = await gmailFetch<{ id: string; threadId?: string }>(e.from, GMAIL_SCOPE_SEND, "messages/send", { method: "POST", body: JSON.stringify({ raw }) });
+  const r = await gmailFetch<{ id: string; threadId?: string }>(db, e.from, GMAIL_SCOPE_SEND, "messages/send", { method: "POST", body: JSON.stringify({ raw }) });
   return { id: r.id, threadId: r.threadId ?? null };
 }
 
-/** Connectivity check for the Integrations screen: the delegated mailbox's profile, nothing else. */
+/** Connectivity check for the Integrations screen: the connected mailbox's profile, nothing else. */
 export async function checkGmailConnection(db: DbOrTx, mailbox: string): Promise<{ ok: boolean; detail: Record<string, unknown> }> {
   if (!gmailConfigured()) {
-    await recordConnectionCheck(db, "gmail", { ok: false, environment: null, detail: { reason: "GOOGLE_SERVICE_ACCOUNT_KEY missing" } });
-    return { ok: false, detail: { reason: "GOOGLE_SERVICE_ACCOUNT_KEY missing" } };
+    await recordConnectionCheck(db, "gmail", { ok: false, environment: null, detail: { reason: "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET missing" } });
+    return { ok: false, detail: { reason: "the Google client (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET) is not configured" } };
   }
   try {
-    const p = testTransport ? { emailAddress: mailbox, messagesTotal: 0, historyId: "0" } : await getProfile(mailbox);
+    const p = testTransport ? { emailAddress: mailbox, messagesTotal: 0, historyId: "0" } : await getProfile(db, mailbox);
     const detail = { mailbox: p.emailAddress, messagesTotal: p.messagesTotal };
     await recordConnectionCheck(db, "gmail", { ok: true, environment: "live", accountId: p.emailAddress, credentialFingerprint: gmailFingerprint(), detail });
     return { ok: true, detail };

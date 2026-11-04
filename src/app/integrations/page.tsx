@@ -12,7 +12,8 @@ import { jobSummary, listJobs } from "@/lib/jobs/queue";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { listCustomerMatches } from "@/lib/domain/collection";
 import { runJobsAction } from "../admin/actions";
-import { activationAction, checkGmailAction, checkStripeAction, importStripeMatchesAction, recordGateAction, syncPayoutsAction } from "./actions";
+import { SCOPE_LABEL, companyMailboxes, googleClientConfigured, listMailboxConnections } from "@/lib/integrations/gmail/connection";
+import { activationAction, checkGmailAction, checkStripeAction, disconnectMailboxAction, importStripeMatchesAction, recordGateAction, syncPayoutsAction } from "./actions";
 import "@/lib/domain/collection";
 
 const CONNECTION_LABEL: Record<string, string> = { not_applicable: "n/a", no_check: "untested", failed: "failed", stale: "stale", ok: "verified" };
@@ -27,6 +28,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const flash = await flashFrom(searchParams);
   const d = await getDb();
   const [statuses, jobs, jobRows, events, settings, matches] = await Promise.all([providerStatuses(d), jobSummary(d), listJobs(d, { statuses: ["waiting", "queued", "running", "failed"], limit: 50 }), d.select().from(schema.providerEvent).orderBy(desc(schema.providerEvent.receivedAt)).limit(10), getCompanySettings(d), listCustomerMatches(d, { states: ["suggested"] })]);
+  const mailboxRows = await listMailboxConnections(d);
+  const ownerCanConnect = can(actor, "settings.manage");
   const manage = can(actor, "integration.manage");
   const problems = configurationProblems();
   const fakeStripe = stripeGatewayMode() === "fake";
@@ -120,6 +123,57 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                 <Button small variant="secondary">Check the {settings.intakeMailboxAddress} mailbox</Button>
               </form>
             ) : null}
+          </div>
+          {s.provider === "gmail" ? (
+            <div className="mb-2">
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted">Mailboxes (each connected by the Owner signing in to it once; no domain-wide key)</h3>
+              <Table
+                head={["Mailbox", "Used for", "Needs", "Connection", ""]}
+                rows={companyMailboxes(settings).map((m) => {
+                  const conn = mailboxRows.find((r) => r.mailbox === m.mailbox && !r.disconnectedAt && r.refreshTokenEnc);
+                  const missing = conn ? m.scopes.filter((sc) => !conn.scopes.includes(sc)) : [];
+                  return [
+                    <span key="m" className="font-mono text-xs">{m.mailbox}</span>,
+                    m.purpose,
+                    m.scopes.map((sc) => SCOPE_LABEL[sc] ?? sc).join(" and "),
+                    conn ? (
+                      <span key="c">
+                        <Badge tone={conn.lastError || missing.length ? "warn" : "good"}>{conn.lastError ? "needs reconnecting" : missing.length ? `missing ${missing.map((sc) => SCOPE_LABEL[sc] ?? sc).join(", ")}` : "connected"}</Badge>{" "}
+                        <span className="text-xs text-muted">since {conn.connectedAt.toISOString().slice(0, 10)}{conn.lastUsedAt ? `, last used ${conn.lastUsedAt.toISOString().slice(0, 10)}` : ""}</span>
+                        {conn.lastError ? <span className="block text-xs text-danger">{conn.lastError}</span> : null}
+                      </span>
+                    ) : (
+                      <Badge key="c" tone="warn">not connected</Badge>
+                    ),
+                    ownerCanConnect ? (
+                      <span key="a" className="flex flex-wrap gap-1">
+                        {googleClientConfigured() ? (
+                          <Button small variant="secondary" href={`/api/integrations/gmail/start?mailbox=${encodeURIComponent(m.mailbox)}`}>
+                            {conn ? "Reconnect" : "Connect mailbox"}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted">Google client not configured</span>
+                        )}
+                        {conn ? (
+                          <form action={disconnectMailboxAction} className="flex gap-1">
+                            <input type="hidden" name="mailbox" value={m.mailbox} />
+                            <Input name="reason" placeholder="Reason" aria-label="Reason" className="max-w-[9rem]" />
+                            <Button small variant="danger">Disconnect</Button>
+                          </form>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span key="a" className="text-xs text-muted">Owner connects</span>
+                    ),
+                  ];
+                })}
+              />
+              <p className="mt-1 text-xs text-muted">
+                Connect mailbox opens Google: sign in as that mailbox and allow what it asks. Google&apos;s return address for this must be listed in the Google client&apos;s Authorized redirect URIs: <span className="font-mono">/api/integrations/gmail/callback</span> on this site. Disconnecting revokes the sign-in with Google.
+              </p>
+            </div>
+          ) : null}
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             {manage && s.built === "adapter" && s.connection === "ok" ? (
               <form action={activationAction} className="flex gap-1">
                 <input type="hidden" name="provider" value={s.provider} />

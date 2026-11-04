@@ -153,7 +153,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
             <input type="checkbox" name="intakeMailboxEnabled" defaultChecked={settings.intakeMailboxEnabled} /> Read the mailbox into Email intake every few minutes (read only; nothing is sent back)
           </label>
           <div className="mt-2 grid gap-3 sm:grid-cols-2">
-            <Field label="Mailbox" hint="A Google Workspace mailbox the service account is delegated to (Integrations).">
+            <Field label="Mailbox" hint="A company mailbox the Owner connects on Integrations (Connect mailbox).">
               <Input name="intakeMailboxAddress" type="email" defaultValue={settings.intakeMailboxAddress} />
             </Field>
           </div>
