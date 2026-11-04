@@ -1,7 +1,8 @@
 /**
  * Owner, Nov 4 2026: each host brewery is recorded as an alternating proprietorship or contract brewed; Prost
  * (Colorado) is added; Round Table (limited New York production) has no market and is never a default; Connecticut
- * distributors are served from Radford. Covers the origin service rules and replays the data part of migration 0009.
+ * distributors are served from Radford; invoices print ar@ for billing and orders@ for reorders, shipment documents
+ * print operations@; EFT is a way to pay. Covers the service rules and replays the data part of migration 0009.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -15,6 +16,7 @@ import { updateAccountShipping } from "@/lib/domain/customers/shipping";
 import { createMarket } from "@/lib/domain/markets/service";
 import { submitOrder } from "@/lib/domain/orders/service";
 import { createOrigin, originByCode, updateOrigin } from "@/lib/domain/origins/service";
+import { getCompanySettings, updateCompanySettings } from "@/lib/domain/settings/service";
 import { createTestDb } from "../support/db";
 import { buildFixture, makeLocation, type Fixture } from "../support/fixtures";
 
@@ -33,12 +35,12 @@ afterAll(async () => {
 
 /** The data statements of 0009 (everything after the schema change), run against the fixture database. */
 async function replay0009() {
-  const file = readFileSync(path.join(process.cwd(), "drizzle/0009_origin_arrangement.sql"), "utf8");
+  const file = readFileSync(path.join(process.cwd(), "drizzle/0009_origins_and_settings.sql"), "utf8");
   const statements = file
     .split("--> statement-breakpoint")
     .map((s) => s.trim())
-    .filter((s) => s && !/^(CREATE TYPE|ALTER TABLE)/.test(s));
-  expect(statements.length).toBe(5);
+    .filter((s) => s && !/^(CREATE TYPE|ALTER TYPE|ALTER TABLE)/.test(s));
+  expect(statements.length).toBe(13);
   for (const s of statements) await db.execute(sql.raw(s));
 }
 
@@ -98,7 +100,7 @@ describe("migration 0009 data", () => {
     expect((await reload(rad.id)).productionArrangement).toBeNull();
 
     const prost = await originByCode(db, "PRO");
-    expect(prost).toMatchObject({ name: "Prost Brewing", kind: "brewery", lotFacilityCode: "03", marketId: null, addressState: "CO", productionArrangement: "alternating_proprietorship" });
+    expect(prost).toMatchObject({ name: "Prost Brewing", kind: "brewery", lotFacilityCode: "03", marketId: null, addressLine1: "351 W 104th Ave", addressLine2: "Unit A", addressCity: "Northglenn", addressState: "CO", addressPostalCode: "80234", productionArrangement: "alternating_proprietorship" });
     expect((await db.select().from(schema.warehouse).where(eq(schema.warehouse.originCode, "PRO"))).length).toBe(1);
 
     const loc = async (id: string) => (await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, id)))[0];
@@ -111,5 +113,55 @@ describe("migration 0009 data", () => {
     await expect(submitOrder(db, f.owner, { locationId: hdi.id, source: "email", lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] })).rejects.toThrow(/RAD Radford Warehouse is short/);
     const res = await submitOrder(db, f.owner, { locationId: hdi.id, source: "email", shortfallDecision: "hold", lines: [{ skuId: f.skus.cantinescaCase.id, qty: 5 }] });
     expect(res.order.warehouseId).toBe(rad.id);
+  });
+});
+
+describe("migration 0009 settings and payment data", () => {
+  it("sets the company name and contact emails, cleans the distributor footer and stops printing freight class codes", async () => {
+    // As production has them today.
+    await db.update(schema.companySettings).set({
+      dba: "The Leopard Mark Brewing Company",
+      ordersEmail: null,
+      operationsEmail: null,
+      distributorFooter: "Keg deposits are remitted by the distributor to MicroStar; CRV, where the state applies it, is remitted by the distributor to the state. Wording to be confirmed against the current distributor document (question 6.4).",
+      nmfcKeg: "88900 (Beer, in kegs) — proposed, verify before use",
+      nmfcCan: "88900 (Beer, canned) — proposed, verify before use",
+    });
+    await replay0009();
+    const s = await getCompanySettings(db);
+    expect(s.dba).toBe("The Leopard Mark Beverage Group");
+    expect(s.arEmail).toBe("ar@theleopardmark.com");
+    expect(s.ordersEmail).toBe("orders@theleopardmark.com");
+    expect(s.operationsEmail).toBe("operations@theleopardmark.com");
+    expect(s.distributorFooter).toBe("Keg deposits are remitted by the distributor to MicroStar; CRV, where the state applies it, is remitted by the distributor to the state.");
+    expect(s.nmfcKeg).toBeNull();
+    expect(s.nmfcCan).toBeNull();
+  });
+
+  it("fills how each account pays from the workbook's channel", async () => {
+    const fin = (await makeLocation(db, f.owner, f.market.id, "Fintech Test Bar")).location;
+    const ach = (await makeLocation(db, f.owner, f.market.id, "Stripe Test Bar")).location;
+    const set = (await makeLocation(db, f.owner, f.market.id, "Already Set Bar")).location;
+    await db.update(schema.paymentRelationship).set({ channel: "fintech" }).where(eq(schema.paymentRelationship.locationId, fin.id));
+    await db.update(schema.paymentRelationship).set({ channel: "stripe_ach" }).where(eq(schema.paymentRelationship.locationId, ach.id));
+    await db.update(schema.paymentRelationship).set({ channel: "fintech" }).where(eq(schema.paymentRelationship.locationId, set.id));
+    await updateAccountShipping(db, f.owner, set.id, { payBy: "eft" });
+    await replay0009();
+    const payBy = async (id: string) => (await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, id)))[0].payBy;
+    expect(await payBy(fin.id)).toBe("fintech");
+    expect(await payBy(ach.id)).toBe("stripe");
+    expect(await payBy(set.id)).toBe("eft"); // a choice already made is kept
+  });
+});
+
+describe("contact emails on documents", () => {
+  it("validates the new emails and keeps the AR email required", async () => {
+    await expect(updateCompanySettings(db, f.owner, { ordersEmail: "not-an-email" })).rejects.toThrow(/email address/);
+    await expect(updateCompanySettings(db, f.owner, { arEmail: "" })).rejects.toThrow(/AR email is required/);
+    const s = await updateCompanySettings(db, f.owner, { operationsEmail: " Operations@TheLeopardMark.com " });
+    expect(s.operationsEmail).toBe("operations@theleopardmark.com");
+    const cleared = await updateCompanySettings(db, f.owner, { ordersEmail: "" });
+    expect(cleared.ordersEmail).toBeNull();
+    await updateCompanySettings(db, f.owner, { ordersEmail: "orders@theleopardmark.com" });
   });
 });

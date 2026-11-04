@@ -48,8 +48,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
             <Field label="Office phone">
               <Input name="officePhone" defaultValue={settings.officePhone ?? ""} />
             </Field>
-            <Field label="AR sender email (7.9)">
+            <Field label="AR email (7.9)" hint="Printed on invoices for billing questions and remittances.">
               <Input name="arEmail" type="email" required defaultValue={settings.arEmail} />
+            </Field>
+            <Field label="Orders email" hint="Printed on invoices as the address for reorders.">
+              <Input name="ordersEmail" type="email" defaultValue={settings.ordersEmail ?? ""} />
+            </Field>
+            <Field label="Operations email" hint="Printed on every BOL and shipment document; blank uses the AR email.">
+              <Input name="operationsEmail" type="email" defaultValue={settings.operationsEmail ?? ""} />
             </Field>
           </div>
         </Card>

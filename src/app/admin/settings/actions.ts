@@ -23,6 +23,8 @@ export async function updateSettingsAction(form: FormData) {
       officePostalCode: opt(form, "officePostalCode"),
       officePhone: opt(form, "officePhone"),
       arEmail: str(form, "arEmail"),
+      ordersEmail: opt(form, "ordersEmail"),
+      operationsEmail: opt(form, "operationsEmail"),
       retailFooter: opt(form, "retailFooter"),
       distributorFooter: opt(form, "distributorFooter"),
       fixedLines: str(form, "fixedLines")

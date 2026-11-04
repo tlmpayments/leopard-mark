@@ -1,5 +1,5 @@
 {
-  "id": "e0d35167-c811-46a3-ad20-5a656ecd4357",
+  "id": "391b06b6-9417-49e1-acdc-be9541d79a8a",
   "prevId": "b4708fd9-117a-4123-a7b6-b8869b043283",
   "version": "7",
   "dialect": "postgresql",
@@ -6558,7 +6558,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'The Leopard Mark Brewing Company'"
+          "default": "'The Leopard Mark Beverage Group'"
         },
         "office_line1": {
           "name": "office_line1",
@@ -6602,6 +6602,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'ar@theleopardmark.com'"
+        },
+        "orders_email": {
+          "name": "orders_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "operations_email": {
+          "name": "operations_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "retail_footer": {
           "name": "retail_footer",
@@ -9577,7 +9589,8 @@
       "values": [
         "fintech",
         "stripe",
-        "check"
+        "check",
+        "eft"
       ]
     },
     "public.shipment_status": {

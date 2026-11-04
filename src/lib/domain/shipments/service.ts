@@ -1073,7 +1073,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     pickup: s.pickup,
     scheduledDate: s.scheduledDate ?? null,
     actualDate: s.actualDate,
-    shipper: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, phone: settings.officePhone },
+    shipper: { legalName: settings.legalName, dba: settings.dba, lines: officeLines, arEmail: settings.arEmail, contactEmail: settings.operationsEmail ?? null, phone: settings.officePhone },
     shipFrom: { name: origin.name, lines: originAddressLines(origin), originCode: origin.originCode, contact: origin.shippingContactName, phone: origin.shippingContactPhone },
     shipTo,
     poNumbers: s.poNumbers ?? [],

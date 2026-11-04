@@ -153,6 +153,9 @@ describe("Acceptance 6 — documents render for each template", () => {
     distSnapshot = await buildShipmentSnapshot(db, distId, "bol", "Test");
     expect(distSnapshot.pickup).toBe(true);
     expect(distSnapshot.nmfc?.status).toBe("proposed");
+    // Every BOL prints operations@ (owner, Nov 4 2026); freight class codes are blank, so none print.
+    expect(distSnapshot.shipper.contactEmail).toBe("operations@theleopardmark.com");
+    expect(distSnapshot.nmfc?.keg ?? null).toBeNull();
     expect(distSnapshot.fixedLines.length).toBeGreaterThan(0);
     expectPdf(await renderDocument(distSnapshot));
   });
@@ -183,6 +186,10 @@ describe("Acceptance 6 — documents render for each template", () => {
     invSnapshot = stored!.snapshot as InvoiceSnapshot;
     expect(invSnapshot.series).toBe("INV");
     expect(invSnapshot.lines.some((l) => l.kind === "deposit")).toBe(true);
+    // Owner, Nov 4 2026: billing questions to AR, reorders to orders@.
+    expect(invSnapshot.issuer.arEmail).toBe("ar@theleopardmark.com");
+    expect(invSnapshot.issuer.ordersEmail).toBe("orders@theleopardmark.com");
+    expect(invSnapshot.issuer.dba).toBe("The Leopard Mark Beverage Group");
     expectPdf(await renderDocument(invSnapshot));
 
     const sample = await createShipment(db, f.admin, header({ type: "S", scheduledDate: "2026-11-07" }), [{ skuId: f.skus.cantinescaCase.id, lotId: lotSixtel, qty: 1 }]);

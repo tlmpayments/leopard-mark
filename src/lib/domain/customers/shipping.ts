@@ -22,6 +22,7 @@ export const PAY_BY_LABEL: Record<PayBy, string> = {
   fintech: "Fintech",
   stripe: "Stripe",
   check: "Check",
+  eft: "EFT (the account sends it)",
 };
 
 export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
@@ -130,7 +131,7 @@ export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId
     set.firstDeliveryOn = patch.firstDeliveryOn || null;
   }
   if (patch.payBy !== undefined) {
-    if (patch.payBy !== null && !schema.payByEnum.enumValues.includes(patch.payBy)) throw new BusinessError("Payment channel is Fintech, Stripe or check", { field: "payBy" });
+    if (patch.payBy !== null && !schema.payByEnum.enumValues.includes(patch.payBy)) throw new BusinessError("Payment channel is Fintech, Stripe, check or EFT", { field: "payBy" });
     set.payBy = patch.payBy;
   }
   if (patch.invoiceOnReceipt !== undefined) set.invoiceOnReceipt = patch.invoiceOnReceipt;

@@ -301,14 +301,20 @@ Distributor details (November 4) are in migration `0008_distributor_details`: bi
 contacts for HDI, Mancini, Matagrano and Martignetti, Martignetti's item numbers as SKU aliases, and delivery
 documents naming the receiving contact before the buyer.
 
-Origin arrangements (November 4 answers) are in migration `0009_origin_arrangement`: every brewery records its
+Origin arrangements, contact emails and how accounts pay (November 4 answers) are in migration
+`0009_origins_and_settings`: every brewery records its
 production arrangement, alternating proprietorship (East Brother, Beachwood, Prost, Round Table, Jack's Abby; the
 Massachusetts approval is in) or contract brewed (AleSmith, Real Ale), shown and edited in the origins editor and
 refused on warehouses. Prost (PRO, lot facility 03, Northglenn CO) is created with no market, since nothing is sold in
 Colorado. Round Table loses its Connecticut market: limited New York production, no New York sales, never a market
 default. Connecticut distributors default to Radford, the warehouse that serves Massachusetts and Connecticut; a
-shipment can still be sent direct from Jack's Abby or Round Table. Tests: `tests/scenarios/origin-arrangement.test.ts`
-(replays the migration's data statements).
+shipment can still be sent direct from Jack's Abby or Round Table. Company settings: the dba is The Leopard Mark
+Beverage Group; invoices print ar@ for billing questions and remittances and orders@ for reorders; every BOL and
+shipment document prints operations@ (new `orders_email` and `operations_email` settings); the internal note leaves
+the distributor footer and the freight class codes stop printing. Pay-by gains EFT; accounts take Fintech or Stripe
+from the workbook's payment column, Matagrano pays by check, and HDI, Mancini, Martignetti and The Black Cat send EFT.
+The Black Cat holds one floating $35 deposit. 24-oz cans keep the 12-oz shelf life. Tests:
+`tests/scenarios/nov4-answers.test.ts` (replays the migration's data statements).
 
 Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
 phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution

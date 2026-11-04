@@ -47,7 +47,8 @@ export interface ShipmentSnapshot {
   /** Blank on an order-created draft until the office confirms the shipment (R2-3). */
   scheduledDate: string | null;
   actualDate: string | null;
-  shipper: { legalName: string; dba: string; lines: string[]; arEmail: string; phone?: string | null };
+  /** contactEmail (operations@) prints in place of the AR email on shipment documents when set. */
+  shipper: { legalName: string; dba: string; lines: string[]; arEmail: string; contactEmail?: string | null; phone?: string | null };
   shipFrom: PartyBlock & { originCode: string | null };
   shipTo: PartyBlock;
   poNumbers: string[];
@@ -94,14 +95,15 @@ export interface InvoiceSnapshot {
   invoiceDate: string | null;
   dueDate: string | null;
   termsDays: number | null;
-  issuer: { legalName: string; dba: string; lines: string[]; arEmail: string; remitTo: string | null };
+  /** ordersEmail prints at the foot of the invoice as the address for reorders. */
+  issuer: { legalName: string; dba: string; lines: string[]; arEmail: string; ordersEmail?: string | null; remitTo: string | null };
   billTo: PartyBlock;
   shipTo: PartyBlock | null;
   shipmentNumbers: string[];
   poNumbers: string[];
   fobWording: string | null;
   /** How the account pays (R2-12), copied from the account when the invoice is issued. */
-  payBy?: "fintech" | "stripe" | "check" | null;
+  payBy?: "fintech" | "stripe" | "check" | "eft" | null;
   lines: InvoiceSnapshotLine[];
   subtotalCents: number;
   depositCents: number;
