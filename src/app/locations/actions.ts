@@ -24,6 +24,8 @@ import { runFormAction, type FormState } from "@/lib/actions/helpers";
 import { createStandingArrangement, setStandingState } from "@/lib/domain/standing/service";
 import { createHostedSetupSession } from "@/lib/integrations/stripe/adapter";
 import { baseUrl } from "@/lib/env";
+import { requestBankSetupLink } from "@/lib/domain/collection";
+import { setCollectionSwitches } from "@/lib/domain/customers/shipping";
 
 export async function createLocationAction(form: FormData) {
   return runAction("/locations/new", async ({ db, actor }) => {
@@ -263,3 +265,33 @@ export async function standingStateAction(form: FormData) {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// Round 4: bank setup through the approval queue, card by exception, auto-debit
+// ---------------------------------------------------------------------------
+
+export async function requestBankSetupAction(form: FormData) {
+  const id = str(form, "locationId");
+  return runAction(`/locations/${id}`, async ({ db, actor }) => {
+    const r = await requestBankSetupLink(db, actor, id);
+    return r.created ? "Bank setup email queued for approval (Approvals screen); the Stripe link is generated when it is sent" : "A bank setup email is already waiting for approval";
+  });
+}
+
+export async function setCardAllowedAction(form: FormData) {
+  const id = str(form, "locationId");
+  return runAction(`/locations/${id}`, async ({ db, actor }) => {
+    const on = str(form, "cardAllowed") === "on";
+    await setCollectionSwitches(db, actor, id, { cardAllowed: on }, str(form, "reason"));
+    return on ? "Card allowed for this account on Stripe's hosted page (by exception)" : "Card no longer offered to this account";
+  });
+}
+
+export async function setAutoDebitAction(form: FormData) {
+  const id = str(form, "locationId");
+  return runAction(`/locations/${id}`, async ({ db, actor }) => {
+    const on = str(form, "autoDebit") === "on";
+    await setCollectionSwitches(db, actor, id, { autoDebit: on }, str(form, "reason"));
+    return on ? "Due-date debits for this account run without a person approving each one" : "Each debit for this account waits for approval again";
+  });
+}

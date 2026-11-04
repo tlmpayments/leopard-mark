@@ -192,6 +192,10 @@ export async function convertIntakeAction(form: FormData) {
     const lines: Array<{ skuId: string; qty: number }> = [];
     for (const [k, v] of form.entries()) if (k.startsWith("qty:") && typeof v === "string" && Number(v) > 0) lines.push({ skuId: k.slice(4), qty: Number(v) });
     const decision = str(form, "shortfallDecision");
+    const po = (opt(form, "poNumbers") ?? "")
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const res = await convertIntakeToOrder(db, actor, {
       intakeId: id,
       locationId: str(form, "locationId"),
@@ -199,6 +203,7 @@ export async function convertIntakeAction(form: FormData) {
       requestedDate: opt(form, "requestedDate"),
       shortfallDecision: decision === "ship_available" || decision === "hold" ? decision : null,
       shortfallReason: opt(form, "shortfallReason"),
+      poNumbers: po.length ? po : null,
     });
     return { ok: `Converted to ${res.order.orderNumber}`, redirectTo: `/orders/${res.order.id}` };
   });

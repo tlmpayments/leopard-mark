@@ -11,6 +11,7 @@ import { authorize } from "@/lib/authz/authorize";
 import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
 import { BusinessError } from "@/lib/errors";
+import { queueCustomerSync } from "@/lib/domain/collection/customers";
 
 export type AccountKind = (typeof schema.accountKindEnum.enumValues)[number];
 export type DepositMode = (typeof schema.depositModeEnum.enumValues)[number];
@@ -186,5 +187,26 @@ export async function updateAccountShipping(db: DbOrTx, actor: Actor, locationId
     current: Object.fromEntries(keys.map((k) => [k, (set as Record<string, unknown>)[k]])),
     marketId: prior.marketId,
   });
+  // Round 4 (C4): pay-by and the legacy account number live on the Stripe customer's metadata too.
+  if (keys.includes("payBy") || keys.includes("legacyAccountId") || keys.includes("kind")) await queueCustomerSync(db, locationId);
+  return row;
+}
+
+/**
+ * Round 4 collection switches on the account (B7, P1): a card offered by exception on Stripe's hosted page, and debits
+ * that run without a person approving each one. Admin only (`location.lifecycle`), with a reason, audited. A pay-by
+ * change also pushes the customer's details to Stripe when a customer exists (C4).
+ */
+export async function setCollectionSwitches(db: DbOrTx, actor: Actor, locationId: string, patch: { cardAllowed?: boolean; autoDebit?: boolean }, reason: string) {
+  const [prior] = await db.select().from(schema.customerLocation).where(eq(schema.customerLocation.id, locationId));
+  if (!prior) throw new BusinessError("Account not found");
+  authorize(actor, "location.lifecycle", { marketId: prior.marketId });
+  if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
+  if (patch.autoDebit && prior.payBy !== "stripe") throw new BusinessError("Automatic debits need the account to pay by Stripe", { field: "autoDebit" });
+  const set: Partial<typeof schema.customerLocation.$inferInsert> = { updatedAt: new Date() };
+  if (patch.cardAllowed !== undefined) set.cardAllowed = patch.cardAllowed;
+  if (patch.autoDebit !== undefined) set.autoDebit = patch.autoDebit;
+  const [row] = await db.update(schema.customerLocation).set(set).where(eq(schema.customerLocation.id, locationId)).returning();
+  await recordAudit(db, actor, { action: "location.collection_switches", subjectType: "customer_location", subjectId: locationId, prior: { cardAllowed: prior.cardAllowed, autoDebit: prior.autoDebit }, current: { cardAllowed: row.cardAllowed, autoDebit: row.autoDebit }, reason: reason.trim(), marketId: prior.marketId });
   return row;
 }

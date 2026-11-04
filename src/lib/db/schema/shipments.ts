@@ -424,7 +424,8 @@ export const kegEvent = pgTable(
 export const invoiceSeriesEnum = pgEnum("invoice_series", ["INV", "NC"]);
 /** How the account pays, copied from the account at issue (R2-12); collection itself stays outside the system. */
 export const payByEnum = pgEnum("pay_by", ["fintech", "stripe", "check", "eft"]);
-export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "paid", "void"]);
+/** Round 4 adds `processing`: a debit is in flight (about four business days); the invoice is still owed but not overdue. */
+export const invoiceStatusEnum = pgEnum("invoice_status", ["draft", "issued", "processing", "paid", "void"]);
 
 export const invoice = pgTable(
   "invoice",
@@ -462,11 +463,35 @@ export const invoice = pgTable(
     voidedByEmployeeId: uuid("voided_by_employee_id"),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
     voidReason: text("void_reason"),
+    /**
+     * Round 4, Stripe as the money ledger (I1 to I8, P1, S1 to S3). The portal invoice stays the official one; these
+     * columns mirror what Stripe holds for it and never decide what the invoice says.
+     */
+    stripeInvoiceId: text("stripe_invoice_id"),
+    /** Stripe's own number for the mirrored invoice; equal to `number` when Stripe accepted it (I2). */
+    stripeNumber: text("stripe_number"),
+    /** draft | open | paid | void | uncollectible, as last reported. */
+    stripeStatus: text("stripe_status"),
+    hostedInvoiceUrl: text("hosted_invoice_url"),
+    stripePdfUrl: text("stripe_pdf_url"),
+    mirroredAt: timestamp("mirrored_at", { withTimezone: true }),
+    mirrorError: text("mirror_error"),
+    /** none | scheduled | processing | paid | failed | disputed | out_of_band | uncollectible */
+    collectionState: text("collection_state").notNull().default("none"),
+    /** The business day the due-date debit runs (the next business day when the due date falls on a weekend or holiday). */
+    debitScheduledOn: date("debit_scheduled_on"),
+    paymentIntentId: text("payment_intent_id"),
+    /** How it was paid: stripe_ach | stripe_card | check | eft | fintech | other. */
+    paidVia: text("paid_via"),
+    paidReference: text("paid_reference"),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
     createdByEmployeeId: uuid("created_by_employee_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("invoice_location_idx").on(t.locationId, t.invoiceDate), index("invoice_status_idx").on(t.status)],
+  (t) => [index("invoice_location_idx").on(t.locationId, t.invoiceDate), index("invoice_status_idx").on(t.status), index("invoice_stripe_idx").on(t.stripeInvoiceId)],
 );
 
 export const invoiceLine = pgTable(
@@ -512,6 +537,12 @@ export const creditMemo = pgTable(
     voidedByEmployeeId: uuid("voided_by_employee_id"),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
     voidReason: text("void_reason"),
+    /** Round 4 (I7): the Stripe credit note that mirrors this memo once approved and created. */
+    stripeCreditNoteId: text("stripe_credit_note_id"),
+    stripeCreditNoteNumber: text("stripe_credit_note_number"),
+    /** How Stripe applied it: amount_due | customer_balance | refund */
+    stripeApplied: text("stripe_applied"),
+    mirroredAt: timestamp("mirrored_at", { withTimezone: true }),
   },
   (t) => [index("credit_memo_invoice_idx").on(t.invoiceId)],
 );
@@ -582,6 +613,24 @@ export const companySettings = pgTable("company_settings", {
   fuelSurchargePct: numeric("fuel_surcharge_pct", { precision: 5, scale: 2 }).notNull().default("43"),
   /** R2-51: an account whose overdue balance reaches this amount is raised in Exceptions; distributors are raised when any invoice is overdue. */
   collectionsThresholdCents: integer("collections_threshold_cents").notNull().default(50000),
+  /**
+   * Round 4 switches. All off by default: nothing leaves the company, and nothing reaches Stripe, until the Owner
+   * turns the relevant switch on.
+   */
+  /** Mirror every issued invoice into Stripe (I1); the item still waits for approval unless auto-approved below. */
+  stripeMirrorInvoices: boolean("stripe_mirror_invoices").notNull().default(false),
+  /** Approval policy per kind: when on, items of that kind are approved the moment they are created. */
+  autoApproveStripeInvoices: boolean("auto_approve_stripe_invoices").notNull().default(false),
+  autoApproveCreditNotes: boolean("auto_approve_credit_notes").notNull().default(false),
+  autoApproveEmails: boolean("auto_approve_emails").notNull().default(false),
+  /** Approved emails go out through Gmail when on; off means a person sends by hand and records it ("emailed by hand until the Owner says otherwise"). */
+  sendEmailAutomatically: boolean("send_email_automatically").notNull().default(false),
+  /** Poll the orders@ mailbox into Email intake (read only). */
+  intakeMailboxEnabled: boolean("intake_mailbox_enabled").notNull().default(false),
+  intakeMailboxAddress: text("intake_mailbox_address").notNull().default("orders@theleopardmark.com"),
+  /** The address customer-facing email comes from (orders@), and the one warehouses and dispatchers hear from (operations@). */
+  customerSenderAddress: text("customer_sender_address").notNull().default("orders@theleopardmark.com"),
+  operationsSenderAddress: text("operations_sender_address").notNull().default("operations@theleopardmark.com"),
   updatedByEmployeeId: uuid("updated_by_employee_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

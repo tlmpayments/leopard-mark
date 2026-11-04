@@ -7,9 +7,13 @@ import * as schema from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { appEnv, configurationProblems, demoModeEnabled, fixtureMode } from "@/lib/env";
 import { providerStatuses } from "@/lib/integrations/registry";
+import { stripeGatewayMode } from "@/lib/integrations/stripe/gateway";
 import { jobSummary, listJobs } from "@/lib/jobs/queue";
+import { getCompanySettings } from "@/lib/domain/settings/service";
+import { listCustomerMatches } from "@/lib/domain/collection";
 import { runJobsAction } from "../admin/actions";
-import { activationAction, checkStripeAction, recordGateAction } from "./actions";
+import { activationAction, checkGmailAction, checkStripeAction, importStripeMatchesAction, recordGateAction, syncPayoutsAction } from "./actions";
+import "@/lib/domain/collection";
 
 const CONNECTION_LABEL: Record<string, string> = { not_applicable: "n/a", no_check: "untested", failed: "failed", stale: "stale", ok: "verified" };
 
@@ -22,15 +26,21 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const actor = await requireAction("integration.view");
   const flash = await flashFrom(searchParams);
   const d = await getDb();
-  const [statuses, jobs, jobRows, events] = await Promise.all([providerStatuses(d), jobSummary(d), listJobs(d, { statuses: ["waiting", "queued", "running", "failed"], limit: 50 }), d.select().from(schema.providerEvent).orderBy(desc(schema.providerEvent.receivedAt)).limit(10)]);
+  const [statuses, jobs, jobRows, events, settings, matches] = await Promise.all([providerStatuses(d), jobSummary(d), listJobs(d, { statuses: ["waiting", "queued", "running", "failed"], limit: 50 }), d.select().from(schema.providerEvent).orderBy(desc(schema.providerEvent.receivedAt)).limit(10), getCompanySettings(d), listCustomerMatches(d, { states: ["suggested"] })]);
   const manage = can(actor, "integration.manage");
   const problems = configurationProblems();
+  const fakeStripe = stripeGatewayMode() === "fake";
   return (
     <Page title="Integrations" subtitle={`Build-versus-activate facts per provider (environment: ${appEnv()}, fixture mode: ${fixtureMode()}). A successful API request is never "integration complete".`}>
       <Flash {...flash} />
       {demoModeEnabled() ? (
         <Notice tone="warn" title="DEVELOPMENT DEMO MODE:">
-          no provider credentials are configured, so every adapter reports its real state and every capability gate stays unproven. Nothing on this page is mocked as successful.
+          no provider credentials are configured, so every adapter reports its real state and every capability gate stays unproven. {fakeStripe ? "Stripe runs against an in-memory stand-in (FV_STRIPE_FAKE), impossible on a deployment, so the collection flow can be walked through end to end." : "Nothing on this page is mocked as successful."}
+        </Notice>
+      ) : null}
+      {fakeStripe && !demoModeEnabled() ? (
+        <Notice tone="warn" title="Stripe is the in-memory stand-in (FV_STRIPE_FAKE).">
+          Local only; a deployment never gets it.
         </Notice>
       ) : null}
       {problems.length ? (
@@ -56,7 +66,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </div>
             <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">2 · Credentials</div>
-              <div>{s.credentialsPresent ? "present (names only; values never shown)" : `missing: ${s.missingEnv.join(", ")}`}</div>
+              <div>{s.credentialsPresent ? (s.provider === "stripe" && fakeStripe ? "in-memory stand-in (FV_STRIPE_FAKE); no key" : "present (names only; values never shown)") : `missing: ${s.missingEnv.join(", ")}`}</div>
             </div>
             <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">3 · Connection</div>
@@ -84,8 +94,30 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
           />
           <div className="mt-2 flex flex-wrap gap-2">
             {s.provider === "stripe" && manage ? (
-              <form action={checkStripeAction}>
-                <Button small variant="secondary">Check connectivity (binds account + credential)</Button>
+              <>
+                <form action={checkStripeAction}>
+                  <Button small variant="secondary">Check connectivity (binds account + credential)</Button>
+                </form>
+                {s.connection === "ok" ? (
+                  <>
+                    <form action={importStripeMatchesAction}>
+                      <Button small variant="secondary">Import the ACH app&apos;s customers for matching (C2)</Button>
+                    </form>
+                    <form action={syncPayoutsAction}>
+                      <Button small variant="secondary">Pull payouts now (S8)</Button>
+                    </form>
+                  </>
+                ) : null}
+                {matches.length ? (
+                  <Button small variant="ghost" href="/admin/stripe-matches">
+                    {matches.length} Stripe customer{matches.length === 1 ? "" : "s"} waiting to be matched
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            {s.provider === "gmail" && manage ? (
+              <form action={checkGmailAction}>
+                <Button small variant="secondary">Check the {settings.intakeMailboxAddress} mailbox</Button>
               </form>
             ) : null}
             {manage && s.built === "adapter" && s.connection === "ok" ? (
@@ -149,9 +181,12 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       <Card title="Recent provider events (idempotent record)">
         <Table head={["Provider", "Event", "Type", "Received", "Outcome"]} rows={events.map((e) => [e.provider, <code key="i" className="text-xs">{e.eventId}</code>, e.type, fmtDate(e.receivedAt), e.outcome ?? "—"])} />
       </Card>
-      <div>
+      <div className="flex flex-wrap gap-2">
+        <Button href="/approvals" variant="secondary">
+          Approvals (everything that leaves the company)
+        </Button>
         <Button href="/admin/notices" variant="secondary">
-          Customer notices (manual single-sender process)
+          Customer notices (Phase 1 manual intents)
         </Button>
       </div>
     </Page>

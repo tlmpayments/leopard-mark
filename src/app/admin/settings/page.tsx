@@ -117,7 +117,46 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="autoSendPullSheets" defaultChecked={settings.autoSendPullSheets} /> Email each warehouse its next-day pull sheet at the time set on the warehouse (off by default)
           </label>
-          <p className="mt-1 text-xs text-muted">Off: the office downloads the sheet from Shipments, End of day. On: a send is queued daily per warehouse with an address and time; the email transport is not built yet, so sends wait and open a case rather than pretending.</p>
+          <p className="mt-1 text-xs text-muted">Off: the office downloads the sheet from Shipments, End of day. On: one email per warehouse and day is queued for approval from operations@ with the sheet attached; it leaves only when approved (and by hand unless automatic sending is on below).</p>
+        </Card>
+        <Card title="Approvals and sending (Round 4)">
+          <p className="mb-2 text-sm text-ink-2">Nothing leaves the company on its own. These switches decide what is approved automatically and whether approved email goes out through Gmail; everything else waits on the Approvals screen.</p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="sendEmailAutomatically" defaultChecked={settings.sendEmailAutomatically} /> Send approved emails through Gmail (off: a person sends by hand and records it)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="autoApproveEmails" defaultChecked={settings.autoApproveEmails} /> Approve emails automatically (invoices, receipts, pull sheets, setup links)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="stripeMirrorInvoices" defaultChecked={settings.stripeMirrorInvoices} /> Mirror every issued invoice into Stripe under the portal&apos;s number (I1)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="autoApproveStripeInvoices" defaultChecked={settings.autoApproveStripeInvoices} /> Approve Stripe invoice copies automatically
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="autoApproveCreditNotes" defaultChecked={settings.autoApproveCreditNotes} /> Approve Stripe credit notes automatically
+            </label>
+            <p className="text-xs text-muted">Debits are approved per account (the switch on the account page), never here.</p>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="Customer-facing sender" hint="Invoices, receipts and setup links come from this address.">
+              <Input name="customerSenderAddress" type="email" defaultValue={settings.customerSenderAddress} />
+            </Field>
+            <Field label="Operations sender" hint="Pull sheets and BOLs to warehouses and dispatchers.">
+              <Input name="operationsSenderAddress" type="email" defaultValue={settings.operationsSenderAddress} />
+            </Field>
+          </div>
+        </Card>
+        <Card title="Email intake from orders@ (Round 4)">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="intakeMailboxEnabled" defaultChecked={settings.intakeMailboxEnabled} /> Read the mailbox into Email intake every few minutes (read only; nothing is sent back)
+          </label>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <Field label="Mailbox" hint="A Google Workspace mailbox the service account is delegated to (Integrations).">
+              <Input name="intakeMailboxAddress" type="email" defaultValue={settings.intakeMailboxAddress} />
+            </Field>
+          </div>
         </Card>
         <div>
           <Button>Save settings</Button>

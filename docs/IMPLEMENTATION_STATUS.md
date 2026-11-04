@@ -5,7 +5,8 @@ behaviour**, **unresolved policy**, **unproven provider capability**, **incomple
 **deferred/future scope** are listed separately. Nothing below claims a provider integration complete
 because a request was sent, and no production data is populated with guessed policy or fictitious history.
 Revision: branch `hardening/phase1` on top of baseline `884684c`; migrations `0002_hardening` and `0003_pin_signin` added,
-then `0004_shipments` for the shipments module of October 28, 2026 (owner decisions in `SHIPMENTS_SPEC.md`).
+then `0004_shipments` for the shipments module of October 28, 2026 (owner decisions in `SHIPMENTS_SPEC.md`),
+`0005_round2`, `0006_round3`, `0007`/`0008` (distributor details) and `0010_round4` (November 4, 2026).
 The per-finding reconciliation is in `HARDENING_REPORT.md`; the ID-level map is in `TRACEABILITY.md`
 (section 5 for the shipments build).
 
@@ -179,13 +180,53 @@ tested in `tests/scenarios/shipments.test.ts`, `documents.test.ts`, `import.test
   Impossible on a deployment (guards tested). Providers are never mocked as successful. The demo warehouses
   carry no origin codes; journey 12 sets East Brother to `EBB` / lot facility `01` through the origins editor.
 
+### Round 4 (November 4, 2026; branch `round4`, migration `0010_round4`)
+The handoff's whole list, with Stripe as the money ledger behind an approval queue (plan: *Stripe plan for
+Leopard Mark Ops*; option codes in brackets):
+* **Approval queue** (`approval_item`): every email, Stripe invoice copy, due-date debit and credit note waits
+  for Admin or Accounting; approve runs the effect from the job queue (Stripe) or hands the email to Gmail when
+  the company send switch is on, else the person sends by hand and records it; reject and withdraw stay on
+  record; company policies approve a kind on creation; per-account automatic debits. The end-of-day pull sheet
+  became an approval item from `operations@` (the round 2 "transport not built" branch is gone).
+* **Stripe gateway** behind an interface with a real SDK implementation and an in-memory stand-in for tests and
+  the demo (never on a deployment): one customer per licensed location [C1], `tax_exempt`, metadata with the
+  portal ids; hosted Checkout setup for `us_bank_account` with instant verification or microdeposits and the
+  `balances` permission requested [B1 to B4, B6, B8]; bank name, last four, mandate and verification state the
+  only facts kept [B2]; setup chase after five days; detachment revokes and flags; invoice copies under the
+  portal number with a fallback to Stripe's number and a case [I1, I2, I4]; `send_invoice` with the due date;
+  debits off-session against the default bank on the due date moved to the next business day (Federal Reserve
+  holidays) [P1, P5]; the `processing` invoice state (never overdue, voided or hand-paid in flight); returns by
+  NACHA code with re-presentment only for R01/R09, at most twice, never for authorisation codes, Stripe retries
+  off [P4 off]; out-of-band payments told to Stripe [S4]; short and over payments as cases; credit notes [I7];
+  void mirrors [I8]; disputes and refunds as cases; nightly reconciliation that opens cases and never overwrites
+  a portal fact [S6]; payouts and balance transactions pulled for deposit matching [S8]; receivables ageing,
+  payouts and the monthly CFO export as plain CSVs [F2 to F4]; C2 matching of the ACH app's customers and the
+  hand-made invoices (suggested only on a unique billing email; never on a shared email or a duplicated name;
+  confirming writes identifiers and the default bank) [C2]; card by exception per account (Admin) [B9].
+* **Gmail** service account with domain-wide delegation: `orders@` intake with attachments (PDF text read),
+  known-sender drafts (contact email, company domain, item-number aliases, SKU codes, brand and package, PO,
+  requested date), the same draft for a pasted email; approved sends from `orders@` and `operations@` with
+  PDF attachments; checks that send nothing.
+* **Split shipments** (R2-39): a draft split into two for the same order with shared reservations; *Ship the
+  rest*; one unconfirmed draft at a time; the order page follows the part that needs attention.
+* **Delivery-day coverage warning** at confirmation when the origin does not deliver that weekday (Express Wine
+  Delivery).
+* **Reports**: California sales by format (barrels, for the state return) and the sample write-off at unit
+  cost, with CSVs; `report.view` is office and Accounting.
+* Data: the d/b/a corrected to *The Leopard Mark Beverage Group*; invoices already paid by hand marked *paid
+  outside Stripe* so they are never debited.
+* Tests: `tests/scenarios/round4-collection.test.ts` (the whole money flow against the stand-in, C2 matching),
+  `round4-ops.test.ts` (split, coverage warning, parser, reports), `round4-mail.test.ts` (Gmail parsing and
+  MIME, the send switch, policy approval and the pull sheet item), `round4-demo.test.ts` (the demo seed with
+  the stand-in). Browser journeys 5 and 19 to 24 (`tests/ui/journeys.mjs`).
+
 ### Provider adapters (build-versus-activate)
 | Provider | Built | Credentials | Connection verified | Capability demonstrated | Authorized live | Production-ready |
 |---|---|---|---|---|---|---|
 | Google Identity (optional) | Yes | No — not needed: sign-in is email + PIN | No | `ACCESS_*` gates apply to email + PIN sign-in too; need real staff | IG03 unselected | not required for live use |
-| Stripe | Yes (customer association, hosted setup session, webhook receipt; account/mode-bound references; waiting jobs) | No | No | No — `STRIPE_CUSTOMER_ASSOCIATION`, `STRIPE_HOSTED_SETUP` unproven | SD01–SD10, D01, D05, D06 unselected | **No** |
+| Stripe | Yes (round 4: customers, hosted setup, invoice copies, debits, credit notes, webhooks applied, reconciliation, payouts; approval queue in front) | No (Owner pastes the restricted key; previews never) | No (the stand-in only) | No — `STRIPE_CUSTOMER_ASSOCIATION`, `STRIPE_HOSTED_SETUP` unproven until the Sandbox proof in DEPLOYMENT §7 | SD01–SD10, D01, D05, D06 unselected; the Owner's rule: nothing leaves without a person | **No** until the Sandbox proof and the Owner's switch |
 | OptimoRoute | Boundary only | No | not applicable | No (`OR_*`) | IG01, D19–D21 unselected | **No** — phase 2 |
-| Gmail | Boundary only (manual process supported in-app) | No | not applicable | No (`NOTICE_SINGLE_SENDER`) | D32/IG04 unselected | **No** |
+| Gmail | Yes (round 4: service account, `orders@` read, approved sends; checks send nothing) | No (Owner pastes the service-account key) | No | No (`NOTICE_SINGLE_SENDER`; the test transport only) | D32/IG04 unselected; the send switch is off | **No** until delegation is granted and the check passes |
 | Google Address | Boundary only | No | not applicable | No (`GOOGLE_CONTENT_RIGHTS`) | IG05 unselected | **No** |
 | Slack | Boundary only | No | not applicable | No (`SLACK_NO_MUTATION`) | IG07/D27/D32 unselected | **No** |
 | QuickBooks Online | Not implemented | No | not applicable | No (`QBO_MODEL`) | IG06/D25/D29/D30/D33 unselected | **No** — phase 3 |
@@ -247,7 +288,9 @@ fields or flagged exceptions rather than guessed.
 ## 4. Unproven provider capability
 
 Every capability gate is `unproven` (Integrations page). No connection check has been recorded for any
-provider because no company credential was available to this revision. In particular: Stripe
+provider because no company credential was available to this revision; round 4 exercised the whole Stripe
+flow against an in-memory stand-in and the Gmail adapter against a test transport, which proves the portal's
+side only. The Sandbox proof steps are in DEPLOYMENT §7. In particular: Stripe
 location-specific customer association and hosted ACH setup in the company account; identity
 stability/effective disable with real staff accounts (email + PIN); all OptimoRoute field gates; single-sender notice
 fit; Google content rights; QBO model; Slack no-mutation. A person records demonstrations with evidence.
@@ -315,6 +358,11 @@ the distributor footer and the freight class codes stop printing. Pay-by gains E
 from the workbook's payment column, Matagrano pays by check, and HDI, Mancini, Martignetti and The Black Cat send EFT.
 The Black Cat holds one floating $35 deposit. 24-oz cans keep the 12-oz shelf life. Tests:
 `tests/scenarios/nov4-answers.test.ts` (replays the migration's data statements).
+
+Round 4 (November 4) is built on branch `round4` with migration `0010_round4` (section 1 above). Still deferred
+after it: QuickBooks (R1; the CFO export is the bridge), the Stripe customer portal (F1), customer-initiated
+partial payments (P7), surcharging, the MA depletion allowance (a payable; the distributor invoices the company),
+keg count at the stop, signed BOL upload, route optimisation, and rep self-entry of orders.
 
 Phase 5 customer self-service (magic links, portal) — deferred [F]. Odoo/manufacturing — out of scope. Of
 phases 2–4, the shipments module above is built; still not built are route optimisation and a driver execution

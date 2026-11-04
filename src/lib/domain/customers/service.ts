@@ -4,6 +4,7 @@ import { marketScopeFor, type Actor } from "@/lib/authz/actor";
 import { authorize, can } from "@/lib/authz/authorize";
 import * as schema from "@/lib/db/schema";
 import { withTx, type DbOrTx } from "@/lib/db/types";
+import { queueCustomerSync } from "@/lib/domain/collection/customers";
 import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import { getPolicy } from "@/lib/policy/policy";
@@ -330,6 +331,8 @@ export async function editOperational(db: DbOrTx, actor: Actor, locationId: stri
     reason: reason ?? null,
     marketId: prior.marketId,
   });
+  // Round 4 (C4): the portal is the source of truth for the Stripe customer's name; a renamed account pushes it.
+  if (identityChange) await queueCustomerSync(db, locationId);
   return row;
 }
 
@@ -506,6 +509,7 @@ export async function decideBillingEmailChange(
         .set({ receivesInvoices: false })
         .where(and(eq(schema.locationContact.locationId, req.locationId), eq(schema.locationContact.contactRole, "buyer"), eq(schema.locationContact.current, true)));
     }
+    if (decision === "approved") await queueCustomerSync(tx, req.locationId);
     await recordAudit(tx, actor, {
       action: `location.billing_email.${decision}`,
       subjectType: "customer_location",

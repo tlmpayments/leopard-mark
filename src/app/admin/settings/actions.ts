@@ -40,6 +40,16 @@ export async function updateSettingsAction(form: FormData) {
       remitTo: opt(form, "remitTo"),
       fuelSurchargePct: opt(form, "fuelSurchargePct") ? String(num(form, "fuelSurchargePct")) : "0",
       collectionsThresholdCents: cents(form, "collectionsThreshold") ?? 0,
+      // Round 4 switches: all default off; the Owner turns them on deliberately.
+      stripeMirrorInvoices: str(form, "stripeMirrorInvoices") === "on",
+      autoApproveStripeInvoices: str(form, "autoApproveStripeInvoices") === "on",
+      autoApproveCreditNotes: str(form, "autoApproveCreditNotes") === "on",
+      autoApproveEmails: str(form, "autoApproveEmails") === "on",
+      sendEmailAutomatically: str(form, "sendEmailAutomatically") === "on",
+      intakeMailboxEnabled: str(form, "intakeMailboxEnabled") === "on",
+      intakeMailboxAddress: str(form, "intakeMailboxAddress") || "orders@theleopardmark.com",
+      customerSenderAddress: str(form, "customerSenderAddress") || "orders@theleopardmark.com",
+      operationsSenderAddress: str(form, "operationsSenderAddress") || "operations@theleopardmark.com",
     };
     await updateCompanySettings(db, actor, patch);
     return "Company settings saved; new documents use them from now on (stored snapshots are unchanged)";

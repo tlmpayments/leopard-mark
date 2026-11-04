@@ -215,3 +215,21 @@ each. Migration `0005_round2`. Tests are `tests/scenarios/round2-orders.test.ts`
 | R2-33, R2-34 | `lots/service.ts` `ACTIVE_BRANDS`, `skuBrandActive`; `origins/service.ts` `originLabel` | journey 12 (`EBB East Brother`) |
 | R2-36 | `src/app/admin/exceptions/page.tsx`, `src/app/admin/page.tsx` (redirect) | journeys 4, 13 |
 | R2-37 | breweries are origins of kind brewery holding lot-tagged stock (`postPackagingStock`) | round2 › R2-21… (stock posts at the facility) |
+
+## 7. Round 4 (the Stripe plan's option codes and the handoff list)
+
+| Decision | Code | Evidence |
+|---|---|---|
+| Approval queue, policies, manual sends | `src/lib/domain/approvals/service.ts`, `approvals/email.ts`; `src/app/approvals/*`; `settings/service.ts` (the switches) | round4-collection › The approval queue; round4-mail › Approved emails and the send switch; journeys 5, 19 |
+| C1, C2 | `collection/customers.ts` (`ensureStripeCustomer`, `importStripeCustomersForMatching`, `confirmCustomerMatch`, `importStripeInvoicesForMatching`, `linkStripeInvoice`); `src/app/admin/stripe-matches/*` | round4-collection › C2 matching; journey 21 |
+| B1 to B4, B6, B8, B9 | `collection/setup.ts`; `stripe/adapter.ts` `createHostedSetupSession`; `collection/webhooks.ts` (setup, detach, mandate); `customers/shipping.ts` `setCollectionSwitches`; `src/app/customer/setup/page.tsx` | round4-collection › Bank setup through Stripe's hosted page; journeys 5, 20 |
+| I1, I2, I4, I7, I8 | `collection/invoices.ts` (`requestInvoiceMirror`, `mirrorable`, void mirror), `collection/credits.ts`; `invoices/service.ts` hooks | round4-collection › Invoices into Stripe…; credit note; void; journey 19 |
+| P1, P4, P5 | `collection/calendar.ts` (`nextBusinessDayOnOrAfter`), `collection/debits.ts` (`scheduleDueDateDebits`, `requestRePresent`, `MAX_REPRESENTMENTS`); `alerts/service.ts` `sweepOverdueInvoices` | round4-collection › Business days; the debit waits…; a returned debit…; journey 19 |
+| S1 to S4, S6, S8, F2 to F4 | `collection/webhooks.ts` `applyStripeEvent`; `collection/invoices.ts` `recordPaymentReceived`, `requestPaymentReceipt`; `collection/reconcile.ts` (`reconcileWithStripe`, `syncPayouts`); `collection/reports.ts` (`arAging`, `cfoExportCsv`); `src/app/finance/*` | round4-collection › settles paid…; Reconciliation, payouts and the CFO export; journey 20 |
+| Gmail intake and sends | `src/lib/integrations/gmail/adapter.ts`; `intake/mailbox.ts`, `intake/parse.ts`, `intake/service.ts`; `src/app/admin/intake/*`; `src/app/api/internal/jobs/run/route.ts` | round4-mail › Gmail adapter helpers; round4-ops › parser; journey 23 |
+| Pull sheet as an approval item | `pullsheet/service.ts` `schedulePullSheetSends` | round4-mail › company policy can approve emails on creation…; journey 18 |
+| Split shipments (R2-39) | `orders/service.ts` (`splitDraftShipment`, `linesWithAllocation`, `createShipmentForOrder`); `src/app/shipments/[id]/page.tsx` (Split), `src/app/orders/[id]/page.tsx` (Ship the rest, the part that needs attention) | round4-ops › split shipments; journey 22 |
+| EWD coverage warning | `shipments/service.ts` `deliveryDayWarning` | round4-ops › delivery-day warning |
+| Reports | `src/lib/domain/reports/service.ts`; `src/app/reports/*` | round4-ops › reports; journey 24 |
+| Migration and data | `drizzle/0010_round4.sql` (the d/b/a, paid invoices as `out_of_band`) | demo-mode, round4-demo (fresh database migrates 0000 to 0009) |
+

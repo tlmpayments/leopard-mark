@@ -25,6 +25,27 @@ import type { InvoiceSnapshot, InvoiceSnapshotLine } from "@/lib/documents/types
 export type Invoice = typeof schema.invoice.$inferSelect;
 export type InvoiceLine = typeof schema.invoiceLine.$inferSelect;
 
+/**
+ * Round 4 hooks: what follows an invoice fact outside this module (the Stripe mirror, the approval queue). Registered by
+ * `src/lib/domain/collection`; this module never imports Stripe. `finalised` fires when an issued invoice's figures are
+ * final (every shipment delivered), `voided` on void, `paidByHand` on a manual paid mark, `creditIssued` on a credit memo.
+ */
+type InvoiceHook = (db: DbOrTx, actor: Actor, invoice: Invoice) => Promise<void>;
+type CreditHook = (db: DbOrTx, actor: Actor, memo: typeof schema.creditMemo.$inferSelect) => Promise<void>;
+export const invoiceHooks: { finalised: InvoiceHook[]; voided: InvoiceHook[]; paidByHand: InvoiceHook[]; creditIssued: CreditHook[]; creditVoided: CreditHook[] } = { finalised: [], voided: [], paidByHand: [], creditIssued: [], creditVoided: [] };
+
+async function runHooks<T>(hooks: Array<(db: DbOrTx, actor: Actor, subject: T) => Promise<void>>, db: DbOrTx, actor: Actor, subject: T) {
+  for (const h of hooks) await h(db, actor, subject);
+}
+
+/** True when every shipment on the invoice has been delivered (the figures will not change again). */
+export async function invoiceFiguresFinal(db: DbOrTx, invoiceId: string): Promise<boolean> {
+  const links = await db.select().from(schema.invoiceShipment).where(eq(schema.invoiceShipment.invoiceId, invoiceId));
+  if (!links.length) return true;
+  const shipments = await db.select({ status: schema.shipment.status }).from(schema.shipment).where(inArray(schema.shipment.id, links.map((l) => l.shipmentId)));
+  return shipments.every((s) => s.status === "delivered" || s.status === "voided");
+}
+
 export const DISTRIBUTOR_FOB = "FOB brewery or designated warehouse";
 
 interface Computed {
@@ -287,6 +308,8 @@ export async function issueInvoiceForShipment(db: DbOrTx, actor: Actor, shipment
         marketId: inv.marketId,
       });
     }
+    // Issued at confirmation, delivered now: the figures are final, so what follows an issued invoice (Round 4) runs here.
+    if (await invoiceFiguresFinal(db, invoiceId)) await runHooks(invoiceHooks.finalised, db, actor, row);
     return row;
   }
   if (inv.status !== "draft") return inv;
@@ -322,6 +345,7 @@ export async function issueInvoice(db: DbOrTx, actor: Actor, invoiceId: string, 
     if (!row) throw new StaleStateError("Invoice was issued by someone else a moment ago");
     await storeInvoiceDocument(tx, actor, invoiceId);
     await recordAudit(tx, actor, { action: "invoice.issue", subjectType: "invoice", subjectId: invoiceId, prior: { status: "draft" }, current: { status: "issued", number, invoiceDate, totalCents: c.totalCents }, marketId: inv.marketId });
+    if (await invoiceFiguresFinal(tx, invoiceId)) await runHooks(invoiceHooks.finalised, tx, actor, row);
     return row;
   });
 }
@@ -332,6 +356,7 @@ export async function voidInvoice(db: DbOrTx, actor: Actor, invoiceId: string, r
   authorize(actor, "invoice.void", { marketId: inv.marketId });
   if (inv.status === "void") throw new StaleStateError("Invoice is already void");
   if (inv.status === "paid") throw new BusinessError("A paid invoice cannot be voided; issue a credit instead");
+  if (inv.status === "processing") throw new BusinessError(`${inv.number} has a debit in flight; wait for Stripe's result before voiding`);
   if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
   const [row] = await db
     .update(schema.invoice)
@@ -339,6 +364,7 @@ export async function voidInvoice(db: DbOrTx, actor: Actor, invoiceId: string, r
     .where(eq(schema.invoice.id, invoiceId))
     .returning();
   await recordAudit(db, actor, { action: "invoice.void", subjectType: "invoice", subjectId: invoiceId, prior: { status: inv.status, number: inv.number }, current: { status: "void" }, reason: reason.trim(), marketId: inv.marketId });
+  await runHooks(invoiceHooks.voided, db, actor, row);
   return row;
 }
 
@@ -359,9 +385,15 @@ export async function markInvoicePaid(db: DbOrTx, actor: Actor, invoiceId: strin
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, invoiceId));
   if (!inv) throw new BusinessError("Invoice not found");
   authorize(actor, "invoice.issue", { marketId: inv.marketId });
+  if (inv.status === "processing") throw new BusinessError(`${inv.number} has a debit in flight; wait for Stripe's result before marking it paid`);
   if (inv.status !== "issued") throw new StaleStateError(`Only an issued invoice can be marked paid (this one is ${inv.status})`);
-  const [row] = await db.update(schema.invoice).set({ status: "paid", paidAt: new Date(), notes: note ? `${inv.notes ? inv.notes + "\n" : ""}${note}` : inv.notes, updatedAt: new Date() }).where(eq(schema.invoice.id, invoiceId)).returning();
+  const [row] = await db
+    .update(schema.invoice)
+    .set({ status: "paid", paidAt: new Date(), paidVia: inv.paidVia ?? "other", collectionState: "out_of_band", debitScheduledOn: null, notes: note ? `${inv.notes ? inv.notes + "\n" : ""}${note}` : inv.notes, updatedAt: new Date() })
+    .where(eq(schema.invoice.id, invoiceId))
+    .returning();
   await recordAudit(db, actor, { action: "invoice.paid", subjectType: "invoice", subjectId: invoiceId, prior: { status: "issued" }, current: { status: "paid", note }, marketId: inv.marketId });
+  await runHooks(invoiceHooks.paidByHand, db, actor, row);
   return row;
 }
 
@@ -514,7 +546,7 @@ export async function issueCreditMemo(db: DbOrTx, actor: Actor, input: { invoice
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, input.invoiceId));
   if (!inv) throw new BusinessError("Invoice not found");
   authorize(actor, "credit.issue", { marketId: inv.marketId });
-  if (inv.status !== "issued" && inv.status !== "paid") throw new BusinessError(`A credit memo stands against an issued invoice; ${inv.number ?? "this one"} is ${inv.status}`);
+  if (inv.status !== "issued" && inv.status !== "processing" && inv.status !== "paid") throw new BusinessError(`A credit memo stands against an issued invoice; ${inv.number ?? "this one"} is ${inv.status}`);
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new BusinessError("Enter the credit amount in dollars and cents, more than zero", { field: "amount" });
   const reason = input.reason.trim();
   if (!reason) throw new BusinessError("A reason is required", { field: "reason" });
@@ -529,6 +561,7 @@ export async function issueCreditMemo(db: DbOrTx, actor: Actor, input: { invoice
       .values({ number, invoiceId: inv.id, locationId: inv.locationId, marketId: inv.marketId, amountCents: input.amountCents, reason, memoDate, status: "issued", issuedByEmployeeId: actor.employeeId })
       .returning();
     await recordAudit(tx, actor, { action: "credit.issue", subjectType: "credit_memo", subjectId: row.id, current: { number, invoiceId: inv.id, invoiceNumber: inv.number, amountCents: input.amountCents }, reason, marketId: inv.marketId });
+    await runHooks(invoiceHooks.creditIssued, tx, actor, row);
     return row;
   });
 }
@@ -541,6 +574,7 @@ export async function voidCreditMemo(db: DbOrTx, actor: Actor, creditMemoId: str
   if (!reason.trim()) throw new BusinessError("A reason is required", { field: "reason" });
   const [row] = await db.update(schema.creditMemo).set({ status: "void", voidReason: reason.trim(), voidedAt: new Date(), voidedByEmployeeId: actor.employeeId }).where(eq(schema.creditMemo.id, creditMemoId)).returning();
   await recordAudit(db, actor, { action: "credit.void", subjectType: "credit_memo", subjectId: creditMemoId, prior: { status: "issued" }, current: { status: "void" }, reason: reason.trim(), marketId: cm.marketId ?? undefined });
+  await runHooks(invoiceHooks.creditVoided, db, actor, row);
   return row;
 }
 

@@ -8,7 +8,7 @@ import { formatCents } from "@/lib/domain/catalog/service";
 import { listInvoices, type Invoice } from "@/lib/domain/invoices/service";
 
 const PAGE = 100;
-const STATUSES: Invoice["status"][] = ["draft", "issued", "paid", "void"];
+const STATUSES: Invoice["status"][] = ["draft", "issued", "processing", "paid", "void"];
 
 export default async function InvoicesPage({ searchParams }: { searchParams: SearchParams }) {
   const actor = await requireAction("invoice.view");

@@ -7,7 +7,7 @@
  * - Stock aging at an origin: beer that has sat at an origin with a days-on-hand limit (Jack's Abby: beer must leave
  *   within 10 days) for the limit less three days or more.
  */
-import { and, eq, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lt, ne, not, or, sql } from "drizzle-orm";
 import type { Actor } from "@/lib/authz/actor";
 import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
@@ -29,7 +29,19 @@ export async function sweepOverdueInvoices(db: DbOrTx, actor: Actor, now: Date =
     .select({ inv: schema.invoice, kind: schema.customerLocation.kind, tradeName: schema.customerLocation.tradeName })
     .from(schema.invoice)
     .innerJoin(schema.customerLocation, eq(schema.customerLocation.id, schema.invoice.locationId))
-    .where(and(eq(schema.invoice.status, "issued"), eq(schema.invoice.legacy, false), eq(schema.invoice.series, "INV"), isNotNull(schema.invoice.dueDate), lt(schema.invoice.dueDate, today)));
+    .where(
+      and(
+        // Round 4: `processing` (a debit in flight, about four business days) is not overdue, and neither is an invoice
+        // whose due-date debit moved past a weekend or holiday and has not run yet.
+        eq(schema.invoice.status, "issued"),
+        eq(schema.invoice.legacy, false),
+        eq(schema.invoice.series, "INV"),
+        isNotNull(schema.invoice.dueDate),
+        lt(schema.invoice.dueDate, today),
+        not(and(eq(schema.invoice.collectionState, "scheduled"), isNotNull(schema.invoice.debitScheduledOn), gte(schema.invoice.debitScheduledOn, today))!),
+        or(ne(schema.invoice.collectionState, "scheduled"), isNull(schema.invoice.debitScheduledOn), lt(schema.invoice.debitScheduledOn, today)),
+      ),
+    );
   const byLoc = new Map<string, { kind: string; tradeName: string; marketId: string | null; total: number; invoices: Array<typeof schema.invoice.$inferSelect> }>();
   for (const r of rows) {
     const key = r.inv.locationId!;

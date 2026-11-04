@@ -14,7 +14,7 @@ import { originLabel } from "@/lib/domain/origins/service";
 import { getShipment } from "@/lib/domain/shipments/service";
 import { listPosItems } from "@/lib/domain/settings/service";
 import { CARRIERS, TYPE_LABEL, isDriverOnly, todayIso } from "../labels";
-import { confirmAction, correctDeliveryAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, stageAction, voidAction } from "./actions";
+import { confirmAction, correctDeliveryAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, splitAction, stageAction, voidAction } from "./actions";
 
 const DOC_LABEL: Record<string, string> = { bol: "Bill of lading", picking_ticket: "Picking ticket", pickup_pack: "Pickup pack", delivery_pack: "Delivery pack", pull_sheet: "Pull sheet", invoice: "Invoice" };
 const EDITABLE_LINES = ["draft", "confirmed", "staged"];
@@ -554,6 +554,25 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
                   <Input name="scheduledDate" type="date" required defaultValue={s.scheduledDate ?? today} />
                 </Field>
                 <Button small>Confirm (assign number)</Button>
+              </form>
+            </ActionPanel>
+          ) : null}
+          {s.status === "draft" && canManage && lines.length && lines.some((l) => l.line.orderLineId) && lines.reduce((n, l) => n + l.line.qty, 0) > 1 ? (
+            <ActionPanel label="Split" variant="secondary">
+              <form action={splitAction} className="space-y-2">
+                <input type="hidden" name="shipmentId" value={s.id} />
+                <p className="text-xs text-ink-3">Move part of this draft onto a second draft for the same order: two deliveries, two BOLs, two invoices (Round 4). What stays here ships first.</p>
+                {lines.map((l) => (
+                  <Field key={l.line.id} label={`${l.sku ? `${l.sku.brand} ${l.sku.name}` : l.pos?.name ?? "line"} (${l.line.qty} here)`}>
+                    <Input name={`move:${l.line.id}`} type="number" min={0} max={l.line.qty} placeholder="0" aria-label={`Move from line ${l.line.lineNo}`} />
+                  </Field>
+                ))}
+                <Field label="Reason (required)">
+                  <Input name="reason" required placeholder="e.g. the cooler takes half now, half Thursday" />
+                </Field>
+                <Button small variant="secondary">
+                  Split into two drafts
+                </Button>
               </form>
             </ActionPanel>
           ) : null}

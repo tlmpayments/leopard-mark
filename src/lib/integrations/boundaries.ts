@@ -32,9 +32,10 @@ export const optimoroute = {
 
 export const gmail = {
   boundary:
-    "Gmail is low-volume transport and human reply conversation, never the business archive (brief §42.2). Notice intent, version, recipient and outcome are internal records; send acceptance is not inbox delivery. Sender allocation per purpose is D32/IG04 and remains unselected — notices are recorded as manual-pending for the authorized single-sender process.",
+    "Gmail is low-volume transport and human reply conversation, never the business archive (brief §42.2). Round 4 built the adapter (src/lib/integrations/gmail/adapter.ts): approved items leave through it only while the company switch is on; the orders@ inbox is read into Email intake. Nothing is sent that a person has not approved.",
+  /** Direct sends are refused: every email goes through the approval queue (src/lib/domain/approvals). */
   send(): never {
-    throw new NotBuiltError("Gmail", "automated send", 1);
+    throw new NotBuiltError("Gmail", "direct send outside the approval queue", 1);
   },
 };
 

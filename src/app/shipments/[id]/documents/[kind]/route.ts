@@ -30,7 +30,7 @@ function isKind(value: string): value is Kind {
 function invoiceForPack(invoices: Invoice[]): Invoice | null {
   const live = invoices.filter((i) => i.status !== "void");
   const byRecency = (a: Invoice, b: Invoice) => (b.issuedAt?.getTime() ?? b.createdAt.getTime()) - (a.issuedAt?.getTime() ?? a.createdAt.getTime());
-  const issued = live.filter((i) => i.status === "issued" || i.status === "paid").sort(byRecency);
+  const issued = live.filter((i) => i.status === "issued" || i.status === "processing" || i.status === "paid").sort(byRecency);
   if (issued[0]) return issued[0];
   const drafts = live.filter((i) => i.status === "draft").sort(byRecency);
   return drafts[0] ?? null;

@@ -158,6 +158,10 @@ export const customerLocation = pgTable(
     freightMinPallets: integer("freight_min_pallets"),
     /** R2-57: the driver may leave the delivery without a signature (back door, cooler). Off by default. */
     deliverWithoutSignature: boolean("deliver_without_signature").notNull().default(false),
+    /** Round 4 (B7): a card may be offered to this account on Stripe's hosted invoice page, by exception (closing out, trouble paying). Admin only. */
+    cardAllowed: boolean("card_allowed").notNull().default(false),
+    /** Round 4 (P1): due-date debits for this account run without a person approving each one. Off until the Owner switches it. */
+    autoDebit: boolean("auto_debit").notNull().default(false),
     createdByEmployeeId: uuid("created_by_employee_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -349,6 +353,20 @@ export const paymentRelationship = pgTable(
   /** Who assigned payer authority and when (intentional act, never inherited from AP; REV-08). */
   payerAssignedAt: timestamp("payer_assigned_at", { withTimezone: true }),
   payerAssignedByEmployeeId: uuid("payer_assigned_by_employee_id"),
+  /**
+   * Round 4 (B2 to B4): the bank on file as Stripe reports it, masked. The payment method and mandate ids are
+   * references into Stripe; the portal never holds account or routing numbers.
+   */
+  bankName: text("bank_name"),
+  bankLast4: text("bank_last4"),
+  paymentMethodId: text("payment_method_id"),
+  mandateId: text("mandate_id"),
+  mandateAcceptedAt: timestamp("mandate_accepted_at", { withTimezone: true }),
+  /** instant | pending_microdeposits | verified | failed */
+  verificationState: text("verification_state"),
+  methodVerifiedAt: timestamp("method_verified_at", { withTimezone: true }),
+  defaultSetAt: timestamp("default_set_at", { withTimezone: true }),
+  setupLinkSentAt: timestamp("setup_link_sent_at", { withTimezone: true }),
   current: boolean("current").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()

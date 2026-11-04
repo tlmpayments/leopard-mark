@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
 import { envPresent } from "@/lib/env";
+import { stripeGatewayMode } from "@/lib/integrations/stripe/gateway";
 
 export type Provider = (typeof schema.providerEnum.enumValues)[number];
 export type IntegrationState = (typeof schema.integrationStateEnum.enumValues)[number];
@@ -74,15 +75,15 @@ export const PROVIDERS: ProviderDefinition[] = [
   },
   {
     provider: "gmail",
-    name: "Gmail (customer notice transport)",
-    owns: "Email transport outcome and human reply conversation",
-    internalKeeps: "Notice intent/version/recipient, chosen sender, evidence, failure owner",
+    name: "Gmail (orders@ intake and approved sends)",
+    owns: "Email transport outcome and the orders@ inbox contents",
+    internalKeeps: "Approval items (what may go out, who approved it, the evidence), intake requests, the chosen sender per purpose",
     phase: 1,
-    built: "boundary_only",
-    requiredEnv: ["GMAIL_SENDER_ADDRESS", "GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_SECRET", "GMAIL_OAUTH_REFRESH_TOKEN"],
+    built: "adapter",
+    requiredEnv: ["GOOGLE_SERVICE_ACCOUNT_KEY"],
     optionalEnv: [],
-    scopes: ["https://www.googleapis.com/auth/gmail.send"],
-    credentialEnv: "GMAIL_OAUTH_REFRESH_TOKEN",
+    scopes: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"],
+    credentialEnv: "GOOGLE_SERVICE_ACCOUNT_KEY",
   },
   {
     provider: "google_address",
@@ -158,11 +159,14 @@ export async function providerStatuses(db: DbOrTx): Promise<ProviderStatus[]> {
   const recorded = await db.select().from(schema.providerConnection);
   const gates = await db.select().from(schema.capabilityGate);
   return PROVIDERS.map((def) => {
-    const missingEnv = def.requiredEnv.filter((e) => !envPresent(e));
+    // The local demo and the tests stand in for Stripe with an in-memory gateway (never on a deployment); the
+    // registry reports that as the credential so the page agrees with what the adapter is actually talking to.
+    const standIn = def.provider === "stripe" && stripeGatewayMode() === "fake";
+    const missingEnv = standIn ? [] : def.requiredEnv.filter((e) => !envPresent(e));
     const credentialsPresent = missingEnv.length === 0;
     const rec = recorded.find((r) => r.provider === def.provider) ?? null;
     const providerGates = gates.filter((g) => g.provider === def.provider);
-    const fp = def.credentialEnv ? credentialFingerprint(process.env[def.credentialEnv]) : null;
+    const fp = standIn ? "fake-gateway" : def.credentialEnv ? credentialFingerprint(process.env[def.credentialEnv]) : null;
 
     let connection: ConnectionFact;
     let connectionDetail: string;

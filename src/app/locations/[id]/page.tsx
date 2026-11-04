@@ -29,6 +29,8 @@ import { listStandingForLocation } from "@/lib/domain/standing/service";
 import { activityTimeline } from "@/lib/domain/timeline/service";
 import { linksForCases, listOpenExceptions } from "@/lib/exceptions/service";
 import { customerReferenceStatus, stripeConfigured } from "@/lib/integrations/stripe/adapter";
+import { PAYMENT_KIND_LABEL, describeBank, paymentsForLocation } from "@/lib/domain/collection";
+import { approvalsForSubject } from "@/lib/domain/approvals/service";
 import {
   addContactAction,
   assignRepAction,
@@ -40,12 +42,13 @@ import {
   duplicateAction,
   editOperationalAction,
   endContactAction,
-  hostedSetupLinkAction,
   licenseDecisionAction,
   overrideAction,
+  requestBankSetupAction,
   requestBillingEmailAction,
-  requestSetupAction,
   resolveHoldAction,
+  setAutoDebitAction,
+  setCardAllowedAction,
   setPayerAction,
   standingStateAction,
   statusAction,
@@ -131,6 +134,10 @@ export default async function LocationPage({ params, searchParams }: { params: P
         .limit(1)
     : [];
   const setupUrlLive = liveSetupUrl((setupSessions[0]?.evidence ?? null) as { url?: string; expires_at?: number } | null);
+  void setupUrlLive;
+  // Round 4: payments and what is queued for approval for this account.
+  const payments = isFinance ? await paymentsForLocation(d, id, 25) : [];
+  const locationApprovals = isFinance ? (await approvalsForSubject(d, "customer_location", id)).filter((a) => a.state !== "withdrawn") : [];
   const canRename = can(actor, "location.lifecycle", { marketId: loc.marketId });
   const [cleaning] = await d.select().from(schema.cleaningObligation).where(eq(schema.cleaningObligation.locationId, id));
   const buyer = detail.contacts.find((c) => c.contactRole === "buyer") ?? detail.contacts.find((c) => c.mayOrder);
@@ -549,57 +556,89 @@ export default async function LocationPage({ params, searchParams }: { params: P
             </details>
           ) : null}
         </Card>
-        <Card title="Payment relationship (Stripe)">
+        <Card title="Payments (Stripe)">
           {isFinance ? (
             <>
               <KV
                 items={[
-                  ["Channel", <StatusBadge key="c" value={detail.payment?.channel ?? "unselected"} />],
-                  ["Setup", <StatusBadge key="s" value={detail.payment?.setupState ?? "not_requested"} />],
+                  ["Pays by", loc.payBy ? PAY_BY_LABEL[loc.payBy as keyof typeof PAY_BY_LABEL] ?? loc.payBy : <span key="pb" className="text-ink-2">not set (Shipping and billing)</span>],
+                  ["Bank on file", describeBank(detail.payment)],
                   [
                     "Stripe customer",
-                    stripeRefs.usable ? (
-                      stripeRefs.usable.providerId ? (
-                        <code key="p" className="text-xs">
-                          {stripeRefs.usable.providerId}
-                        </code>
-                      ) : (
-                        <span key="p">
-                          <StatusBadge value={stripeRefs.usable.status} /> <span className="text-xs text-muted">{(stripeRefs.usable.evidence as { reason?: string } | null)?.reason ?? "queued"}</span>
-                        </span>
-                      )
+                    stripeRefs.usable?.providerId ? (
+                      <code key="p" className="text-xs">
+                        {stripeRefs.usable.providerId}
+                      </code>
+                    ) : stripeRefs.usable ? (
+                      <span key="p">
+                        <StatusBadge value={stripeRefs.usable.status} /> <span className="text-xs text-muted">{(stripeRefs.usable.evidence as { reason?: string } | null)?.reason ?? "queued"}</span>
+                      </span>
                     ) : (
-                      "not requested"
+                      "created when the first setup link or invoice needs it"
                     ),
                   ],
-                  ["Payer", payerAuth.ok ? `${payerAuth.payer.name}${payerAuth.payer.shared ? " (shared, explicitly authorized)" : ""}` : <span key="np" className="text-warn">{payerAuth.reason}</span>],
+                  ["Payer", payerAuth.ok ? `${payerAuth.payer.name}${payerAuth.payer.email ? ` (${payerAuth.payer.email})` : ""}${payerAuth.payer.shared ? ", shared, explicitly authorized" : ""}` : <span key="np" className="text-warn">{payerAuth.reason}</span>],
+                  ["Debits", loc.payBy === "stripe" ? (loc.autoDebit ? "run on the debit date without approval (account switch on)" : "each one waits for approval") : "never debited"],
+                  ["Card", loc.cardAllowed ? "allowed on the hosted page, by exception" : "not offered (ACH only)"],
                   ["Direct revocation", detail.payment?.directRevocationAt ? fmtDate(detail.payment.directRevocationAt, tz) : "none"],
                 ]}
               />
               {stripeRefs.others.length ? (
                 <p className="mt-1 text-xs text-muted">Other Stripe references on file (not usable now): {stripeRefs.others.map((o) => `${o.providerId ?? "pending"} — ${o.why}`).join("; ")}.</p>
               ) : null}
-              <p className="mt-2 text-xs text-muted">Stripe owns credentials/mandates; only masked status is retained. Collection, attempts and payment-failure holds arrive with phase 3.</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <form action={requestSetupAction}>
+                <form action={requestBankSetupAction}>
                   <input type="hidden" name="locationId" value={id} />
-                  <Button small variant="secondary" disabled={!payerAuth.ok}>
-                    Request ACH setup
+                  <Button small variant="secondary" disabled={!payerAuth.ok || !stripeConfigured()}>
+                    Send bank setup link
                   </Button>
                 </form>
-                {stripeConfigured() && stripeRefs.usable?.providerId && payerAuth.ok ? (
-                  <form action={hostedSetupLinkAction}>
-                    <input type="hidden" name="locationId" value={id} />
-                    <Button small variant="secondary">Create hosted setup link</Button>
-                  </form>
+                {payments.length ? (
+                  <Button small variant="ghost" href="#payments">
+                    Payment history
+                  </Button>
                 ) : null}
               </div>
-              {!payerAuth.ok ? <p className="mt-1 text-xs text-warn">Assign payer authority first — setup cannot be requested for an unassigned payer.</p> : null}
-              {setupUrlLive ? (
-                <div className="mt-2 bg-info-soft p-2 text-xs">
-                  <strong>Hosted setup link for the authorized payer</strong> (bearer link — send only through the approved single-sender process; expires per Stripe):
-                  <div className="mt-1 break-all font-mono">{setupUrlLive}</div>
-                </div>
+              {!stripeConfigured() ? <p className="mt-1 text-xs text-muted">Stripe is not connected on this deployment.</p> : null}
+              {!payerAuth.ok ? <p className="mt-1 text-xs text-warn">Assign payer authority first; the setup link goes to the payer.</p> : null}
+              <p className="mt-2 text-xs text-muted">The link is queued for approval and generated when the email goes; the payer connects the bank on Stripe&apos;s page (instant verification or two test deposits). Only the bank name, last four and verification state come back here. Invoices are debited on their due date.</p>
+              {locationApprovals.length ? (
+                <ul className="mt-2 divide-y divide-rule-soft text-sm">
+                  {locationApprovals.slice(0, 5).map((a) => (
+                    <li key={a.id} className="flex items-center justify-between gap-2 py-1">
+                      <Link href={`/approvals?view=${a.state === "pending" ? "pending" : a.state === "done" ? "done" : a.state === "failed" ? "failed" : a.state === "approved" || a.state === "executing" ? "approved" : "closed"}&focus=${a.id}`} className="text-navy hover:underline">
+                        {a.title}
+                      </Link>
+                      <StatusBadge value={a.state} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {canShipping ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-sm text-accent">Card by exception and automatic debits</summary>
+                  <form action={setCardAllowedAction} className="mt-2 flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="locationId" value={id} />
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" name="cardAllowed" defaultChecked={loc.cardAllowed} /> Offer a card on the hosted page
+                    </label>
+                    <Input name="reason" required placeholder="Reason (closing out, trouble paying)" aria-label="Reason for the card switch" />
+                    <Button small variant="secondary">
+                      Save card setting
+                    </Button>
+                  </form>
+                  <form action={setAutoDebitAction} className="mt-2 flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="locationId" value={id} />
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" name="autoDebit" defaultChecked={loc.autoDebit} disabled={loc.payBy !== "stripe"} /> Debit on the due date without approving each one
+                    </label>
+                    <Input name="reason" required placeholder="Reason" aria-label="Reason for the debit switch" />
+                    <Button small variant="secondary" disabled={loc.payBy !== "stripe"}>
+                      Save debit setting
+                    </Button>
+                  </form>
+                  <p className="mt-1 text-xs text-muted">Cards cost about 2.9% plus 30 cents against about 0.8% capped at $5 for ACH. Automatic debits need the account to pay by Stripe.</p>
+                </details>
               ) : null}
               <details className="mt-2">
                 <summary className="cursor-pointer text-sm text-accent">Assign payer authority</summary>
@@ -639,7 +678,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
               </details>
             </>
           ) : (
-            <KV items={[["Setup", <StatusBadge key="s" value={detail.payment?.setupState ?? "not_requested"} />], ["Action owner", "Admin / Accounting"]]} />
+            <KV items={[["Bank on file", describeBank(detail.payment)], ["Action owner", "Admin / Accounting"]]} />
           )}
         </Card>
       </div>
@@ -1095,6 +1134,35 @@ export default async function LocationPage({ params, searchParams }: { params: P
             <Link href={`/shipments?destination=${id}`} className="mt-1 block text-sm text-accent hover:underline">
               All shipments for this account
             </Link>
+          </div>
+        ) : null}
+        {isFinance && payments.length ? (
+          <div id="payments" className="mt-3 border-t border-line pt-3">
+            <div className="text-xs uppercase tracking-wide text-muted">Payments (Round 4, S6)</div>
+            <ul className="text-sm">
+              {payments.map(({ p, inv }) => (
+                <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 py-1">
+                  <span>
+                    {inv ? (
+                      <Link href={`/invoices/${inv.id}`} className="underline">
+                        {inv.number ?? "invoice"}
+                      </Link>
+                    ) : (
+                      "unapplied"
+                    )}{" "}
+                    <span className="text-xs text-muted">
+                      · {PAYMENT_KIND_LABEL[p.kind]} · {fmtDay(p.occurredAt.toISOString().slice(0, 10))}
+                      {p.reference ? ` · ${p.reference}` : ""}
+                      {p.failureCode ? ` · ${p.failureCode}` : ""}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="tabular-nums">{formatCents(p.amountCents)}</span>
+                    <StatusBadge value={p.state} />
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
       </Card>
