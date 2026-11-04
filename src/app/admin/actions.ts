@@ -224,3 +224,24 @@ export async function runJobsAction() {
     return `Ran ${results.length} job(s): ${results.map((r) => `${r.kind}=${r.outcome}`).join(", ") || "none due"}`;
   });
 }
+
+/**
+ * The hourly checks the cron runs (overdue invoices, due-date debits, unfinished bank setups), on demand. Vercel runs
+ * crons on production only, so a preview needs this to see a due-date debit reach Approvals. Each check only opens
+ * cases or queues approval items; nothing is debited or sent by running it.
+ */
+export async function runHourlyChecksAction() {
+  return runAction("/integrations", async ({ db, actor }) => {
+    const { authorize } = await import("@/lib/authz/authorize");
+    authorize(actor, "integration.manage");
+    const { SYSTEM_ACTOR } = await import("@/lib/authz/actor");
+    const { sweepOverdueInvoices } = await import("@/lib/domain/alerts/service");
+    const { chaseUnfinishedSetups, scheduleDueDateDebits } = await import("@/lib/domain/collection");
+    const now = new Date();
+    const overdue = await sweepOverdueInvoices(db, SYSTEM_ACTOR);
+    const debits = await scheduleDueDateDebits(db, now);
+    const setups = await chaseUnfinishedSetups(db, now);
+    const results = await runDueJobs(db, { limit: 50, workerId: `checks-${actor.employeeId}` });
+    return `Checks ran: ${debits.queued} debit(s) now waiting on Approvals, ${debits.blocked} blocked (see Cases); ${overdue.opened} overdue case(s) opened; ${setups.opened} unfinished bank setup(s) flagged; ${results.length} job(s) run.`;
+  });
+}

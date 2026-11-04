@@ -11,7 +11,7 @@ import { stripeGatewayMode } from "@/lib/integrations/stripe/gateway";
 import { jobSummary, listJobs } from "@/lib/jobs/queue";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { listCustomerMatches } from "@/lib/domain/collection";
-import { runJobsAction } from "../admin/actions";
+import { runHourlyChecksAction, runJobsAction } from "../admin/actions";
 import { SCOPE_LABEL, companyMailboxes, googleClientConfigured, listMailboxConnections } from "@/lib/integrations/gmail/connection";
 import { activationAction, checkGmailAction, checkStripeAction, disconnectMailboxAction, importStripeMatchesAction, recordGateAction, syncPayoutsAction } from "./actions";
 import "@/lib/domain/collection";
@@ -227,9 +227,17 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         />
         <p className="mt-1 text-xs text-muted">Waiting work resumes by itself once a connectivity check succeeds; failed work opens an owned case saying the provider effect is unknown until checked.</p>
         {manage ? (
-          <form action={runJobsAction} className="mt-2">
-            <Button small variant="secondary">Run due jobs now</Button>
-          </form>
+          <>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <form action={runJobsAction}>
+                <Button small variant="secondary">Run due jobs now</Button>
+              </form>
+              <form action={runHourlyChecksAction}>
+                <Button small variant="secondary">Run the hourly checks now</Button>
+              </form>
+            </div>
+            <p className="mt-1 text-xs text-muted">The hourly checks (overdue invoices, due-date debits, unfinished bank setups) only open cases or queue approvals. Production runs them every hour; a preview runs them only from this button.</p>
+          </>
         ) : null}
       </Card>
       <Card title="Recent provider events (idempotent record)">

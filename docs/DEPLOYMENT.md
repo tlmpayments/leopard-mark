@@ -173,7 +173,8 @@ nothing runs on its own unless the Owner switches a policy on. The portal invoic
 the secret key, with these permissions and no others: Customers (write), Invoices (write), Credit Notes (write),
 Checkout Sessions (write), SetupIntents (read), Mandates (read), PaymentIntents (read), Products and Prices
 (write; `addLines` uses `price_data`), Payouts (read), Balance transactions (read), Financial Connections (read),
-Events (read), Webhook Endpoints (none; registered by hand). Live mode only on production; previews carry no key.
+Events (read), Webhook Endpoints (none; registered by hand). The live key only on production; a preview carries only
+the Sandbox key, and only while it has its own Neon branch.
 
 **Webhook** (`STRIPE_WEBHOOK_SECRET`, one per environment): register `https://<domain>/api/webhooks/stripe` for
 `checkout.session.completed`, `setup_intent.succeeded`, `setup_intent.requires_action`, `setup_intent.setup_failed`,
@@ -197,8 +198,11 @@ portal disagree; it never becomes the authority for an internal fact.
 
 **Proof in Sandbox before production** (each step is a screen the Owner can watch; record each gate on
 Integrations with the evidence):
-1. Sandbox restricted key and webhook secret on a **separate** deployment or locally with `FV_ENV=development`
-   and a scratch database (never the production database). Integrations → *Check connectivity*: the account id
+1. Sandbox restricted key and webhook secret on the **preview** (its own Neon branch) or locally with
+   `FV_ENV=development` and a scratch database (never the production database). Previews sit behind Vercel
+   Authentication, so the Sandbox webhook address carries the project's *Protection Bypass for Automation* secret:
+   `https://<preview alias>/api/webhooks/stripe?x-vercel-protection-bypass=<secret>`. Crons do not run on a preview:
+   Integrations, *Run the hourly checks now* stands in for the hourly sweep. Integrations → *Check connectivity*: the account id
    and mode are recorded and bound to the key's fingerprint.
 2. An account: assign payer authority; *Send bank setup link*; approve the email on Approvals; generate the link;
    open it and connect Stripe's test bank (instant verification), then one with microdeposits. The account shows
