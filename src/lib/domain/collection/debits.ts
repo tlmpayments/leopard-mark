@@ -127,6 +127,9 @@ export async function requestRePresent(db: DbOrTx, actor: Actor, invoiceId: stri
   if (inv.collectionState !== "failed") throw new BusinessError(`${inv.number} is ${inv.collectionState.replace(/_/g, " ")}; only a returned debit is re-presented`);
   const code = inv.failureCode ?? "";
   if (NO_REPRESENT_CODES.has(code) || /not.?authori[sz]ed|revoked/i.test(inv.failureMessage ?? "")) throw new BusinessError(`The return (${code}) says the account holder did not authorise the debit; it must not be presented again. Contact the account.`);
+  // NACHA allows a returned debit to be presented again only for insufficient or uncollected funds (R01, R09). Any
+  // other return (account closed, no account, invalid number, or a reason Stripe has not given) is collected another way.
+  if (!REPRESENT_CODES.has(code)) throw new BusinessError(`Only a return for insufficient funds may be presented again. This return is ${code || "unknown"}${inv.failureMessage ? ` (${inv.failureMessage})` : ""}: check it in Stripe, then contact the account and collect another way.`);
   const failed = await db.select({ id: schema.payment.id }).from(schema.payment).where(and(eq(schema.payment.invoiceId, inv.id), eq(schema.payment.state, "failed")));
   if (failed.length > MAX_REPRESENTMENTS) throw new BusinessError(`${inv.number} has already been presented ${failed.length} times; NACHA allows two re-presentments. Collect another way.`);
   const e = await debitEligibility(db, { ...inv, collectionState: "scheduled" });

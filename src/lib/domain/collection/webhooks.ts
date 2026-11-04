@@ -10,6 +10,7 @@ import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
 import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import type { GwEvent } from "@/lib/integrations/stripe/gateway";
+import { gateway, stripeConfigured } from "@/lib/integrations/stripe/adapter";
 import { enqueueJob } from "@/lib/jobs/queue";
 import { formatCents } from "@/lib/domain/catalog/service";
 import { requestPaymentReceipt } from "./invoices";
@@ -40,6 +41,46 @@ async function invoiceForStripeId(db: DbOrTx, stripeInvoiceId: string | null) {
   if (!stripeInvoiceId) return null;
   const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.stripeInvoiceId, stripeInvoiceId));
   return inv ?? null;
+}
+
+/**
+ * The portal invoice behind a payment intent. From API 2025-03-31 a payment intent no longer names its invoice, so the
+ * link is the payment the portal recorded when it sent the debit, or the payment intent saved on the invoice.
+ */
+async function invoiceForPaymentIntent(db: DbOrTx, o: Obj) {
+  const direct = await invoiceForStripeId(db, str(o.invoice));
+  if (direct) return direct;
+  const pi = str(o.id);
+  if (!pi) return null;
+  const [pay] = await db.select({ invoiceId: schema.payment.invoiceId }).from(schema.payment).where(eq(schema.payment.stripePaymentIntentId, pi));
+  if (pay?.invoiceId) {
+    const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.id, pay.invoiceId));
+    if (inv) return inv;
+  }
+  const [inv] = await db.select().from(schema.invoice).where(eq(schema.invoice.paymentIntentId, pi));
+  return inv ?? null;
+}
+
+/** The generic code used when Stripe has not said why a payment failed; never a reason to re-present. */
+export const UNKNOWN_FAILURE = "payment_failed";
+
+/**
+ * Why a debit failed. A payment intent event carries `last_payment_error`; an invoice event carries nothing, so the
+ * reason is fetched from the payment intent (the charge's failure code is the ACH return: insufficient_funds,
+ * debit_not_authorized, account_closed, ...).
+ */
+async function failureReason(o: Obj, pi: string | null): Promise<{ code: string; message: string }> {
+  const err = (o.last_payment_error ?? null) as Obj | null;
+  if (err) return { code: String(err.decline_code ?? err.code ?? UNKNOWN_FAILURE), message: String(err.message ?? "The bank returned the debit") };
+  if (pi && stripeConfigured()) {
+    try {
+      const remote = await gateway().retrievePaymentIntent(pi);
+      if (remote?.failureCode) return { code: remote.failureCode, message: remote.failureMessage ?? "The bank returned the debit" };
+    } catch {
+      // The reason stays unknown; a person checks it in Stripe before anything is presented again.
+    }
+  }
+  return { code: UNKNOWN_FAILURE, message: "The bank returned the debit; the reason is in Stripe" };
 }
 
 async function locationForCustomer(db: DbOrTx, customerId: string | null, meta: Record<string, string> = {}) {
@@ -87,9 +128,7 @@ async function markInvoicePaidFromStripe(db: DbOrTx, inv: typeof schema.invoice.
 }
 
 async function markPaymentFailed(db: DbOrTx, inv: typeof schema.invoice.$inferSelect, o: Obj, pi: string | null) {
-  const err = (o.last_payment_error ?? {}) as Obj;
-  const code = String(err.decline_code ?? err.code ?? "payment_failed");
-  const message = String(err.message ?? "The bank returned the debit");
+  const { code, message } = await failureReason(o, pi);
   const now = new Date();
   if (pi) {
     const rows = await db.update(schema.payment).set({ state: "failed", failureCode: code, failureMessage: message, updatedAt: now }).where(and(eq(schema.payment.stripePaymentIntentId, pi), eq(schema.payment.state, "processing"))).returning();
@@ -137,7 +176,7 @@ export async function applyStripeEvent(db: DbOrTx, event: GwEvent): Promise<Appl
         return { outcome: "applied" };
       }
       case "payment_intent.processing": {
-        const inv = await invoiceForStripeId(db, str(o.invoice));
+        const inv = await invoiceForPaymentIntent(db, o);
         if (!inv) return { outcome: "ignored", detail: "not a portal invoice" };
         const pi = str(o.id);
         await db.insert(schema.payment).values({ invoiceId: inv.id, locationId: inv.locationId, marketId: inv.marketId, kind: "stripe_ach", amountCents: num(o.amount) ?? inv.totalCents, state: "processing", stripePaymentIntentId: pi, occurredAt: new Date(), note: "Reported by Stripe" }).onConflictDoNothing();
@@ -145,9 +184,10 @@ export async function applyStripeEvent(db: DbOrTx, event: GwEvent): Promise<Appl
         return { outcome: "applied" };
       }
       case "payment_intent.payment_failed": {
-        const inv = await invoiceForStripeId(db, str(o.invoice));
+        const inv = await invoiceForPaymentIntent(db, o);
         if (!inv) return { outcome: "ignored", detail: "not a portal invoice" };
-        if (inv.collectionState === "failed" && inv.paymentIntentId === str(o.id)) return { outcome: "ignored", detail: "already recorded" };
+        // The invoice event may have come first without a reason; this one carries it, so it still applies.
+        if (inv.collectionState === "failed" && inv.paymentIntentId === str(o.id) && inv.failureCode && inv.failureCode !== UNKNOWN_FAILURE) return { outcome: "ignored", detail: "already recorded" };
         await markPaymentFailed(db, inv, o, str(o.id));
         return { outcome: "applied" };
       }

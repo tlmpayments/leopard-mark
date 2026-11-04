@@ -323,6 +323,18 @@ describe("Invoices into Stripe, the due-date debit, settlement and returns (I1 t
     await db.update(schema.paymentRelationship).set({ setupState: "method_usable", directRevocationAt: null, verificationState: "verified" }).where(eq(schema.paymentRelationship.id, rel.id));
   });
 
+  it("only an insufficient-funds return may be presented again; a closed account or an unknown reason is collected another way", async () => {
+    const inv0 = await deliveredInvoice(bar.id, [{ skuId: f.skus.cantinescaCase.id, qty: 1 }], { scheduled: "2026-11-05", actual: "2026-11-05" });
+    for (const [code, message] of [
+      ["account_closed", "The bank account has been closed"],
+      ["payment_failed", "The bank returned the debit; the reason is in Stripe"],
+    ]) {
+      await db.update(schema.invoice).set({ collectionState: "failed", failureCode: code, failureMessage: message }).where(eq(schema.invoice.id, inv0.id));
+      await expect(requestRePresent(db, f.accounting, inv0.id, "try again")).rejects.toThrow(/Only a return for insufficient funds/);
+    }
+    await db.update(schema.invoice).set({ collectionState: "none", failureCode: null, failureMessage: null }).where(eq(schema.invoice.id, inv0.id));
+  });
+
   it("a short check payment opens a short-pay case; a distributor invoice is tracked, never debited, and marked paid by hand", async () => {
     const inv = await deliveredInvoice(distributor.id, [{ skuId: f.skus.cantinescaCase.id, qty: 10 }], { scheduled: "2026-11-03", actual: "2026-11-03" });
     // Pays by check: no Stripe copy on its own (the portal PDF is the invoice); a person can still ask for one.

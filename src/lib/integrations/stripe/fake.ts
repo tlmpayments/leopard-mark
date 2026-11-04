@@ -310,7 +310,7 @@ export class FakeStripe implements StripeGateway {
     const pi: FakePaymentIntent = { id: this.id("pi"), invoice: inv.id, amount: inv.amountRemaining, status: "processing", paymentMethod: pm.id, lastError: null };
     this.paymentIntents.set(pi.id, pi);
     inv.paymentIntent = pi.id;
-    this.emit("payment_intent.processing", { id: pi.id, object: "payment_intent", status: "processing", amount: pi.amount, invoice: inv.id, customer: inv.customer, payment_method: pm.id, metadata: {} });
+    this.emit("payment_intent.processing", { id: pi.id, object: "payment_intent", status: "processing", amount: pi.amount, customer: inv.customer, payment_method: pm.id, metadata: {} });
     return inv;
   }
   /** The ACH debit settles: Stripe marks the invoice paid and the money lands in the balance. */
@@ -324,11 +324,17 @@ export class FakeStripe implements StripeGateway {
     inv.amountRemaining = 0;
     inv.chargeId = this.id("ch");
     const fee = Math.min(500, Math.round(pi.amount * 0.008));
-    const bt = { id: this.id("txn"), type: "payment", amount: pi.amount, fee, net: pi.amount - fee, created: this.now(), source: inv.chargeId, chargeId: inv.chargeId, invoiceId: inv.id, description: `Payment for invoice ${inv.number}`, payoutId: null as string | null };
+    const bt = { id: this.id("txn"), type: "payment", amount: pi.amount, fee, net: pi.amount - fee, created: this.now(), source: inv.chargeId, chargeId: inv.chargeId, invoiceId: null as string | null, paymentIntentId: pi.id as string | null, description: `Payment for invoice ${inv.number}`, payoutId: null as string | null };
     this.balanceTransactions.set(bt.id, bt);
-    this.emit("payment_intent.succeeded", { id: pi.id, object: "payment_intent", status: "succeeded", amount: pi.amount, invoice: inv.id, customer: inv.customer, payment_method: pi.paymentMethod, latest_charge: inv.chargeId, metadata: {} });
-    this.emit("invoice.paid", { ...this.invoiceEvent(inv), charge: inv.chargeId });
+    this.emit("payment_intent.succeeded", { id: pi.id, object: "payment_intent", status: "succeeded", amount: pi.amount, customer: inv.customer, payment_method: pi.paymentMethod, latest_charge: inv.chargeId, metadata: {} });
+    this.emit("invoice.paid", this.invoiceEvent(inv));
     return bt;
+  }
+  async retrievePaymentIntent(id: string) {
+    this.record("retrievePaymentIntent", id);
+    const pi = this.paymentIntents.get(id);
+    if (!pi) return null;
+    return { id: pi.id, status: pi.status, failureCode: pi.lastError ? (pi.lastError.decline_code ?? pi.lastError.code) : null, failureMessage: pi.lastError?.message ?? null };
   }
   /** The bank returns the debit (R01 insufficient funds, R29 not authorised, ...). */
   returnDebit(paymentIntentId: string, code: string, message: string) {
@@ -337,8 +343,10 @@ export class FakeStripe implements StripeGateway {
     const inv = this.invoices.get(pi.invoice)!;
     pi.status = "requires_payment_method";
     pi.lastError = { code: "payment_method_provider_decline", decline_code: code, message };
-    this.emit("payment_intent.payment_failed", { id: pi.id, object: "payment_intent", status: pi.status, amount: pi.amount, invoice: inv.id, customer: inv.customer, payment_method: pi.paymentMethod, last_payment_error: pi.lastError, metadata: {} });
-    this.emit("invoice.payment_failed", { ...this.invoiceEvent(inv), payment_intent: pi.id, last_payment_error: pi.lastError });
+    // As API 2026-10-28 sends them: the payment intent carries the reason but not the invoice; the invoice event
+    // carries neither the payment intent nor the reason (the portal fetches it).
+    this.emit("invoice.payment_failed", this.invoiceEvent(inv));
+    this.emit("payment_intent.payment_failed", { id: pi.id, object: "payment_intent", status: pi.status, amount: pi.amount, customer: inv.customer, payment_method: pi.paymentMethod, last_payment_error: pi.lastError, metadata: {} });
   }
   /** The customer disputes a settled debit as unauthorised. */
   disputeDebit(paymentIntentId: string) {

@@ -99,8 +99,18 @@ export interface GwBalanceTransaction {
   created: number;
   source: string | null;
   chargeId: string | null;
+  /** Older API versions name the invoice on the charge; from 2025-03-31 the payment intent is the link back. */
   invoiceId: string | null;
+  paymentIntentId: string | null;
   description: string | null;
+}
+
+/** Why a payment attempt failed: for an ACH return, the charge's failure code (insufficient_funds, debit_not_authorized, ...). */
+export interface GwPaymentIntent {
+  id: string;
+  status: string;
+  failureCode: string | null;
+  failureMessage: string | null;
 }
 
 export interface GwEvent {
@@ -158,6 +168,8 @@ export interface StripeGateway {
   retrievePaymentMethod(id: string): Promise<GwPaymentMethod | null>;
   createSetupSession(params: { customer: string; paymentMethodTypes: Array<"us_bank_account" | "card">; successUrl: string; cancelUrl: string; metadata: Record<string, string> }): Promise<GwSetupSession>;
   retrieveSetupIntent(id: string): Promise<GwSetupIntent | null>;
+  /** The payment intent behind a debit, with the reason it failed (the invoice event does not carry it). */
+  retrievePaymentIntent(id: string): Promise<GwPaymentIntent | null>;
   createInvoice(params: CreateInvoiceParams, idempotencyKey: string): Promise<GwInvoice>;
   addInvoiceLines(id: string, lines: GwInvoiceLineInput[], idempotencyKey: string): Promise<GwInvoice>;
   finalizeInvoice(id: string, idempotencyKey: string): Promise<GwInvoice>;
@@ -289,7 +301,10 @@ export class RealStripeGateway implements StripeGateway {
     const s = await this.stripe.checkout.sessions.create({
       mode: "setup",
       customer: params.customer,
-      payment_method_types: params.paymentMethodTypes,
+      currency: "usd",
+      // API 2026-10-28.endive: a filter on the account's enabled payment methods (it replaced payment_method_types), so
+      // ACH Direct Debit must stay enabled under Settings, Payment methods. Card is added only by exception (B7).
+      allowed_payment_method_types: params.paymentMethodTypes,
       // Instant verification through the customer's bank login, with the two test deposits as the fallback (B5). The
       // `balances` permission is asked for at setup so a balance check before a debit is possible later (banks linked
       // without it would have to reconnect).
@@ -304,6 +319,22 @@ export class RealStripeGateway implements StripeGateway {
     try {
       const si = await this.stripe.setupIntents.retrieve(id);
       return { id: si.id, status: si.status, customer: idOf(si.customer), paymentMethod: idOf(si.payment_method), mandate: idOf(si.mandate), nextActionType: si.next_action?.type ?? null };
+    } catch (err) {
+      if ((err as { code?: string }).code === "resource_missing") return null;
+      throw err;
+    }
+  }
+  async retrievePaymentIntent(id: string) {
+    try {
+      const pi = await this.stripe.paymentIntents.retrieve(id, { expand: ["latest_charge"] });
+      const charge = pi.latest_charge && typeof pi.latest_charge === "object" ? (pi.latest_charge as Stripe.Charge) : null;
+      const err = pi.last_payment_error ?? null;
+      return {
+        id: pi.id,
+        status: pi.status,
+        failureCode: charge?.failure_code ?? err?.decline_code ?? err?.code ?? null,
+        failureMessage: charge?.failure_message ?? err?.message ?? null,
+      };
     } catch (err) {
       if ((err as { code?: string }).code === "resource_missing") return null;
       throw err;
@@ -403,7 +434,8 @@ export class RealStripeGateway implements StripeGateway {
         const src = bt.source as Stripe.BalanceTransaction["source"];
         const charge = src && typeof src === "object" && "object" in src && src.object === "charge" ? (src as Stripe.Charge) : null;
         const chargeInvoice = charge ? idOf((charge as unknown as { invoice?: string | { id: string } | null }).invoice ?? null) : null;
-        out.push({ id: bt.id, type: bt.type, amount: bt.amount, fee: bt.fee, net: bt.net, created: bt.created, source: idOf(src as never), chargeId: charge?.id ?? null, invoiceId: chargeInvoice, description: bt.description ?? null });
+        const chargePi = charge ? idOf((charge as unknown as { payment_intent?: string | { id: string } | null }).payment_intent ?? null) : null;
+        out.push({ id: bt.id, type: bt.type, amount: bt.amount, fee: bt.fee, net: bt.net, created: bt.created, source: idOf(src as never), chargeId: charge?.id ?? null, invoiceId: chargeInvoice, paymentIntentId: chargePi, description: bt.description ?? null });
       }
       if (!r.has_more) break;
       startingAfter = r.data[r.data.length - 1]?.id;

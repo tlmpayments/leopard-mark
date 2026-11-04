@@ -87,7 +87,12 @@ export async function syncPayouts(db: DbOrTx): Promise<{ payouts: number; transa
       const bts = await gw.listBalanceTransactionsForPayout(p.id);
       for (const bt of bts) {
         const stripeInvoiceId = bt.invoiceId;
-        const [inv] = stripeInvoiceId ? await db.select({ id: schema.invoice.id }).from(schema.invoice).where(eq(schema.invoice.stripeInvoiceId, stripeInvoiceId)) : [];
+        let [inv] = stripeInvoiceId ? await db.select({ id: schema.invoice.id }).from(schema.invoice).where(eq(schema.invoice.stripeInvoiceId, stripeInvoiceId)) : [];
+        // From API 2025-03-31 a charge no longer names its invoice; the payment intent leads back through the payment.
+        if (!inv && bt.paymentIntentId) {
+          const [pay] = await db.select({ invoiceId: schema.payment.invoiceId }).from(schema.payment).where(eq(schema.payment.stripePaymentIntentId, bt.paymentIntentId));
+          if (pay?.invoiceId) inv = { id: pay.invoiceId };
+        }
         await db
           .insert(schema.stripeBalanceTransaction)
           .values({ btId: bt.id, environment: binding.environment, payoutId: p.id, type: bt.type, amountCents: bt.amount, feeCents: bt.fee, netCents: bt.net, sourceId: bt.source, chargeId: bt.chargeId, stripeInvoiceId, invoiceId: inv?.id ?? null, description: bt.description, stripeCreatedAt: new Date(bt.created * 1000), syncedAt: new Date() })
