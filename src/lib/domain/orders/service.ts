@@ -16,6 +16,7 @@ import { primaryWarehouse } from "../markets/service";
 import { originLabel } from "../origins/service";
 import { createNoticeIntent, withdrawPendingNotices } from "../notices/service";
 import { createShipment, voidShipment } from "../shipments/service";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /**
  * Order intake (brief §12–§15, O12–O18; round 2 R2-1 to R2-7, R2-10, R2-11, R2-27).
@@ -133,7 +134,7 @@ export async function previewOrderShortfall(db: DbOrTx, actor: Actor, input: { l
   const named = [];
   for (const [skuId, qty] of merged) {
     const [sku] = await db.select({ name: schema.sku.name, brand: schema.sku.brand }).from(schema.sku).where(eq(schema.sku.id, skuId));
-    named.push({ skuId, qty, skuName: sku ? `${sku.brand} ${sku.name}` : skuId });
+    named.push({ skuId, qty, skuName: sku ? skuLabel(sku) : skuId });
   }
   return { warehouseId, originName: originLabel(origin), lines: await shortfallFor(db, warehouseId, named) };
 }

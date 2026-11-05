@@ -11,6 +11,7 @@ import { PRODUCTION_ARRANGEMENT_LABEL, originLabel } from "@/lib/domain/origins/
 import { confirmSellerAction, createMarketAction, createWarehouseAction, stockMovementAction, transferDepartureAction, transferReceiptAction } from "../actions";
 import { createOriginAction, updateMarketBillingAction, updateOriginAction } from "./origins-actions";
 import { ORIGIN_KIND_LABEL, WEEKDAYS } from "./origins-fields";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export default async function MarketsPage({ searchParams }: { searchParams: SearchParams }) {
   const actor = await requireAction("stock.record");
@@ -26,7 +27,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
   const triStateValue = (v: boolean | null | undefined) => (v === true ? "yes" : v === false ? "no" : "");
   const skuName = (id: string) => {
     const s = skus.find((x) => x.id === id);
-    return s ? `${s.brand} ${s.name}` : id;
+    return s ? skuLabel(s) : id;
   };
   return (
     <Page title="Markets, warehouses & stock" subtitle="Markets scope catalog/prices, warehouses, numbering and allocation. Global defaults (Net-30, $35 keg deposit, $90 minimum, no Sales price override) are not market-configurable.">

@@ -225,6 +225,19 @@ describe("Invoices into Stripe, the due-date debit, settlement and returns (I1 t
     const remote = fake.invoices.get(after.stripeInvoiceId!)!;
     expect(remote.total).toBe(inv.totalCents);
     expect(remote.lines.length).toBe(2);
+    // Owner, Nov 4: each line names its lot, not the BOL (the BOL is in the header); the brand is not doubled.
+    const full = (await getInvoice(db, inv.id))!;
+    const beer = full.lines.filter((l) => l.kind === "beer");
+    for (const l of beer) {
+      expect(l.lotCode).toBeTruthy();
+      expect(l.description).not.toContain(full.shipments[0].number!);
+      expect(l.description).not.toMatch(/Cantinesca Cantinesca/);
+    }
+    expect(remote.lines.every((l) => /, lot \S+$/.test(l.description ?? ""))).toBe(true);
+    const created = fake.calls.find((c) => c.method === "createInvoice" && (c.args[0] as { metadata?: Record<string, string> }).metadata?.fv_invoice_id === inv.id)!;
+    const params = created.args[0] as { customFields: Array<{ name: string; value: string }>; footer: string };
+    expect(params.customFields).toContainEqual({ name: "BOL", value: full.shipments[0].number });
+    expect(params.footer).toMatch(/Billing questions and remittances: ar@/);
     expect(remote.metadata.fv_invoice_id).toBe(inv.id);
     expect(fake.calls.some((c) => c.method === "finalizeInvoice")).toBe(true);
     // The overdue sweep leaves it alone on the Sunday between the due date and the debit date.

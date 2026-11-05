@@ -21,6 +21,7 @@ import { getCompanySettings } from "@/lib/domain/settings/service";
 import { registerApprovalExecutor, requestApproval, withdrawItemsForSubject, type ApprovalItem, type EmailPayload } from "@/lib/domain/approvals/service";
 import { nextBusinessDayOnOrAfter } from "./calendar";
 import { ensureStripeCustomer } from "./customers";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export const JOB_PAID_OUT_OF_BAND = "stripe.invoice.paid_out_of_band";
 export const JOB_VOID_MIRROR = "stripe.invoice.void";
@@ -96,8 +97,9 @@ function lineInputs(lines: Array<typeof schema.invoiceLine.$inferSelect>, skus: 
   for (const l of lines) {
     if (l.kind === "info" || l.qty === 0) continue;
     const sku = l.skuId ? skus.get(l.skuId) : null;
-    const productName = sku ? `${sku.brand} ${sku.name}` : l.kind === "deposit" ? "Keg deposit" : l.kind === "freight" ? "Freight" : l.kind === "pos" ? l.description.replace(/ \(no charge\)$/, "") : l.description;
-    out.push({ description: l.description, quantity: l.qty, unitAmount: l.unitPriceCents, productName, metadata: { fv_line_kind: l.kind, ...(l.skuId ? { fv_sku_id: l.skuId } : {}), ...(sku?.code ? { fv_sku: sku.code } : {}), ...(l.lotCode ? { fv_lot: l.lotCode } : {}) } });
+    const productName = sku ? skuLabel(sku) : l.kind === "deposit" ? "Keg deposit" : l.kind === "freight" ? "Freight" : l.kind === "pos" ? l.description.replace(/ \(no charge\)$/, "") : l.description;
+    // Stripe's invoice has no lot column, so the lot rides in the line text (owner, Nov 4).
+    out.push({ description: l.lotCode ? `${l.description}, lot ${l.lotCode}` : l.description, quantity: l.qty, unitAmount: l.unitPriceCents, productName, metadata: { fv_line_kind: l.kind, ...(l.skuId ? { fv_sku_id: l.skuId } : {}), ...(sku?.code ? { fv_sku: sku.code } : {}), ...(l.lotCode ? { fv_lot: l.lotCode } : {}) } });
   }
   return out;
 }
@@ -133,7 +135,7 @@ registerApprovalExecutor("stripe_invoice", async (db: Db, item: ApprovalItem) =>
   const dueIso = inv.dueDate ?? inv.invoiceDate ?? new Date().toISOString().slice(0, 10);
   const metadata: Record<string, string> = { fv_invoice_id: inv.id, fv_invoice_number: inv.number ?? "", fv_location_id: inv.locationId!, fv_market_id: inv.marketId ?? "", fv_pay_by: inv.payBy ?? "", fv_shipments: bols.join(",").slice(0, 400), fv_env: binding.environment };
   const settings = await getCompanySettings(db);
-  const base = { customer: customerId, dueDate: unixNoon(dueIso), metadata, customFields, description: inv.fobWording ? `${inv.fobWording}.` : null, footer: `${settings.dba}. Questions: ${settings.customerSenderAddress}` };
+  const base = { customer: customerId, dueDate: unixNoon(dueIso), metadata, customFields, description: inv.fobWording ? `${inv.fobWording}.` : null, footer: `${settings.dba}. Billing questions and remittances: ${settings.arEmail}.${settings.ordersEmail ? ` To reorder: ${settings.ordersEmail}.` : ""}` };
   let created;
   let numberNote: string | null = null;
   try {

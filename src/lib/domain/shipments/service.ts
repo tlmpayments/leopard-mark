@@ -25,6 +25,7 @@ import { cancelUndeliveredDemand } from "@/lib/domain/orders/service";
 import { recordKegEventForShipment } from "@/lib/domain/kegs/service";
 import { renderPdf } from "@/lib/documents/render";
 import type { ShipmentSnapshot, SnapshotLine } from "@/lib/documents/types";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export type Shipment = typeof schema.shipment.$inferSelect;
 export type ShipmentLine = typeof schema.shipmentLine.$inferSelect;
@@ -1065,7 +1066,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     return {
       lineNo: l.lineNo,
       skuCode: sku?.code ?? pos?.code ?? null,
-      description: sku ? `${sku.brand} ${sku.name}` : (pos?.name ?? "—"),
+      description: sku ? skuLabel(sku) : (pos?.name ?? "—"),
       packageLabel: sku?.sellingUnit ?? "each",
       upcCase: sku?.upcCase ?? null,
       lotCode: l.lotCode,
@@ -1233,7 +1234,7 @@ export async function pullSheet(db: DbOrTx, actor: Actor, originWarehouseId: str
   const agg = new Map<string, { skuCode: string; description: string; lotCode: string | null; qty: number }>();
   for (const { l, sku, pos } of lines) {
     const key = `${sku?.code ?? pos?.code ?? "?"}|${l.lotCode ?? ""}`;
-    const e = agg.get(key) ?? { skuCode: sku?.code ?? pos?.code ?? "?", description: sku ? `${sku.brand} ${sku.name}` : (pos?.name ?? "—"), lotCode: l.lotCode, qty: 0 };
+    const e = agg.get(key) ?? { skuCode: sku?.code ?? pos?.code ?? "?", description: sku ? skuLabel(sku) : (pos?.name ?? "—"), lotCode: l.lotCode, qty: 0 };
     e.qty += l.qty;
     agg.set(key, e);
   }

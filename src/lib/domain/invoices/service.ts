@@ -21,6 +21,7 @@ import { BusinessError, StaleStateError } from "@/lib/errors";
 import { getCompanySettings, nextDocNumber } from "@/lib/domain/settings/service";
 import { renderPdf } from "@/lib/documents/render";
 import type { InvoiceSnapshot, InvoiceSnapshotLine } from "@/lib/documents/types";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export type Invoice = typeof schema.invoice.$inferSelect;
 export type InvoiceLine = typeof schema.invoiceLine.$inferSelect;
@@ -157,7 +158,9 @@ async function compute(db: DbOrTx, invoiceLocationId: string, shipmentIds: strin
           if (sku.packageKind === "keg_sixtel") sixtelKegs += billed;
         }
         const outcome = l.deliveredQty !== null && billed !== l.qty ? ` (${l.qty} shipped, ${l.refusedQty ? `${l.refusedQty} refused` : ""}${l.refusedQty && l.damagedQty ? ", " : ""}${l.damagedQty ? `${l.damagedQty} damaged` : ""})` : "";
-        lines.push({ lineNo: n, kind: "beer", shipmentLineId: l.id, skuId: sku.id, description: `${sku.brand} ${sku.name}${s.number ? ` (${s.number})` : ""}${outcome}`, lotCode: l.lotCode, qty: billed, unitPriceCents: unit, lineTotalCents: total });
+        // The lot goes in its own column; the BOL is in the header, so a line names its BOL only when one invoice
+        // covers several deliveries (owner, Nov 4).
+        lines.push({ lineNo: n, kind: "beer", shipmentLineId: l.id, skuId: sku.id, description: `${skuLabel(sku)}${shipmentIds.length > 1 && s.number ? ` (${s.number})` : ""}${outcome}`, lotCode: l.lotCode, qty: billed, unitPriceCents: unit, lineTotalCents: total });
       } else if (pos) {
         // Round 3: a POS item with a price is charged (never on a no-charge invoice); without one it goes at no charge.
         const unit = series === "NC" ? 0 : (pos.priceCents ?? 0);

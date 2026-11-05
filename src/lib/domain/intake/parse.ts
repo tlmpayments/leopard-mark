@@ -7,6 +7,7 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import type { DbOrTx } from "@/lib/db/types";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export interface ParsedLine {
   skuId: string;
@@ -116,7 +117,7 @@ export function linesFromText(text: string, skus: SkuRef[], aliases: Array<{ ali
       return;
     }
     seen.set(sku.id, out.length);
-    out.push({ skuId: sku.id, skuCode: sku.code, skuName: `${sku.brand} ${sku.name}`, qty, via, matched: matched.trim().slice(0, 120) });
+    out.push({ skuId: sku.id, skuCode: sku.code, skuName: skuLabel(sku), qty, via, matched: matched.trim().slice(0, 120) });
   };
   const byId = new Map(skus.map((s) => [s.id, s]));
   for (const raw of text.split(/\r?\n/)) {

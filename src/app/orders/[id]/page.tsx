@@ -22,6 +22,7 @@ import { activityTimeline } from "@/lib/domain/timeline/service";
 import { releaseReservationAction, requeueReservationAction } from "../../admin/actions";
 import { TYPE_LABEL, shipmentNumber, todayIso } from "../../shipments/labels";
 import { amendQtyAction, cancelOrderAction, confirmOrderShipmentAction, createShipmentForOrderAction, flagAbnormalAction, reassignWarehouseAction, releaseHoldAction, requestChangeAction } from "../actions";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /** One plain sentence about what the order is doing now and who acts next (UX-04). */
 function orderStatusLine(o: NonNullable<Awaited<ReturnType<typeof getOrder>>>, active: { number: string | null; status: string; scheduledDate: string | null } | null, readinessSummary: string, openCases: Array<{ category: string; ownerRole: string | null }>) {
@@ -93,7 +94,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const shipDate = activeRow?.scheduledDate ?? o.order.requestedDate;
   const deadline = cutoff && shipDate && activeRow?.status !== "delivered" ? changeDeadline(cutoff, shipDate) : null;
   const decidedBy = o.order.shortfallDecidedByEmployeeId ? (await d.select({ name: schema.employee.displayName }).from(schema.employee).where(eq(schema.employee.id, o.order.shortfallDecidedByEmployeeId)))[0]?.name ?? null : null;
-  const skuName = new Map(o.lines.map((l) => [l.skuId, `${l.sku.brand} ${l.sku.name}`]));
+  const skuName = new Map(o.lines.map((l) => [l.skuId, skuLabel(l.sku)]));
 
   const linesTab = (
     <>
@@ -486,7 +487,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
                 align={["left", "left", "right", "right"]}
                 empty="No lines."
                 rows={active.lines.map(({ line: l, sku, pos }) => [
-                  l.skuId ? skuName.get(l.skuId) ?? (sku ? `${sku.brand} ${sku.name}` : "—") : pos?.name ?? "—",
+                  l.skuId ? skuName.get(l.skuId) ?? (sku ? skuLabel(sku) : "—") : pos?.name ?? "—",
                   l.lotCode ? <Code key="c">{l.lotCode}</Code> : <span key="c" className="text-ink-3">choose on the shipment</span>,
                   String(l.qty),
                   l.deliveredQty !== null ? String(l.deliveredQty) : "—",

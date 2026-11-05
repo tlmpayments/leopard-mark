@@ -15,6 +15,7 @@ import { getShipment } from "@/lib/domain/shipments/service";
 import { listPosItems } from "@/lib/domain/settings/service";
 import { CARRIERS, TYPE_LABEL, isDriverOnly, todayIso } from "../labels";
 import { confirmAction, correctDeliveryAction, deliverAction, outAction, receiveAction, regenerateAction, saveLinesAction, saveLogisticsAction, splitAction, stageAction, voidAction } from "./actions";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 const DOC_LABEL: Record<string, string> = { bol: "Bill of lading", picking_ticket: "Picking ticket", pickup_pack: "Pickup pack", delivery_pack: "Delivery pack", pull_sheet: "Pull sheet", invoice: "Invoice" };
 const EDITABLE_LINES = ["draft", "confirmed", "staged"];
@@ -116,7 +117,7 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
           ) : (
             <Code key="nl">{line.lotCode ?? (sku ? "no lot" : "—")}</Code>
           );
-          const head = [String(line.lineNo), <Code key="c">{sku?.code ?? pos?.code ?? "—"}</Code>, sku ? `${sku.brand} ${sku.name}` : pos ? `${pos.name} (POS)` : "—", lotCell];
+          const head = [String(line.lineNo), <Code key="c">{sku?.code ?? pos?.code ?? "—"}</Code>, sku ? skuLabel(sku) : pos ? `${pos.name} (POS)` : "—", lotCell];
           if (delivered)
             return [
               ...head,
@@ -563,7 +564,7 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
                 <input type="hidden" name="shipmentId" value={s.id} />
                 <p className="text-xs text-ink-3">Move part of this draft onto a second draft for the same order: two deliveries, two BOLs, two invoices (Round 4). What stays here ships first.</p>
                 {lines.map((l) => (
-                  <Field key={l.line.id} label={`${l.sku ? `${l.sku.brand} ${l.sku.name}` : l.pos?.name ?? "line"} (${l.line.qty} here)`}>
+                  <Field key={l.line.id} label={`${l.sku ? skuLabel(l.sku) : l.pos?.name ?? "line"} (${l.line.qty} here)`}>
                     <Input name={`move:${l.line.id}`} type="number" min={0} max={l.line.qty} placeholder="0" aria-label={`Move from line ${l.line.lineNo}`} />
                   </Field>
                 ))}
