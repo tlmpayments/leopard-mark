@@ -129,8 +129,14 @@ const env = {
   DEV_AUTH_BYPASS: "true",
   NODE_ENV: "development",
   APP_BASE_URL: url,
+  FV_STRIPE_FAKE: "true", // Round 4: an in-memory stand-in for Stripe so the collection flow can be walked without a key
+  FV_STRIPE_FAKE_STATE: path.join(dataDir, "stripe-fake.json"), // its objects live beside the database, so a restart keeps them
 };
 delete env.DATABASE_URL; // demo mode never touches a real database (FV_DEMO=true wins even if .env sets one)
+delete env.STRIPE_SECRET_KEY; // and never a real Stripe account
+delete env.STRIPE_WEBHOOK_SECRET;
+delete env.GOOGLE_CLIENT_ID; // nor real Google: no staff Google sign-in and no mailbox connection in the demo
+delete env.GOOGLE_CLIENT_SECRET;
 
 const nextBin = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "next.cmd" : "next");
 const child = spawn(nextBin, ["dev", "-p", String(appPort)], { stdio: "inherit", env, shell: process.platform === "win32" });

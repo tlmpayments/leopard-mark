@@ -7,9 +7,14 @@ import * as schema from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { appEnv, configurationProblems, demoModeEnabled, fixtureMode } from "@/lib/env";
 import { providerStatuses } from "@/lib/integrations/registry";
+import { stripeGatewayMode } from "@/lib/integrations/stripe/gateway";
 import { jobSummary, listJobs } from "@/lib/jobs/queue";
-import { runJobsAction } from "../admin/actions";
-import { activationAction, checkStripeAction, recordGateAction } from "./actions";
+import { getCompanySettings } from "@/lib/domain/settings/service";
+import { listCustomerMatches } from "@/lib/domain/collection";
+import { runHourlyChecksAction, runJobsAction } from "../admin/actions";
+import { SCOPE_LABEL, companyMailboxes, googleClientConfigured, listMailboxConnections } from "@/lib/integrations/gmail/connection";
+import { activationAction, checkGmailAction, checkStripeAction, disconnectMailboxAction, importStripeMatchesAction, recordGateAction, syncPayoutsAction } from "./actions";
+import "@/lib/domain/collection";
 
 const CONNECTION_LABEL: Record<string, string> = { not_applicable: "n/a", no_check: "untested", failed: "failed", stale: "stale", ok: "verified" };
 
@@ -22,15 +27,23 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const actor = await requireAction("integration.view");
   const flash = await flashFrom(searchParams);
   const d = await getDb();
-  const [statuses, jobs, jobRows, events] = await Promise.all([providerStatuses(d), jobSummary(d), listJobs(d, { statuses: ["waiting", "queued", "running", "failed"], limit: 50 }), d.select().from(schema.providerEvent).orderBy(desc(schema.providerEvent.receivedAt)).limit(10)]);
+  const [statuses, jobs, jobRows, events, settings, matches] = await Promise.all([providerStatuses(d), jobSummary(d), listJobs(d, { statuses: ["waiting", "queued", "running", "failed"], limit: 50 }), d.select().from(schema.providerEvent).orderBy(desc(schema.providerEvent.receivedAt)).limit(10), getCompanySettings(d), listCustomerMatches(d, { states: ["suggested"] })]);
+  const mailboxRows = await listMailboxConnections(d);
+  const ownerCanConnect = can(actor, "settings.manage");
   const manage = can(actor, "integration.manage");
   const problems = configurationProblems();
+  const fakeStripe = stripeGatewayMode() === "fake";
   return (
     <Page title="Integrations" subtitle={`Build-versus-activate facts per provider (environment: ${appEnv()}, fixture mode: ${fixtureMode()}). A successful API request is never "integration complete".`}>
       <Flash {...flash} />
       {demoModeEnabled() ? (
         <Notice tone="warn" title="DEVELOPMENT DEMO MODE:">
-          no provider credentials are configured, so every adapter reports its real state and every capability gate stays unproven. Nothing on this page is mocked as successful.
+          no provider credentials are configured, so every adapter reports its real state and every capability gate stays unproven. {fakeStripe ? "Stripe runs against an in-memory stand-in (FV_STRIPE_FAKE), impossible on a deployment, so the collection flow can be walked through end to end." : "Nothing on this page is mocked as successful."}
+        </Notice>
+      ) : null}
+      {fakeStripe && !demoModeEnabled() ? (
+        <Notice tone="warn" title="Stripe is the in-memory stand-in (FV_STRIPE_FAKE).">
+          Local only; a deployment never gets it.
         </Notice>
       ) : null}
       {problems.length ? (
@@ -56,7 +69,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </div>
             <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">2 · Credentials</div>
-              <div>{s.credentialsPresent ? "present (names only; values never shown)" : `missing: ${s.missingEnv.join(", ")}`}</div>
+              <div>{s.credentialsPresent ? (s.provider === "stripe" && fakeStripe ? "in-memory stand-in (FV_STRIPE_FAKE); no key" : "present (names only; values never shown)") : `missing: ${s.missingEnv.join(", ")}`}</div>
             </div>
             <div className="border-t border-rule pt-2">
               <div className="uppercase tracking-wide text-muted">3 · Connection</div>
@@ -84,10 +97,83 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
           />
           <div className="mt-2 flex flex-wrap gap-2">
             {s.provider === "stripe" && manage ? (
-              <form action={checkStripeAction}>
-                <Button small variant="secondary">Check connectivity (binds account + credential)</Button>
+              <>
+                <form action={checkStripeAction}>
+                  <Button small variant="secondary">Check connectivity (binds account + credential)</Button>
+                </form>
+                {s.connection === "ok" ? (
+                  <>
+                    <form action={importStripeMatchesAction}>
+                      <Button small variant="secondary">Import the ACH app&apos;s customers for matching (C2)</Button>
+                    </form>
+                    <form action={syncPayoutsAction}>
+                      <Button small variant="secondary">Pull payouts now (S8)</Button>
+                    </form>
+                  </>
+                ) : null}
+                {matches.length ? (
+                  <Button small variant="ghost" href="/admin/stripe-matches">
+                    {matches.length} Stripe customer{matches.length === 1 ? "" : "s"} waiting to be matched
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            {s.provider === "gmail" && manage ? (
+              <form action={checkGmailAction}>
+                <Button small variant="secondary">Check the {settings.intakeMailboxAddress} mailbox</Button>
               </form>
             ) : null}
+          </div>
+          {s.provider === "gmail" ? (
+            <div className="mb-2">
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted">Mailboxes (each connected by the Owner signing in to it once; no domain-wide key)</h3>
+              <Table
+                head={["Mailbox", "Used for", "Needs", "Connection", ""]}
+                rows={companyMailboxes(settings).map((m) => {
+                  const conn = mailboxRows.find((r) => r.mailbox === m.mailbox && !r.disconnectedAt && r.refreshTokenEnc);
+                  const missing = conn ? m.scopes.filter((sc) => !conn.scopes.includes(sc)) : [];
+                  return [
+                    <span key="m" className="font-mono text-xs">{m.mailbox}</span>,
+                    m.purpose,
+                    m.scopes.map((sc) => SCOPE_LABEL[sc] ?? sc).join(" and "),
+                    conn ? (
+                      <span key="c">
+                        <Badge tone={conn.lastError || missing.length ? "warn" : "good"}>{conn.lastError ? "needs reconnecting" : missing.length ? `missing ${missing.map((sc) => SCOPE_LABEL[sc] ?? sc).join(", ")}` : "connected"}</Badge>{" "}
+                        <span className="text-xs text-muted">since {conn.connectedAt.toISOString().slice(0, 10)}{conn.lastUsedAt ? `, last used ${conn.lastUsedAt.toISOString().slice(0, 10)}` : ""}</span>
+                        {conn.lastError ? <span className="block text-xs text-danger">{conn.lastError}</span> : null}
+                      </span>
+                    ) : (
+                      <Badge key="c" tone="warn">not connected</Badge>
+                    ),
+                    ownerCanConnect ? (
+                      <span key="a" className="flex flex-wrap gap-1">
+                        {googleClientConfigured() ? (
+                          <Button small variant="secondary" href={`/api/integrations/gmail/start?mailbox=${encodeURIComponent(m.mailbox)}`}>
+                            {conn ? "Reconnect" : "Connect mailbox"}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted">Google client not configured</span>
+                        )}
+                        {conn ? (
+                          <form action={disconnectMailboxAction} className="flex gap-1">
+                            <input type="hidden" name="mailbox" value={m.mailbox} />
+                            <Input name="reason" placeholder="Reason" aria-label="Reason" className="max-w-[9rem]" />
+                            <Button small variant="danger">Disconnect</Button>
+                          </form>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span key="a" className="text-xs text-muted">Owner connects</span>
+                    ),
+                  ];
+                })}
+              />
+              <p className="mt-1 text-xs text-muted">
+                Connect mailbox opens Google: sign in as that mailbox and allow what it asks. Google&apos;s return address for this must be listed in the Google client&apos;s Authorized redirect URIs: <span className="font-mono">/api/integrations/gmail/callback</span> on this site. Disconnecting revokes the sign-in with Google.
+              </p>
+            </div>
+          ) : null}
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             {manage && s.built === "adapter" && s.connection === "ok" ? (
               <form action={activationAction} className="flex gap-1">
                 <input type="hidden" name="provider" value={s.provider} />
@@ -141,17 +227,28 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         />
         <p className="mt-1 text-xs text-muted">Waiting work resumes by itself once a connectivity check succeeds; failed work opens an owned case saying the provider effect is unknown until checked.</p>
         {manage ? (
-          <form action={runJobsAction} className="mt-2">
-            <Button small variant="secondary">Run due jobs now</Button>
-          </form>
+          <>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <form action={runJobsAction}>
+                <Button small variant="secondary">Run due jobs now</Button>
+              </form>
+              <form action={runHourlyChecksAction}>
+                <Button small variant="secondary">Run the hourly checks now</Button>
+              </form>
+            </div>
+            <p className="mt-1 text-xs text-muted">The hourly checks (overdue invoices, due-date debits, unfinished bank setups) only open cases or queue approvals. Production runs them every hour; a preview runs them only from this button.</p>
+          </>
         ) : null}
       </Card>
       <Card title="Recent provider events (idempotent record)">
         <Table head={["Provider", "Event", "Type", "Received", "Outcome"]} rows={events.map((e) => [e.provider, <code key="i" className="text-xs">{e.eventId}</code>, e.type, fmtDate(e.receivedAt), e.outcome ?? "—"])} />
       </Card>
-      <div>
+      <div className="flex flex-wrap gap-2">
+        <Button href="/approvals" variant="secondary">
+          Approvals (everything that leaves the company)
+        </Button>
         <Button href="/admin/notices" variant="secondary">
-          Customer notices (manual single-sender process)
+          Customer notices (Phase 1 manual intents)
         </Button>
       </div>
     </Page>

@@ -1,4 +1,5 @@
-import { Badge, Button, Card, Field, Flash, Input, Notice, Page, Select, StatusBadge, Table, Textarea, fmtDate } from "@/components/ui";
+import { WarehouseStockTable } from "@/components/stock";
+import { Badge, Button, Card, Field, Flash, Input, Notice, Page, Select, StatusBadge, Table, Textarea } from "@/components/ui";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -11,6 +12,7 @@ import { PRODUCTION_ARRANGEMENT_LABEL, originLabel } from "@/lib/domain/origins/
 import { confirmSellerAction, createMarketAction, createWarehouseAction, stockMovementAction, transferDepartureAction, transferReceiptAction } from "../actions";
 import { createOriginAction, updateMarketBillingAction, updateOriginAction } from "./origins-actions";
 import { ORIGIN_KIND_LABEL, WEEKDAYS } from "./origins-fields";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export default async function MarketsPage({ searchParams }: { searchParams: SearchParams }) {
   const actor = await requireAction("stock.record");
@@ -26,7 +28,7 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
   const triStateValue = (v: boolean | null | undefined) => (v === true ? "yes" : v === false ? "no" : "");
   const skuName = (id: string) => {
     const s = skus.find((x) => x.id === id);
-    return s ? `${s.brand} ${s.name}` : id;
+    return s ? skuLabel(s) : id;
   };
   return (
     <Page title="Markets, warehouses & stock" subtitle="Markets scope catalog/prices, warehouses, numbering and allocation. Global defaults (Net-30, $35 keg deposit, $90 minimum, no Sales price override) are not market-configurable.">
@@ -352,20 +354,8 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
       </Card>
 
       {stock.map(({ w, rows }) => (
-        <Card key={w.id} title={`Stock: ${originLabel(w)} (${markets.find((m) => m.id === w.marketId)?.code})`}>
-          <Table
-            head={["SKU", "On hand", "Reserved", "Available", "Shortfall", "Unavailable", "In transit", "Evidence"]}
-            rows={rows.map((r) => [
-              skuName(r.skuId),
-              String(r.onHandQty),
-              String(r.reservedQty),
-              <strong key="a">{r.availableQty}</strong>,
-              r.deficitQty > 0 ? <Badge key="d" tone="danger">{r.deficitQty} reserved but not on hand</Badge> : "—",
-              String(r.unavailableQty),
-              String(r.inTransitQty),
-              <span key="e" className="text-xs text-muted">{r.evidenceSource ?? "—"} {r.evidenceAt ? `· ${fmtDate(r.evidenceAt)}` : ""}</span>,
-            ])}
-          />
+        <Card key={w.id} id={`stock-${w.id}`} title={`Stock: ${originLabel(w)} (${markets.find((m) => m.id === w.marketId)?.code})`}>
+          <WarehouseStockTable rows={rows} skuName={skuName} />
           <details className="mt-2">
             <summary className="cursor-pointer text-sm text-accent">Record stock evidence</summary>
             <form action={stockMovementAction} className="mt-2 grid gap-2 sm:grid-cols-5">

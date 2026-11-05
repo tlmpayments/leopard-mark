@@ -19,11 +19,12 @@ section's pages while you are in it:
 | Accounts | Accounts |
 | Orders | Orders, Email intake (samples are orders now; the old Samples page is history, by URL) |
 | Shipments | Shipments (with End of day and New transfer) |
-| Stock | Lots (and Batches), Stock counts, Markets & stock |
+| Stock | Stock on hand, Lots (and Batches), Stock counts, Markets & stock |
 | Invoices | Invoices, Finance |
 | Kegs | Kegs, MicroStar report |
-| Exceptions | Exceptions (the Command center folded in), Notices |
-| Admin | Employees & access, Company settings, Catalog & prices, Products, Decisions, Integrations, Import from workbook |
+| Reports | Reports (California sales by format, Sample write-off; round 4) |
+| Exceptions | Exceptions (the Command center folded in), Approvals (round 4), Notices |
+| Admin | Employees & access, Company settings, Catalog & prices, Products, Decisions, Integrations, Stripe matching (round 4), Import from workbook |
 
 Each person sees only the pages their role permits, and a section with none of them is left out. A Sales rep's
 row is Accounts, Orders, Shipments, Invoices and Kegs; the other pages Sales may open (Lots, Products,
@@ -41,9 +42,14 @@ the stops assigned to them. Every URL works as before; only the grouping changed
   stored documents and the invoice link.
 * **Lots** (Admin, Accounting, Sales view) — the lot register; *New packaging report* records a run; *Batches*
   lists brews per facility.
-* **Invoices** (Admin, Accounting; Sales view) — INV and NC invoices with status, PDF, mark paid and void.
+* **Invoices** (Admin, Accounting; Sales view) — INV and NC invoices with status, PDF, *Record payment*, *Email
+  invoice*, the *Collection (Stripe)* card (round 4) and void.
 * **Kegs** (Admin, Accounting, Sales view) — keg balance per account by size, with the event history and the
   form for opening balances and adjustments.
+* **Stock: Stock on hand** (Admin, Accounting, Sales; as Lots) — one table, SKUs down the side and every location
+  with a stock position across the top, plus a total: available in bold, with on hand, reserved and in transit
+  underneath when they differ. Filter by market; hide or show SKUs with no stock anywhere. A location's name
+  opens its full stock table (the same one as on Markets & stock); recent lots and their quantities are below.
 * **Stock: Markets & stock** — stock positions as before, plus the **origins editor** (origin code, lot facility
   code, kind, address, hours, dock / liftgate / appointment, shipping contact) and the market billing rules
   (terms, keg deposits, COD, region list).
@@ -69,7 +75,14 @@ the stops assigned to them. Every URL works as before; only the grouping changed
   needs a note. A resolved case can be reopened with a reason; nothing is deleted.
 * **Integrations** (Admin/Accounting) — per provider, five separate facts: built · credentials present ·
   connection verified · capability demonstrated · authorized for live use. Plus job queue counts (queued,
-  running, **waiting**, failed, done) and the notices queue link.
+  running, **waiting**, failed, done) and the notices queue link. Round 4 adds *Check Gmail* (reads the
+  mailbox profile, sends nothing) and *Import from Stripe again* (the matching screen).
+* **Approvals** (Admin, Accounting; round 4) — everything that would leave the company: emails, Stripe invoice
+  copies, debits and credit notes, waiting for a person. See *Approvals* below.
+* **Finance** (Admin, Accounting; round 4) — debits due and in flight, settled payments, receivables ageing,
+  payouts matched to invoices, and the monthly CSV for the CFO.
+* **Reports** (Admin, Accounting; round 4) — California sales by format and the sample write-off, each on
+  screen and as a plain CSV.
 
 ## Stock: receipts, counts, damage, discrepancies (Stock: Markets & stock)
 Stock is evidence-backed, not a live WMS. Every movement needs an evidence source (who counted / which
@@ -114,6 +127,13 @@ return or correct the same sample is refused with its current state.
   open order resizes its unconfirmed draft. *Cancel* on an order with a draft voids the draft with it; a confirmed
   shipment is voided from the shipment page first, where you choose whether the order returns to open or is
   cancelled (R2-7).
+* **Two deliveries for one order (round 4)**: on an unconfirmed draft, *Split* moves part of its lines onto a
+  second draft for the same order (reason required): two deliveries, two BOLs, two invoices. What stays on the
+  first draft ships first. The order page follows the part that needs attention (the open draft), lists every
+  part on its Shipments tab, and says "ships in N parts". When a delivered part leaves some of the order
+  unshipped and no draft is in play, *Ship the rest (N)* drafts the remainder from what is reserved; a further
+  draft is refused while one is unconfirmed (confirm it or add to it). Reservations are shared across the parts,
+  so nothing is reserved twice.
 * **Transfers** (stock between origins) are the only shipments created from *Shipments, New transfer*.
 
 ## Orders: change requests, amendments, cancellation, warehouse
@@ -160,11 +180,15 @@ Every brewery, warehouse and cold store that ships is an **origin** (the `wareho
   vessel, status (scheduled, in progress, complete, destroyed, cancelled). Destroyed or cancelled needs a reason
   and a date; the record is kept. A batch usually yields one lot; recording a packaging run against an
   in-progress batch marks it complete.
-* **Packaging report** (4.4) — the one-page entry per run: facility, brand (SLG Sunlight Groove, CNT
-  Cantinesca; retired and experimental codes are listed inactive), packaging date, run digit, optional batch,
-  quantities packaged per SKU, notes. The **lot code is computed, never typed**: facility code (2 digits) +
-  brand (3 letters) + packaging date as yymmdd + run (1 character), for example `01CNT2610071`. A second run
-  on the same day takes the next run digit; the same code twice is refused. A lot holds several SKUs (4.3).
+* **Packaging report** (4.4) — the one-page entry per run, **batch first**: choosing the batch fills in its
+  brewery and brand (shown, not asked again). The list holds batches in progress or complete, newest brew first;
+  batches already packaged sit in their own group and add a packaging day to their lot (R2-21), and drop off
+  60 days after their last packaging day. Without a batch, choose the facility (it narrows the batch list) and
+  the brand (SLG Sunlight Groove, CNT Cantinesca). Then the packaging date, the run digit, quantities per SKU
+  (only the brand's SKUs are listed) and notes. The **lot code is computed, never typed**: facility code
+  (2 digits) + brand (3 letters) + packaging date as yymmdd + run (1 character), for example `01CNT2610071`.
+  Leave Run blank and the next free digit for the facility, brand and day is used; a typed digit that is
+  already a lot is refused with the next free digit named. A lot holds several SKUs (4.3).
   Packaging that spans two dates (4.5) is an open question: enter the run under the date the host reports and
   say so in the notes.
 * **Unknown quantities** (4.6): a lot can be recorded with *quantities not yet known* (the import does this
@@ -269,14 +293,19 @@ The sequence:
   or a per-keg override is set; distributor invoices carry **no deposit**, print "FOB brewery or designated
   warehouse" and a **MicroStar information line** with the kegs shipped by size. POS lines print at no charge.
   An NC invoice has every line at $0.
-* **Mark paid** records a manual payment status with a note; **Void** needs a reason, keeps the number as a
-  gap and leaves the shipment alone (voiding a shipment voids only its *draft* invoice; an issued one is left for
-  a person to decide). A paid invoice is not voided; issue a credit instead.
+* **Record payment** (round 4, replaces *Mark paid*) records money that arrived outside Stripe: how (Fintech,
+  check, EFT, other), the amount (blank for the full balance; a short or over payment opens a case), the date and
+  a reference. The invoice becomes *paid* with *paid outside Stripe*; if it had a Stripe copy, Stripe is told it
+  was paid out of band. A Stripe debit records itself when it settles. **Void** needs a reason, keeps the number
+  as a gap and leaves the shipment alone (voiding a shipment voids only its *draft* invoice; an issued one is left
+  for a person to decide); an invoice with a debit in flight (*processing*) is neither voided nor marked paid
+  until Stripe reports the result. A paid invoice is not voided; issue a credit instead.
 * The invoice PDF is served from the document stored at issue; a draft renders live with a DRAFT stamp and a
   voided invoice with a VOID stamp. The AR sender address and the optional remit-to block come from company
   settings (7.9).
-* **Sending and collection stay manual** (7.5 open): nothing in the application emails an invoice or records a
-  payment with a provider. Legacy invoices from the Sales tab are listed with their Sheet status text and are
+* **Sending and collection (round 4)**: *Email invoice* queues the invoice email (PDF attached, pay-online link
+  when the Stripe copy exists) on the Approvals screen; collection runs through Stripe as described under
+  *Collection through Stripe*. Legacy invoices from the Sales tab are listed with their Sheet status text and are
   read-only.
 
 ## Credit memos, payment channel, price exceptions (round 2)
@@ -355,15 +384,90 @@ Real workbook exports never enter the repository: `*.xlsx` is git-ignored and th
 by `TLM_WORKBOOK_PATH`. The report of the dry run against the production data is in
 `tools/import/dry-run-report-2026-10-28.md`.
 
-## Payer assignment and payment setup (Accounting)
-Shared AP details are a **destination for invoices**, never payer authority. On the account workspace:
+## Payer assignment and the bank on file (Accounting; round 4)
+Shared AP details are a **destination for invoices**, never payer authority. On the account workspace, the
+*Payments (Stripe)* card:
 1. *Assign payer authority* — pick the contact who is authorized to set up payment for this location. A
    contact shared with another location needs the shared-payer note (why this person may act for both).
-2. *Request ACH setup* becomes available. It records a Stripe customer-association job and one **Payment
-   setup invitation** notice for the manual sender. While Stripe is not connected the job **waits** (visible
-   on Integrations) and resumes by itself after a successful connection check.
-3. *Revoke current payer* when the person changes; a new assignment is a new decision with history.
-Repeating the request reuses the pending invitation — it never creates a second one.
+2. *Send bank setup link* becomes available (the account must pay by Stripe or be about to; the payer needs an
+   email address). It creates the Stripe customer for this one location if needed and queues the setup email on
+   **Approvals**. The Stripe-hosted link is generated only when the email is sent (by Gmail when the send switch
+   is on, otherwise by a person who presses *Generate the bank setup link*, pastes it into their own email and
+   records the send). The payer connects the bank on Stripe's page: instant verification, or two small test
+   deposits that Stripe explains in its own email (required by NACHA). Only the bank name, the last four digits
+   and the verification state come back; the card shows *bank ending ####, verified* and the bank becomes the
+   customer's default in Stripe.
+3. A setup not finished after five days opens a *payment setup unfinished* case; a bank removed on the Stripe
+   side marks the relationship *revoked*, stops new debits and opens a case; sending a new link clears it.
+4. *Card by exception* (Admin): offers a card on the hosted page for an account that is closing out or has
+   trouble paying; a reason is recorded. *Debit on the due date without approving each one* (Admin; the account
+   must pay by Stripe): the account's debits run on their date without an approval item.
+5. *Revoke current payer* when the person changes; a new assignment is a new decision with history.
+Repeating the request reuses the waiting item; it never creates a second one. The old *Request ACH setup*
+(a notice for the manual sender) is retired; the ACH app it mirrored is retired with it.
+
+## Approvals (Admin and Accounting decide; round 4)
+Nothing leaves the company on its own. Every email, Stripe invoice copy, due-date debit and credit note is an
+**item** on the Approvals screen: who asked for it, for which account or invoice, the amount, and for an email
+its full text and attachments. *Approve* runs it: a Stripe effect runs from the queue at once and the result
+shows on the item (*done*, or *failed* with the reason and *Approve again*); an email leaves through Gmail when
+*Send approved emails automatically* is on, otherwise the item moves to *Approved, by hand*, where the person
+sends it from `orders@` or `operations@` themselves and records *Sent* (how, and the evidence) or *Could not
+send*. *Reject* needs a reason and keeps the item on record; items for a voided invoice are *withdrawn*. The
+views: Waiting, Approved by hand, Failed, Done, Rejected and withdrawn. Sales does not see the screen.
+
+Company policy (Owner, Company settings) can approve a kind on creation: *approve emails automatically*,
+*approve Stripe invoice copies automatically*, *approve credit notes automatically*; an item approved by policy
+says so. Debits are approved per account (above), never company-wide. The end-of-day pull sheet is an email
+item from `operations@` to each warehouse that has a send address, created when the company switch is on.
+
+## Collection through Stripe (Accounting; round 4)
+The portal invoice is the official one; Stripe holds a **copy under the same number** so the due-date debit has
+something to collect against and the hosted page shows the right amount. Stripe emails nothing (its invoice,
+receipt and reminder emails are off in the Dashboard).
+* **Mirror**: when *Mirror issued invoices into Stripe* is on, every delivered INV queues its copy for approval
+  (figures are final once every shipment on it is delivered); the invoice page's *Mirror into Stripe now* does
+  it for one. If Stripe refuses the number the copy still goes in under Stripe's own number with the portal
+  number in its memo and a case says so.
+* **Due-date debit**: for an account that pays by Stripe with a verified bank, the debit is queued on the due
+  date, moved to the **next business day** when the due date is a weekend or a Federal Reserve holiday (the
+  invoice shows "debit on"). The item waits for approval unless the account's switch is on. Approving runs the
+  ACH debit against the bank on file; the invoice goes to *processing* (never overdue, never voided, never paid
+  by hand while in flight); Stripe settles it in a few business days and the invoice becomes *paid* with a
+  **receipt email** queued on Approvals.
+* **Returned debit**: the invoice returns to *issued* with the return code (R01 insufficient funds, R29 not
+  authorised, and so on) and a case opens. *Re-present the debit* (reason required) is allowed for insufficient
+  funds only, at most twice; a not-authorised return is never re-presented. Stripe's own retries are off.
+* **Credit memo** on a mirrored invoice queues a Stripe credit note for approval; voiding the invoice voids the
+  copy. **Disputes** and refunds from Stripe open cases; nothing is reversed automatically.
+* **Nightly reconciliation** compares the portal and Stripe (amounts, paid state, missing copies) and opens a
+  case per disagreement; it never changes a portal fact from Stripe's.
+* **Finance** shows debits due and in flight, returned debits, settled payments, the receivables ageing (CSV),
+  payouts matched to invoices with Stripe fees (CSV) and the **monthly export for the CFO**: one plain CSV with
+  a section each for invoices, payments, credit memos and payouts.
+
+## Stripe matching (Admin; round 4, once)
+*Admin → Stripe matching* lists the Stripe customers and invoices made before the portal (the ACH app, the
+Dashboard). *Import from Stripe again* reads them; nothing is written to Stripe until a person decides.
+A customer is suggested when its billing email matches exactly one account's contact (a shared email, or a name
+that two accounts carry, is never suggested); *Confirm* links it to the chosen account, writes the portal's
+identifiers into Stripe and makes its one bank the default. An open Stripe invoice the portal did not create is
+*linked* to the portal invoice it is (if Stripe shows it paid, the portal follows) or *dismissed* with a reason
+(handled in Stripe). Dismissed items stay on record under *All*.
+
+## Email intake (Admin; round 4)
+With *Read the orders@ mailbox* on and Gmail connected, the cron reads new messages every few minutes, keeps
+each with its attachments (PDFs and images; the text is read out of PDFs), and for a **known sender** (an exact
+contact email on one active account, else a company domain used by one account) drafts the order: lines by the
+distributor's item numbers (Martignetti 7799101 to 7799103), by SKU code or by brand and package; the PO
+number; a requested date. The draft is a suggestion with a confidence (high, medium, low) and plain notes on what
+to check; the person checks the pre-filled form and *Convert*s. A pasted email gets the same draft. Nothing is
+ordered and nothing is sent back by itself; an acknowledgement goes through Approvals.
+
+## Reports (Admin, Accounting; round 4)
+*California sales by format*: charged beer on issued INV invoices by month and package with barrels, for the
+state beer return, with the markets to include and a date range; *Sample write-off*: no-charge goods at unit
+cost by month and recipient. Both on screen and as a plain CSV with no formulas.
 
 ## Manual notices (Exceptions: Notices)
 Until D32/IG04 is selected the application never sends anything. Each business event records one notice
@@ -422,6 +526,10 @@ Withdraw a single selection with a reason; the previous effective selection appl
 | provider reference stays `pending` | job not yet run | *Run due jobs now*; read the evidence on the account page |
 | job **failed** after bounded attempts | terminal | an owned `provider_handoff_failed` case names the cause; fix it and request again — the failed job never blocks a fresh request |
 | Webhook returns 400 | signature or `STRIPE_WEBHOOK_SECRET` problem | fix the secret; Stripe retries; duplicates are recorded once |
+| an approval item **failed** | the Stripe call or the send failed; the reason is on the item | fix the cause (a missing bank, a stale key, Gmail not connected) and *Approve again*; nothing ran twice (idempotency keys) |
+| an approval item stays **Running** | a worker died mid-run | after 15 minutes, *release if stuck* puts it back to approved; check Stripe first for the object it may have created |
+| Gmail *Check* fails | the mailbox is not connected, or Google no longer accepts its sign-in | the Owner clicks *Reconnect* on Integrations and signs in to that mailbox, allowing every box Google shows |
+| invoice stuck in **processing** | Stripe has not reported the debit's result | wait for the webhook (four business days for ACH); the nightly reconciliation opens a case if Stripe and the portal disagree |
 | "Email or PIN not recognised" | unknown email, no PIN set, or wrong PIN (deliberately the same message) | check the person row: *no PIN* → set one; otherwise reset the PIN; refusals are audited with the real cause |
 | "Too many attempts" | PIN locked after five failures | wait, or reset the PIN |
 | Google sign-in refused with a reason (only when Google is configured) | not provisioned / disabled / retired address | provision or enable; refusals are audited |
@@ -436,7 +544,10 @@ the application never marks it established from silence.
 minutes. Each run **claims** jobs with a token and a lease; a worker that dies loses its claim after the lease
 and a late completion from the old worker is ignored. Attempts are bounded; the last failure opens an owned
 case. Jobs whose provider is unavailable park in **waiting** and are resumed by a successful connection
-check. Standing-order generation runs on the same tick and stays inert while D13 is unselected.
+check. Standing-order generation runs on the same tick and stays inert while D13 is unselected. Round 4 adds to
+the tick: the orders@ mailbox read (when the switch is on), the end-of-day pull sheet items, the hourly sweeps
+(overdue invoices, receivables ageing, due-date debits, unfinished bank setups) and the nightly Stripe
+reconciliation and payout pull (02:00 UTC).
 
 ## Upgrading a populated database
 Browser route: open `/setup`, read the state card (pending migrations are listed), enter the setup token

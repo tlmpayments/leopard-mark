@@ -93,7 +93,7 @@ export default async function EndOfDayPage({ searchParams }: { searchParams: Sea
           <p className="mt-1">
             {settings.autoSendPullSheets
               ? chosen.pullSheetEmail && chosen.pullSheetSendTime
-                ? `On: ${originLabel(chosen)} is sent its sheet for the next day at ${chosen.pullSheetSendTime} local to ${chosen.pullSheetEmail}. The email transport is not built yet, so each scheduled send waits and opens a case; download the sheet here meanwhile.`
+                ? `On: ${originLabel(chosen)} is sent its sheet for the next day at ${chosen.pullSheetSendTime} local to ${chosen.pullSheetEmail}, from ${settings.operationsSenderAddress}. Each send is an item on the Approvals screen (approved by policy when "approve emails automatically" is on); it leaves through Gmail when automatic sending is on, otherwise a person sends it by hand and records that.`
                 : `On for the company, but ${originLabel(chosen)} has no send address or time yet (Admin: Markets & stock, edit the warehouse).`
               : "Off (Company settings). Nothing is emailed; the warehouse gets the sheet from the Download button."}
           </p>

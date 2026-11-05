@@ -110,8 +110,18 @@ export const STATUS_PRESENTATION: Record<string, { label: string; tone: Tone }> 
   voided: { label: "Voided", tone: "danger" },
   // invoices
   issued: { label: "Issued", tone: "info" },
+  processing: { label: "Processing", tone: "info" },
   paid: { label: "Paid", tone: "good" },
   void: { label: "Void", tone: "danger" },
+  // Round 4: approval items, payments, Stripe matches
+  executing: { label: "Running", tone: "info" },
+  succeeded: { label: "Settled", tone: "good" },
+  disputed: { label: "Disputed", tone: "danger" },
+  refunded: { label: "Refunded", tone: "info" },
+  suggested: { label: "Suggested", tone: "warn" },
+  linked: { label: "Linked", tone: "good" },
+  dismissed: { label: "Dismissed", tone: "neutral" },
+  in_transit: { label: "In transit", tone: "info" },
   // brew batches
   scheduled: { label: "Scheduled", tone: "neutral" },
   in_progress: { label: "In progress", tone: "info" },

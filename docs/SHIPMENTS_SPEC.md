@@ -198,7 +198,29 @@ parent organisations, keg tracking beyond self-distribution balances and the Mic
 optimisation, proof of delivery and photos, Northeast / Texas / Rhode Island go-live, section 11.2 to 11.7, and the
 decision register entries for the October 28 policy answers.
 
-## 10. Out of scope for this release
-Invoice sending and payment collection (7.5 open; Stripe limitations to be worked out), QuickBooks sync, Slack notices,
-route optimisation, host logins, raw materials, prospect routes, TTB removal records, QC holds, Texas (Reyes), Rhode
-Island, nightly push to Google Sheets (export workbook only), section 11.2 to 11.7.
+## 10. Round 4 (November 4 handoff; migration `0010_round4`)
+Decided by the Owner in the Stripe plan (option codes) and the handoff; the account of each is in
+`OPERATOR_GUIDE.md` (Approvals, Collection through Stripe, Stripe matching, Email intake, Reports) and
+`DEPLOYMENT.md` §7, §7a and §16.
+
+| Item | Decision |
+|---|---|
+| Approval rule | Everything that leaves the company (emails, Stripe invoice copies, debits, credit notes) is an approval item; nothing runs on its own unless the Owner turns a company policy on or Admin turns an account's automatic debits on. |
+| C1, C2 | One Stripe customer per licensed location, `tax_exempt`; the ACH app's customers and open invoices are matched by a person (suggested only on a unique billing email); the ACH app is retired. |
+| B1 to B4, B6, B8, B9 | Hosted Checkout setup for ACH with instant verification or microdeposits; Stripe's mandate and microdeposit emails stay on (NACHA); the `balances` permission is requested from now on; only bank name, last four and the verification state are kept; chase after five days; card by exception per account (Admin). |
+| I1, I2, I4, I7, I8 | Delivered INV invoices of Stripe-paying accounts get a Stripe copy under the portal number once figures are final (fallback to Stripe's number with a case); Fintech and check accounts get the portal PDF; credit memos become credit notes; voids void the copy. |
+| P1, P4, P5 | Debit on the due date, the next business day when the due date is a weekend or Federal Reserve holiday; `processing` while in flight; automatic retries off; re-present only for insufficient funds, at most twice, by a person with a reason. |
+| S1 to S4, S6, S8 | Settlement and returns by webhook (observations, never the authority); receipts through Approvals; out-of-band payments told to Stripe; nightly reconciliation opens cases; payouts matched to invoices. |
+| F2 to F4 | Receivables ageing, payouts with fees and the monthly CFO export as plain CSVs. |
+| Emails | Stripe's invoice, receipt and reminder emails off; the portal's own go through Approvals from `orders@` (customers) and `operations@` (warehouses), by Gmail when the send switch is on, else by hand and recorded. |
+| Intake (R2-42) | `orders@` read by the cron when the switch is on; attachments kept; known senders get a draft by item number, SKU code or brand and package; a person converts. |
+| Split shipments (R2-39) | A draft splits into two for the same order; shared reservations; one unconfirmed draft at a time; *Ship the rest*. |
+| EWD coverage | A warning at confirmation when the origin does not deliver that weekday. |
+| Reports | California sales by format (barrels) and the sample write-off at unit cost. |
+| d/b/a | The Leopard Mark Beverage Group. |
+
+## 11. Out of scope for this release
+QuickBooks sync (R1), the Stripe customer portal (F1), customer-initiated partial payments (P7), surcharging, the MA
+depletion allowance (a payable outside Stripe), Slack notices, route optimisation, host logins, raw materials,
+prospect routes, TTB removal records, QC holds, Texas (Reyes), Rhode Island, nightly push to Google Sheets (export
+workbook only), section 11.2 to 11.7.

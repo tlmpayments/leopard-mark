@@ -4,6 +4,7 @@ import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { getDb } from "@/lib/db/client";
 import { listSamples } from "@/lib/domain/samples/service";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /**
  * Phase 1 sample withdrawals, kept readable as history (R2-27). New samples are orders with "no charge" to the
@@ -33,7 +34,7 @@ export default async function SamplesPage({ searchParams }: { searchParams: Sear
         widths={[LIST_WIDTHS.date, "12rem", undefined, LIST_WIDTHS.qty, LIST_WIDTHS.status, "20rem"]}
         align={["left", "left", "left", "right", "left", "left"]}
         empty="No Phase 1 sample withdrawals were recorded."
-        rows={samples.map(({ s, sku, rep }) => [fmtDay(s.withdrawnOn), rep.displayName, `${sku.brand} ${sku.name}`, String(s.qty), <StatusBadge key="s" value={s.state} />, [s.notes, s.correctedOfId ? "correction" : null].filter(Boolean).join("; ") || "—"])}
+        rows={samples.map(({ s, sku, rep }) => [fmtDay(s.withdrawnOn), rep.displayName, skuLabel(sku), String(s.qty), <StatusBadge key="s" value={s.state} />, [s.notes, s.correctedOfId ? "correction" : null].filter(Boolean).join("; ") || "—"])}
       />
     </Page>
   );

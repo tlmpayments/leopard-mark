@@ -56,6 +56,22 @@ goes through a server action; `next.config.ts` raises `experimental.serverAction
 it. Real workbook exports never enter the repository (`*.xlsx` is git-ignored; the test that reads one is gated
 by `TLM_WORKBOOK_PATH`).
 
+## Round 4 (November 4): Stripe as the money ledger, behind an approval queue
+
+Everything that would leave the company, an email, a Stripe invoice copy, a due-date debit, a credit note, is an
+item on the **Approvals** screen that Admin or Accounting decides; nothing runs on its own unless the Owner turns
+a company policy on. Stripe holds a copy of each Stripe-paying account's invoice under the portal's own number,
+debits it off-session on the due date (the next business day when the due date is a weekend or holiday), reports
+settlement and returns by webhook, and itemises payouts; the portal invoice stays the official document, keeps
+the money facts (payments, the `processing` state, returns with their NACHA codes, out-of-band payments) and
+reconciles nightly. Bank setup is Stripe-hosted (only the bank name, last four and verification state come back);
+the ACH app's customers and hand-made invoices are matched once on the **Stripe matching** screen. Gmail reads
+`orders@` into intake with attachments and a pre-filled draft for known senders, and carries approved sends from
+`orders@` and `operations@`. Also: split shipments, the delivery-day coverage warning, the California sales by
+format and sample write-off reports, Finance (ageing, payouts, the CFO's monthly CSV). The plan is the Claude doc
+*Stripe plan for Leopard Mark Ops*; the rules are in `docs/OPERATOR_GUIDE.md`, the keys, Dashboard settings and
+Sandbox proof in `docs/DEPLOYMENT.md` sections 7, 7a and 16.
+
 ## Local Demo
 
 Zero setup — no Google, no Neon/Postgres, no Stripe or other credentials:
@@ -79,8 +95,11 @@ scope still apply — or try the real sign-in form with any seeded email and the
 The demo warehouses carry no origin codes: give one to an origin in the origins editor under *Markets & stock*
 (for example `EBB` with lot facility code `01`) before confirming a shipment, which is what browser journey 12 does.
 
-What it is not: nothing simulates a provider. Stripe, Google, OptimoRoute, Gmail, Slack, QBO all show their real
-IMPLEMENTED / NOT CONNECTED or NOT IMPLEMENTED state and every capability gate stays unproven. Demo mode is
+What it is not: nothing pretends a provider succeeded. Google, OptimoRoute, Gmail, Slack, QBO all show their real
+IMPLEMENTED / NOT CONNECTED or NOT IMPLEMENTED state and every capability gate stays unproven. The one stand-in
+is Stripe: `npm run demo` sets `FV_STRIPE_FAKE=true`, an in-memory gateway that behaves like Stripe's API and
+webhooks so the collection flow (bank setup, invoice copies, debits, settlement, payouts, matching) can be walked
+end to end; the Integrations page says so, and the stand-in is refused on any deployment. Demo mode is
 impossible under a production build, on Vercel (production or preview) or with `FV_ENV=production` (guards in
 `src/lib/env.ts`, tested in `tests/scenarios/demo-mode.test.ts`). Plain `npm run dev` with no `DATABASE_URL`
 also lands in demo mode; setting `DATABASE_URL` switches back to the real Postgres path.
@@ -114,7 +133,7 @@ npm run check                                     # typecheck + lint + the PGlit
 npm test                                          # 137 passed, 12 skipped (16 test files passed, the 3 real-Postgres files skipped; the skips are that suite and the real-workbook import, see below)
 TEST_DATABASE_URL=postgres://… npm run test:pg    # 11 real-Postgres tests: races (AC07/08/10/11/12/22/23/28), setup page, populated-database upgrade (AC37)
 TLM_WORKBOOK_PATH=/path/to/export.xlsx npm test   # also runs the import against a real workbook export (owner's machine only; the file never enters the repo)
-npm run demo && npm run test:ui                   # 13 role browser journeys with screenshots + timings (tests/ui/README.md)
+npm run demo && npm run test:ui                   # 24 role browser journeys with screenshots + timings (tests/ui/README.md; WARM_UP=1 on a small machine)
 npm run test:ui:golive                            # go-live path on a production build against an empty Postgres (/setup → Owner → sign-in)
 DATABASE_URL=postgres://… npm run db:preflight    # read-only check of a populated database before applying migration 0002
 ```
@@ -132,7 +151,7 @@ PGlite suite takes a couple of minutes because the document tests render real PD
 | `npm run check` | typecheck + lint + tests + production build |
 | `npm test` | 137 business-scenario tests on PGlite (AT01–AT13, AT61/AT62, AT79/AT80, REV-01–18 regressions, environment guards, PIN sign-in, presentation/timezone/error masking, shipments acceptance 1–9, document rendering and routes, workbook import); 12 tests are skipped without `TEST_DATABASE_URL` / `TLM_WORKBOOK_PATH` |
 | `npm run test:pg` | real-Postgres concurrency, setup-page and upgrade tests (`TEST_DATABASE_URL`) |
-| `npm run test:ui` | 13 role browser journeys against the running demo (`SHOTS_DIR` for screenshots) |
+| `npm run test:ui` | 24 role browser journeys against the running demo (`SHOTS_DIR` for screenshots, `JOURNEYS=19,20` to pick, `WARM_UP=1` to serve every route once first) |
 | `npm run test:ui:golive` | `/setup` → migrations → first Owner → sign-in on a production build (`BASE_URL`, `SETUP_TOKEN`) |
 | `npm run db:generate` | generate a new SQL migration after editing `src/lib/db/schema/*` |
 | `npm run db:migrate` | apply migrations to `DATABASE_URL` (forward-only; 0002 runs a preflight and aborts with a diagnostic on invalid data) |

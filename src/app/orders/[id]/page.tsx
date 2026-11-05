@@ -22,6 +22,7 @@ import { activityTimeline } from "@/lib/domain/timeline/service";
 import { releaseReservationAction, requeueReservationAction } from "../../admin/actions";
 import { TYPE_LABEL, shipmentNumber, todayIso } from "../../shipments/labels";
 import { amendQtyAction, cancelOrderAction, confirmOrderShipmentAction, createShipmentForOrderAction, flagAbnormalAction, reassignWarehouseAction, releaseHoldAction, requestChangeAction } from "../actions";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /** One plain sentence about what the order is doing now and who acts next (UX-04). */
 function orderStatusLine(o: NonNullable<Awaited<ReturnType<typeof getOrder>>>, active: { number: string | null; status: string; scheduledDate: string | null } | null, readinessSummary: string, openCases: Array<{ category: string; ownerRole: string | null }>) {
@@ -74,8 +75,16 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const warehouse = o.order.warehouseId ? warehouses.find((w) => w.id === o.order.warehouseId) ?? (await d.select().from(schema.warehouse).where(eq(schema.warehouse.id, o.order.warehouseId)))[0] : null;
   const timeline = await activityTimeline(d, actor, { orderId: id, cursor: param(sp, "before"), kinds: param(sp, "kind") ? [param(sp, "kind") as never] : undefined, limit: 25 });
   const open = o.order.demandState === "submitted" || o.order.demandState === "partially_fulfilled" || o.order.demandState === "held";
-  const activeRow = o.shipments.find((s) => s.status !== "voided") ?? null;
+  // Round 4 (split shipments): an order can ship in parts. The card and the actions follow the part that needs attention:
+  // the open draft, else the part still out for delivery, else the latest. A draft in play blocks a further draft;
+  // otherwise what is reserved and unshipped can go on one ("Ship the rest").
+  const live = o.shipments.filter((s) => s.status !== "voided");
+  const draftRow = live.find((s) => s.status === "draft") ?? null;
+  const activeRow = draftRow ?? live.find((s) => s.status !== "delivered") ?? live[0] ?? null;
   const active = activeRow ? await getShipment(d, activeRow.id) : null;
+  const printable = live.find((s) => s.status !== "draft") ?? null; // the numbered part whose BOL and picking ticket print from here
+  const draftInPlay = draftRow !== null;
+  const unshipped = o.lines.reduce((sum, l) => sum + l.unshippedQty, 0);
   const status = orderStatusLine(o, activeRow, readiness.summary, openCases);
   const today = todayIso(tz);
   // Round 3: the origin's cutoff sets the earliest ship date and when changes close (changes later are exceptions).
@@ -85,7 +94,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const shipDate = activeRow?.scheduledDate ?? o.order.requestedDate;
   const deadline = cutoff && shipDate && activeRow?.status !== "delivered" ? changeDeadline(cutoff, shipDate) : null;
   const decidedBy = o.order.shortfallDecidedByEmployeeId ? (await d.select({ name: schema.employee.displayName }).from(schema.employee).where(eq(schema.employee.id, o.order.shortfallDecidedByEmployeeId)))[0]?.name ?? null : null;
-  const skuName = new Map(o.lines.map((l) => [l.skuId, `${l.sku.brand} ${l.sku.name}`]));
+  const skuName = new Map(o.lines.map((l) => [l.skuId, skuLabel(l.sku)]));
 
   const linesTab = (
     <>
@@ -302,12 +311,12 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
               </form>
             </ActionPanel>
           ) : null}
-          {active && activeRow && activeRow.status !== "draft" && activeRow.status !== "voided" ? (
+          {printable ? (
             <>
-              <Button href={`/shipments/${active.shipment.id}/documents/bol`} variant="secondary">
-                BOL PDF
+              <Button href={`/shipments/${printable.id}/documents/bol`} variant="secondary">
+                BOL PDF{live.length > 1 ? ` (${shipmentNumber(printable)})` : ""}
               </Button>
-              <Button href={`/shipments/${active.shipment.id}/documents/picking_ticket`} variant="secondary">
+              <Button href={`/shipments/${printable.id}/documents/picking_ticket`} variant="secondary">
                 Picking ticket
               </Button>
             </>
@@ -323,11 +332,11 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
               </form>
             </ActionPanel>
           ) : null}
-          {open && o.order.demandState !== "held" && !activeRow && canManageShipment ? (
+          {open && o.order.demandState !== "held" && !draftInPlay && (!activeRow || unshipped > 0) && canManageShipment ? (
             <form action={createShipmentForOrderAction}>
               <input type="hidden" name="orderId" value={id} />
               <Button small variant="secondary">
-                Create shipment
+                {activeRow ? `Ship the rest (${unshipped})` : "Create shipment"}
               </Button>
             </form>
           ) : null}
@@ -478,13 +487,14 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
                 align={["left", "left", "right", "right"]}
                 empty="No lines."
                 rows={active.lines.map(({ line: l, sku, pos }) => [
-                  l.skuId ? skuName.get(l.skuId) ?? (sku ? `${sku.brand} ${sku.name}` : "—") : pos?.name ?? "—",
+                  l.skuId ? skuName.get(l.skuId) ?? (sku ? skuLabel(sku) : "—") : pos?.name ?? "—",
                   l.lotCode ? <Code key="c">{l.lotCode}</Code> : <span key="c" className="text-ink-3">choose on the shipment</span>,
                   String(l.qty),
                   l.deliveredQty !== null ? String(l.deliveredQty) : "—",
                 ])}
               />
               {activeRow.status === "draft" ? <p className="mt-2 text-xs text-ink-3">Lots were prefilled from what is on hand at the origin, oldest first; change them on the shipment before confirming.</p> : null}
+              {live.length > 1 ? <p className="mt-2 text-xs text-ink-3">This order ships in {live.length} parts; the Shipments tab lists each with its own number, BOL and invoice.</p> : null}
             </>
           ) : (
             <Empty>{open ? "No shipment in play. Create one from what is reserved." : "No shipment."}</Empty>

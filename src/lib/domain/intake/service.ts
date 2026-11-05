@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit/record";
 import type { Actor } from "@/lib/authz/actor";
 import { authorize } from "@/lib/authz/authorize";
@@ -7,19 +7,22 @@ import { withTx, type DbOrTx } from "@/lib/db/types";
 import { BusinessError, StaleStateError } from "@/lib/errors";
 import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import { submitOrder, type OrderLineInput } from "../orders/service";
+import { draftFromMessage } from "./parse";
 
 /**
  * Email order intake (brief §12, R14 [R], D09 [D]).
  *
  * Technical support only: the source message is preserved verbatim and an
  * Admin decides whether it is identifiable demand (location + SKU + qty) or
- * an incomplete inquiry. No parsing rule, duplicate-cancellation rule or
- * abnormal threshold is invented. Conversion goes through the one downstream
- * order process (O12) and is atomic with the source-state change: one intake
- * yields at most one order, enforced by a database unique index on the
- * order's intake reference and by claiming the intake row under lock
- * (REV-15, AC23). A converted intake never regresses through a stale form;
- * undoing a conversion is an explicit, audited act (cancel the order).
+ * an incomplete inquiry. No duplicate-cancellation rule or abnormal threshold
+ * is invented. Round 4 adds a pre-filled DRAFT for a known sender (the parser
+ * in ./parse): a suggestion the person checks, never demand on its own.
+ * Conversion goes through the one downstream order process (O12) and is
+ * atomic with the source-state change: one intake yields at most one order,
+ * enforced by a database unique index on the order's intake reference and by
+ * claiming the intake row under lock (REV-15, AC23). A converted intake never
+ * regresses through a stale form; undoing a conversion is an explicit, audited
+ * act (cancel the order).
  */
 
 export async function recordIntakeRequest(
@@ -30,14 +33,21 @@ export async function recordIntakeRequest(
   authorize(actor, "intake.handle", { marketId: input.marketId ?? null });
   if (!input.body.trim()) throw new BusinessError("Message body is required", { field: "body" });
   return withTx(db, async (tx) => {
+    const fromEmail = input.fromEmail?.trim().toLowerCase() || null;
+    // The same draft a mailbox message gets: who, what, PO and date, for the person to check.
+    const draft = await draftFromMessage(tx, { fromEmail, subject: input.subject ?? null, text: input.body, attachmentTexts: [], receivedAt: new Date() });
+    const [known] = draft.locationId && !input.marketId ? await tx.select({ marketId: schema.customerLocation.marketId }).from(schema.customerLocation).where(eq(schema.customerLocation.id, draft.locationId)) : [];
     const [row] = await tx
       .insert(schema.orderIntakeRequest)
       .values({
-        fromEmail: input.fromEmail?.trim().toLowerCase() || null,
+        fromEmail,
         subject: input.subject?.trim() || null,
         body: input.body,
         sourceReference: input.sourceReference ?? null,
-        marketId: input.marketId ?? null,
+        marketId: input.marketId ?? known?.marketId ?? null,
+        locationId: draft.locationId,
+        parsed: draft as unknown as Record<string, unknown>,
+        parseNote: draft.notes.join(" ") || null,
       })
       .returning();
     await recordAudit(tx, actor, { action: "intake.record", subjectType: "order_intake_request", subjectId: row.id, current: { fromEmail: row.fromEmail, subject: row.subject } });
@@ -147,4 +157,13 @@ export async function listOpenIntake(db: DbOrTx) {
     .from(schema.orderIntakeRequest)
     .where(inArray(schema.orderIntakeRequest.state, ["received", "incomplete"]))
     .orderBy(desc(schema.orderIntakeRequest.receivedAt));
+}
+
+/** Attachments kept with the open intake requests (Round 4), without their bytes. */
+export async function attachmentsForIntake(db: DbOrTx, intakeIds: string[]) {
+  if (!intakeIds.length) return [];
+  return db
+    .select({ id: schema.intakeAttachment.id, intakeId: schema.intakeAttachment.intakeId, filename: schema.intakeAttachment.filename, mime: schema.intakeAttachment.mime, sizeBytes: schema.intakeAttachment.sizeBytes, textExtract: schema.intakeAttachment.textExtract, kept: sql<boolean>`${schema.intakeAttachment.data} is not null` })
+    .from(schema.intakeAttachment)
+    .where(inArray(schema.intakeAttachment.intakeId, intakeIds));
 }

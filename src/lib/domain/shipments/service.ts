@@ -13,17 +13,19 @@ import { marketScopeFor, type Actor } from "@/lib/authz/actor";
 import * as schema from "@/lib/db/schema";
 import { type DbOrTx, type Tx, withTx } from "@/lib/db/types";
 import { BusinessError, StaleStateError } from "@/lib/errors";
-import { openException } from "@/lib/exceptions/service";
+import { openException, resolveByDedupeKeys } from "@/lib/exceptions/service";
 import { availability, commitReservationsForShipmentLines, fulfilReservationsForOrderLines, lockPosition, uncommitReservationsForOrderLines } from "@/lib/domain/allocation/service";
 import { currentPrice, priceTierForKind } from "@/lib/domain/catalog/service";
 import { originAddressLines } from "@/lib/domain/origins/service";
 import { yymmdd } from "@/lib/domain/lots/service";
+import { weekdayOf } from "@/lib/domain/cutoff/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { createDraftInvoiceForShipment, issueInvoice, issueInvoiceForShipment, palletsForLines, recomputeIssuedInvoice, voidDraftInvoicesForShipment } from "@/lib/domain/invoices/service";
 import { cancelUndeliveredDemand } from "@/lib/domain/orders/service";
 import { recordKegEventForShipment } from "@/lib/domain/kegs/service";
 import { renderPdf } from "@/lib/documents/render";
 import type { ShipmentSnapshot, SnapshotLine } from "@/lib/documents/types";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export type Shipment = typeof schema.shipment.$inferSelect;
 export type ShipmentLine = typeof schema.shipmentLine.$inferSelect;
@@ -477,6 +479,36 @@ async function confirmationWarnings(tx: Tx, actor: Actor, row: Shipment) {
 }
 
 /**
+ * Round 4: a warning when the origin cannot cover the scheduled day. Express Wine Delivery delivers Tuesday and
+ * Thursday, the SoCal driver Wednesday and Thursday; a shipment scheduled on another weekday from an origin with
+ * delivery days set opens a `delivery_day_uncovered` case. Never a block: the office may have arranged it.
+ */
+export function deliveryDayCovered(origin: { deliveryDays: string[] | null }, scheduledDate: string): boolean {
+  if (!origin.deliveryDays?.length) return true;
+  return origin.deliveryDays.includes(weekdayOf(scheduledDate));
+}
+
+async function deliveryDayWarning(tx: Tx, actor: Actor, row: Shipment, origin: typeof schema.warehouse.$inferSelect) {
+  if (row.type === "T" || !row.scheduledDate || row.pickup) return;
+  if (deliveryDayCovered(origin, row.scheduledDate)) {
+    await resolveByDedupeKeys(tx, actor, [`delivery_day_uncovered:${row.id}`], "Scheduled on a delivery day");
+    return;
+  }
+  const dest = row.destinationLocationId ? await loadDestination(tx, row.destinationLocationId) : null;
+  await openException(tx, actor, {
+    category: "delivery_day_uncovered",
+    title: `${row.number ?? "Shipment"}${dest ? ` to ${dest.tradeName}` : ""}: ${weekdayOf(row.scheduledDate)} ${row.scheduledDate} is not a day ${origin.originCode ?? origin.name} delivers`,
+    cause: `${origin.name} delivers ${origin.deliveryDays!.join(", ")}. This is a warning; the shipment stands as scheduled.`,
+    marketId: row.marketId,
+    locationId: row.destinationLocationId,
+    ownerRole: "admin",
+    nextAction: "Move the scheduled date to a delivery day, or confirm with the warehouse that it can cover this one.",
+    dedupeKey: `delivery_day_uncovered:${row.id}`,
+    links: [{ subjectType: "shipment", subjectId: row.id }],
+  });
+}
+
+/**
  * Confirmation assigns the number and, for a draft created from an order, takes the scheduled date the office sets
  * now (R2-3); the order's reservations move to route-committed so the shipment's own allocation is the one counted.
  */
@@ -504,6 +536,7 @@ export async function confirmShipment(db: DbOrTx, actor: Actor, shipmentId: stri
     await allocate(tx, actor, row);
     await capturePrices(tx, row);
     await confirmationWarnings(tx, actor, row);
+    await deliveryDayWarning(tx, actor, row, origin);
     for (const l of lines) {
       if (l.lotId && l.lotReason) {
         const [lot] = await tx.select().from(schema.lot).where(eq(schema.lot.id, l.lotId));
@@ -1033,7 +1066,7 @@ export async function buildShipmentSnapshot(db: DbOrTx, shipmentId: string, kind
     return {
       lineNo: l.lineNo,
       skuCode: sku?.code ?? pos?.code ?? null,
-      description: sku ? `${sku.brand} ${sku.name}` : (pos?.name ?? "—"),
+      description: sku ? skuLabel(sku) : (pos?.name ?? "—"),
       packageLabel: sku?.sellingUnit ?? "each",
       upcCase: sku?.upcCase ?? null,
       lotCode: l.lotCode,
@@ -1201,7 +1234,7 @@ export async function pullSheet(db: DbOrTx, actor: Actor, originWarehouseId: str
   const agg = new Map<string, { skuCode: string; description: string; lotCode: string | null; qty: number }>();
   for (const { l, sku, pos } of lines) {
     const key = `${sku?.code ?? pos?.code ?? "?"}|${l.lotCode ?? ""}`;
-    const e = agg.get(key) ?? { skuCode: sku?.code ?? pos?.code ?? "?", description: sku ? `${sku.brand} ${sku.name}` : (pos?.name ?? "—"), lotCode: l.lotCode, qty: 0 };
+    const e = agg.get(key) ?? { skuCode: sku?.code ?? pos?.code ?? "?", description: sku ? skuLabel(sku) : (pos?.name ?? "—"), lotCode: l.lotCode, qty: 0 };
     e.qty += l.qty;
     agg.set(key, e);
   }

@@ -20,11 +20,18 @@ lists every problem (`configurationProblems()`). Required for a production deplo
 
 ```
 FV_ENV=production  APP_BASE_URL=https://<domain>  DATABASE_URL=…  SESSION_SECRET=…  CRON_SECRET=…
-[GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  GOOGLE_ALLOWED_HD=<workspace domain>]   # optional: adds "Continue with Google"
+[GOOGLE_CLIENT_ID=…  GOOGLE_CLIENT_SECRET=…  GOOGLE_ALLOWED_HD=<workspace domain>]   # "Continue with Google", and the client Gmail mailboxes connect through (section 7a)
+[STRIPE_SECRET_KEY=rk_live_…  STRIPE_WEBHOOK_SECRET=whsec_…]                           # round 4: collection through Stripe (section 7)
 ```
 Employees sign in with their **company email + PIN**; no identity provider is required for live use.
-Do **not** set `DEV_AUTH_BYPASS`, `FV_DEMO` or a `TEST_DATABASE_URL` on any Vercel environment. Preview
-deployments use `FV_ENV=development` or `test` with their own database; they still refuse fixture access.
+Do **not** set `DEV_AUTH_BYPASS`, `FV_DEMO`, `FV_STRIPE_FAKE` or a `TEST_DATABASE_URL` on any Vercel environment.
+Preview deployments use `FV_ENV=development` or `test`; they still refuse fixture access. **Each preview gets its own
+Neon branch** (the Neon integration's *Create database branch for deployment: Preview*), copied from production when
+the preview is built, so nothing a preview does reaches the production database. A preview carries only the Stripe
+**test** keys (`rk_test_…` and the Sandbox webhook secret, Preview environment only), never a live key; the Google
+client is Production only, so a preview reads and sends no mail. Never put a Stripe key on a preview while preview
+branching is off. The in-memory Stripe stand-in (`FV_STRIPE_FAKE=true`, used by `npm run demo`
+and the tests) is refused on any deployment by `src/lib/integrations/stripe/gateway.ts`.
 
 **Request body size**: `next.config.ts` sets `experimental.serverActions.bodySizeLimit` to `8mb` so the
 in-app workbook import can receive the TLM Master File export through a server action (the export is a few
@@ -156,31 +163,96 @@ migrations and redeploy.
    The same flows are proven automatically (`tests/scenarios/pin-signin.test.ts`, `rev-authority.test.ts`,
    `at61-at62-access.test.ts`, browser journeys 7 and 10) — **not yet with real staff accounts**.
 
-## 7. Stripe — test account, payer, setup capability checks and remaining evidence
+## 7. Stripe — the money ledger (round 4): key, webhook, dashboard settings, proof in Sandbox first
 
-1. Set a **test-mode restricted key** (`STRIPE_SECRET_KEY`) and `STRIPE_WEBHOOK_SECRET`; register
-   `https://<domain>/api/webhooks/stripe`.
-2. Integrations → *Check connectivity (binds account + credential)*: records the verified account id and the
-   key fingerprint; waiting `stripe.customer.ensure` jobs resume.
-3. On an account: assign payer authority, request ACH setup, run due jobs; the account page shows the Stripe
-   customer reference bound to that account and mode. Record `STRIPE_CUSTOMER_ASSOCIATION` with evidence.
-4. Create the hosted setup session for the authorized payer and complete it with a test bank account; only
-   masked evidence is retained. Record `STRIPE_HOSTED_SETUP`.
-5. Replay a webhook delivery: recorded once (`provider_event` unique).
-All of 2–5 are **not run** in this revision (no company Stripe account/key was available); the adapter paths
-are covered by tests with placeholder values that never leave the process.
+Round 4 makes Stripe the ledger for money (the plan: *Stripe plan for Leopard Mark Ops*; option codes in
+brackets). Everything that would move money or reach a customer is an item on the **Approvals** screen first;
+nothing runs on its own unless the Owner switches a policy on. The portal invoice stays the official document.
+
+**Restricted key** (`STRIPE_SECRET_KEY`, pasted into Vercel by the Owner, never printed): a *restricted* key, not
+the secret key, with these permissions and no others: Customers (write), Invoices (write), Credit Notes (write),
+Checkout Sessions (write), SetupIntents (read), Mandates (read), PaymentIntents (read), Products and Prices
+(write; `addLines` uses `price_data`), Payouts (read), Balance transactions (read), Financial Connections (read),
+Events (read), Webhook Endpoints (none; registered by hand). The live key only on production; a preview carries only
+the Sandbox key, and only while it has its own Neon branch.
+
+**Webhook** (`STRIPE_WEBHOOK_SECRET`, one per environment): register `https://<domain>/api/webhooks/stripe` for
+`checkout.session.completed`, `setup_intent.succeeded`, `setup_intent.requires_action`, `setup_intent.setup_failed`,
+`payment_method.detached`, `mandate.updated`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`,
+`invoice.voided`, `invoice.marked_uncollectible`, `payment_intent.processing`, `payment_intent.succeeded`,
+`payment_intent.payment_failed`, `charge.dispute.created`, `charge.refunded`, `payout.created`, `payout.paid`,
+`payout.updated` (the set `applyStripeEvent` handles; any other type is recorded and ignored). A webhook is an observation: the portal records it once (`provider_event` unique on the event
+id), applies the consequence (`src/lib/domain/collection/webhooks.ts`) and opens a case when Stripe and the
+portal disagree; it never becomes the authority for an internal fact.
+
+**Stripe Dashboard settings the Owner sets by hand** (the portal cannot set them):
+* Emails: **off** for invoice emails, receipts, reminders and failed-payment notices (the portal sends its own,
+  through Approvals). **On** for the ACH mandate confirmation and the microdeposit instructions: NACHA requires
+  them and Stripe sends them at setup; the portal does not duplicate them.
+* Invoices: automatic collection and Smart Retries **off** (the approval rule: a returned debit is re-presented
+  only by a person, and only for R01/R09 insufficient funds, at most twice). Stripe's own ACH retry on one-off
+  invoices applies to insufficient funds only and is left off for the same reason.
+* Customer portal, Stripe Tax, Connect, Subscriptions, Billing automations: not used, left off.
+* Payouts: the existing schedule; the portal reads payouts and their balance transactions for deposit matching
+  and the CFO export.
+
+**Proof in Sandbox before production** (each step is a screen the Owner can watch; record each gate on
+Integrations with the evidence):
+1. Sandbox restricted key and webhook secret on the **preview** (its own Neon branch) or locally with
+   `FV_ENV=development` and a scratch database (never the production database). Previews sit behind Vercel
+   Authentication, so the Sandbox webhook address carries the project's *Protection Bypass for Automation* secret:
+   `https://<preview alias>/api/webhooks/stripe?x-vercel-protection-bypass=<secret>`. Crons do not run on a preview:
+   Integrations, *Run the hourly checks now* stands in for the hourly sweep. Integrations → *Check connectivity*: the account id
+   and mode are recorded and bound to the key's fingerprint.
+2. An account: assign payer authority; *Send bank setup link*; approve the email on Approvals; generate the link;
+   open it and connect Stripe's test bank (instant verification), then one with microdeposits. The account shows
+   *bank ending ####, verified* and the Stripe customer id; the default payment method is set on the Stripe
+   customer (`STRIPE_HOSTED_SETUP`).
+3. Deliver an order to that account: the INV invoice issues; its Stripe copy waits on Approvals; approve it; the
+   Stripe invoice carries the portal's number and the hosted page shows the right amount (I2).
+4. Move the due date (Sandbox clocks, or an account with Net 0 terms): the due-date debit waits on Approvals;
+   approve it; the invoice goes to *processing*; settle it in Sandbox; the invoice is *paid*, the receipt email
+   waits on Approvals, and Finance shows the payment and (after the payout) the payout.
+5. A returned debit (Sandbox test bank for R01): the invoice returns to *issued* with the return code; the case
+   opens; *Re-present the debit* needs a reason and refuses after two re-presentments and for authorisation codes.
+6. Replay a webhook delivery: recorded once. Remove the key: queued work parks in *waiting*.
+7. C2 matching against the live account, read-only until confirmed: *Import from Stripe again* lists the ACH
+   app's customers and the hand-made invoices; nothing is written to Stripe until a person confirms each one.
+
+## 7a. Gmail (round 4): the orders@ mailbox and approved sends
+
+One mailbox at a time, never a domain-wide key (owner, November 4). The portal's Google client (`GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`; an **Internal** OAuth client in the company's Google Cloud project with the Gmail API
+enabled) is the only credential in Vercel. Its **Authorized redirect URIs** list both
+`https://<domain>/api/auth/google/callback` (staff sign-in) and `https://<domain>/api/integrations/gmail/callback`
+(connecting a mailbox).
+
+On Integrations, the Owner clicks **Connect mailbox** for each company address and signs in to that mailbox at
+Google: `orders@` is asked for `gmail.readonly` (intake) and `gmail.send` (approved customer email), `operations@`
+for `gmail.send` only (approved BOLs). The callback keeps the refresh token Google returns, encrypted (AES-256-GCM,
+keyed from `SESSION_SECRET`; rotating `SESSION_SECRET` means connecting the mailboxes again), only if the mailbox
+that signed in is the one asked for and every needed scope was allowed. **Disconnect** revokes the sign-in with
+Google. A mailbox nobody connected, or one whose sign-in Google refused, makes its mail wait with a case; nothing
+fails silently.
+
+The mailbox and sender addresses are company settings; the switches are off by default: *Read the orders@ mailbox*
+(intake), *Send approved emails automatically* (transport). With the send switch off an approved email is shown on
+Approvals for a person to send by hand and record. Integrations, *Check Gmail* reads the mailbox profile and records
+the result; nothing is sent by a check.
 
 ## 8. Activation boundaries (no live finance)
 
-* No live Stripe key until phase 3 acceptance (SD01–SD10/IG09). The shipments revision adds **invoice
-  documents** (INV / NC numbers, PDFs, a manual *Mark paid* status) but **no debits, credits or collections**:
-  nothing charges a bank account or card, nothing talks to Stripe about an invoice, and the Stripe adapter is
-  unchanged (customer association and hosted setup session only, no Connect, no Stripe Tax, no Subscriptions).
-  Sending and collection of invoices stay manual (owner question 7.5 open).
-* No customer notice, invoice or document is **emailed** by the application (D32/IG04 unselected; owner
-  decision 9.7) — the manual single-sender process records outcomes, and invoice PDFs are downloaded and sent by a
-  person. No Gmail/Slack/OptimoRoute/Google Address/QBO credentials are needed or read for any business effect;
-  setting them changes nothing but the "credentials present" fact.
+* **Round 4 boundary**: with no `STRIPE_SECRET_KEY` nothing charges, mirrors or credits; with no connected
+  mailbox nothing is read from or sent through Gmail. With the keys present, every debit,
+  Stripe invoice copy, credit note and email is an **approval item** a person decides, unless the Owner turns a
+  company policy on (*approve emails / Stripe invoices / credit notes automatically*) or an account's
+  *debit without approving each one* switch on. Stripe's own emails stay off (section 7). No Connect, no Stripe
+  Tax, no Subscriptions, no surcharging, no card unless an account's *card by exception* switch is on (Admin).
+  The ACH app is retired once C2 matching is confirmed (its two routes did only what *Send bank setup link* and
+  *Mirror into Stripe* now do, without approval).
+* Notices other than the Round 4 emails (order received, payment setup invitation) still go through the manual
+  single-sender process. No Slack/OptimoRoute/Google Address/QBO credentials are needed or read for any business
+  effect; setting them changes nothing but the "credentials present" fact.
 * Production-decision selections are Owner-only; test selections never apply under `FV_ENV=production`.
 
 ## 9. Webhook / OAuth callbacks to register
@@ -188,9 +260,11 @@ are covered by tests with placeholder values that never leave the process.
 | Provider | Endpoint | Status in this revision |
 |---|---|---|
 | Google Identity | `GET /api/auth/google/callback` | built |
-| Stripe | `POST /api/webhooks/stripe` | built (signature-verified, idempotent record; consequences deferred to phase 3) |
-| QuickBooks Online | `/api/oauth/qbo/callback` | reserved, not built |
-| OptimoRoute / Gmail / Slack / Google Address | none needed | boundary only |
+| Stripe | `POST /api/webhooks/stripe` | built (signature-verified, idempotent record, consequences applied: round 4) |
+| Stripe hosted setup return | `GET /customer/setup` | built (public page; the bank arrives by webhook, never through the return) |
+| Gmail mailbox connection | `GET /api/integrations/gmail/callback` (add to the Google client's redirect URIs) | built: connect `orders@` (read, send) and `operations@` (send) |
+| QuickBooks Online | `/api/oauth/qbo/callback` | reserved, not built (R1 deferred) |
+| OptimoRoute / Slack / Google Address | none needed | boundary only |
 
 ## 10. Rollback / disconnection (consequential integrations)
 
@@ -292,3 +366,48 @@ those rows rather than duplicating them. After this revision deploys:
 6. **People**: grant the SoCal driver the Driver/Service role; the driver signs in on the phone and sees *My stops*.
 7. **Credit memos** are issued by the Owner or the back office only (`credit.issue` is limited to the admin role).
 8. No step above sends an email or touches Stripe.
+
+## 16. Production follow-through for round 4 (migration `0010_round4`)
+
+Production holds migrations `0000` to `0009` (`0008` distributor details and `0009` origins and settings were applied
+on November 4); `0010_round4` is the one pending, listed on the state card until applied.
+
+1. **Snapshot** the Neon database (branch or restore point).
+2. **Apply `0010_round4`** from `/setup` with the setup token (section 3). It is additive: the
+   `processing` invoice status; new tables `approval_item`, `payment`, `stripe_customer_match`,
+   `stripe_invoice_match`, `stripe_payout`, `stripe_balance_transaction`, `mailbox_sync`, `intake_attachment`;
+   new nullable or defaulted columns on `invoice` (Stripe copy, collection state, debit date, payment intent,
+   paid via and reference, last return), `credit_memo` (Stripe credit note), `customer_location` (card by
+   exception, automatic debits), `payment_relationship` (bank name and last four, payment method, mandate,
+   verification state, setup link sent), `order_intake_request` (mailbox, thread, parsed draft, attachment count)
+   and `company_settings` (the round 4 switches and addresses). Its data statements: the d/b/a becomes
+   *The Leopard Mark Beverage Group* (it was *Brewing Company*); invoices already marked paid get the collection
+   state *paid outside Stripe* so they are never debited; one audit row. Nothing is deleted or renumbered.
+3. **Keys** (Owner, by hand in Vercel, production only): `STRIPE_SECRET_KEY` (restricted, live),
+   `STRIPE_WEBHOOK_SECRET`, plus `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` if not already there; then
+   redeploy. Register the webhook endpoint and set the Dashboard settings in section 7. Previews get only the Stripe
+   test keys. Then, on Integrations, the Owner connects `orders@` and `operations@` (section 7a).
+4. **Integrations**: *Check connectivity* (Stripe) and *Check Gmail*; both record their result. Nothing is
+   created, read or sent by a check.
+5. **Company settings** (Owner): confirm every round 4 switch is **off** (approve emails / Stripe invoices /
+   credit notes automatically; send emails automatically; read the orders@ mailbox) and *Mirror issued invoices
+   into Stripe* is set the way the Owner wants it (on: every delivered INV queues its Stripe copy for approval).
+   Confirm the d/b/a, the customer sender `orders@theleopardmark.com` and the operations sender
+   `operations@theleopardmark.com`.
+6. **Stripe matching** (Admin: *Import from Stripe again*): confirm each ACH-app customer against its account
+   (one Stripe customer per licensed location; a shared billing email is never matched on its own) and link or
+   dismiss each open Stripe invoice the portal did not create (the ACH app's charge-retailer invoices, the
+   hand-made Black Cat invoices). Confirming sets the portal's identifiers in Stripe and the customer's one bank
+   as its default. Until each is confirmed nothing is written to Stripe for it.
+7. **Accounts**: for each account that pays through Stripe, assign payer authority and *Send bank setup link*
+   (approve it on Approvals; with the send switch off, generate the link and send it by hand). Banks linked
+   through the ACH app were set up with the `payment_method` permission only; balance checks need `balances`,
+   which the portal requests from now on, so an account whose balance should be checked reconnects its bank
+   through a new link.
+8. **The Owner's rule stands**: nothing leaves without a person until the Owner changes a switch. The first
+   live debit is approved on Approvals by Accounting with the Owner watching.
+9. **Retire the ACH app** after step 6 (its Stripe key is revoked in the Dashboard; the portal uses its own
+   restricted key).
+10. **Open items** not decided by this round: QuickBooks (R1), the Stripe customer portal (F1), partial payments
+    by the customer (P7), surcharging; the MA depletion allowance is a payable outside Stripe (the distributor
+    invoices the company) and is not modelled here.

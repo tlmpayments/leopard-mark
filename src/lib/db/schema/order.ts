@@ -330,6 +330,13 @@ export const orderIntakeRequest = pgTable("order_intake_request", {
   orderId: uuid("order_id"),
   handledByEmployeeId: uuid("handled_by_employee_id"),
   handledAt: timestamp("handled_at", { withTimezone: true }),
+  /** Round 4: the mailbox the message came from and its Gmail thread, so replies in the same thread are grouped. */
+  mailbox: text("mailbox"),
+  threadId: text("thread_id"),
+  /** The draft the parser pre-filled for a known sender (location, lines by SKU alias, PO number, requested date), for a person to check. */
+  parsed: jsonb("parsed").$type<Record<string, unknown>>(),
+  parseNote: text("parse_note"),
+  attachmentCount: integer("attachment_count").notNull().default(0),
 });
 
 function sqlSubmissionKeyNotNull() {

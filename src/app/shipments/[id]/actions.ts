@@ -15,6 +15,7 @@ import {
   type ShipmentLineInput,
 } from "@/lib/domain/shipments/service";
 import { BusinessError } from "@/lib/errors";
+import { splitDraftShipment } from "@/lib/domain/orders/service";
 import { logisticsPatchFromForm } from "../form";
 
 const ROWS = 40;
@@ -149,5 +150,18 @@ export async function receiveAction(form: FormData) {
     }
     const r = await receiveTransfer(db, actor, id, { receivedOn: str(form, "receivedOn"), lines, note: opt(form, "note") });
     return r.discrepancies.length ? `Received with discrepancies (${r.discrepancies.join("; ")}); an exception is open for Admin` : "Received; stock moved from in transit to on hand";
+  });
+}
+
+/** Round 4, split shipments: move part of this draft onto a second draft for the same order. */
+export async function splitAction(form: FormData) {
+  const id = str(form, "shipmentId");
+  return runAction(`/shipments/${id}`, async ({ db, actor }) => {
+    const moves: Array<{ shipmentLineId: string; qty: number }> = [];
+    for (const [k, v] of form.entries()) {
+      if (k.startsWith("move:") && typeof v === "string" && v.trim() && Number(v) > 0) moves.push({ shipmentLineId: k.slice(5), qty: Number(v) });
+    }
+    const second = await splitDraftShipment(db, actor, id, moves, str(form, "reason"));
+    return { ok: `Split: ${moves.reduce((s, m) => s + m.qty, 0)} unit(s) moved to a second draft; confirm each on its own date`, redirectTo: `/shipments/${second.id}` };
   });
 }

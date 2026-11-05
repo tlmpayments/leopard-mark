@@ -3,9 +3,13 @@ import type { Actor, Role } from "@/lib/authz/actor";
 import * as schema from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 import { recordStockMovement } from "@/lib/domain/allocation/service";
-import { createSku, setMarketPrice } from "@/lib/domain/catalog/service";
+import { approveItem, recordManualSend } from "@/lib/domain/approvals/service";
+import { setupLinkFor } from "@/lib/domain/approvals/email";
+import { createSku, setMarketPrice, upsertSkuAlias } from "@/lib/domain/catalog/service";
+import { requestBankSetupLink, scheduleDueDateDebits } from "@/lib/domain/collection";
 import { createLocation, createRepHomeAddress, recordLicenseDecision, requestBillingEmailChange, samplesRecipients, setLocationStatus } from "@/lib/domain/customers/service";
 import { updateAccountShipping } from "@/lib/domain/customers/shipping";
+import { getInvoice } from "@/lib/domain/invoices/service";
 import { createBatch, recordPackagingReport } from "@/lib/domain/lots/service";
 import { updateMarketBilling } from "@/lib/domain/markets/billing";
 import { createOrigin, updateOrigin } from "@/lib/domain/origins/service";
@@ -14,18 +18,22 @@ import { grantRole, loadActor } from "@/lib/domain/employees/service";
 import { createHold } from "@/lib/domain/holds/service";
 import { recordIntakeRequest } from "@/lib/domain/intake/service";
 import { createMarket } from "@/lib/domain/markets/service";
-import { cancelUndeliveredDemand, requestOrderChange, submitOrder } from "@/lib/domain/orders/service";
+import { cancelUndeliveredDemand, requestOrderChange, splitDraftShipment, submitOrder } from "@/lib/domain/orders/service";
 import { requestPaymentSetup, setPayerContact } from "@/lib/domain/payment/service";
 import { recordNoticeOutcome } from "@/lib/domain/notices/service";
 import { demoModeEnabled, isDeployment } from "@/lib/env";
 import { recordSampleWithdrawal } from "@/lib/domain/samples/service";
 import { createStandingArrangement } from "@/lib/domain/standing/service";
 import { seedGates } from "@/lib/integrations/gates";
-import { seedShipmentDefaults } from "@/lib/domain/settings/service";
+import { seedShipmentDefaults, updateCompanySettings } from "@/lib/domain/settings/service";
+import { checkStripeConnection, receiveStripeWebhook } from "@/lib/integrations/stripe/adapter";
+import { currentFakeStripe } from "@/lib/integrations/stripe/fake";
+import { currentStripeGateway, stripeGatewayMode } from "@/lib/integrations/stripe/gateway";
 import { runDueJobs } from "@/lib/jobs/queue";
 import { seedDecisionRegister } from "@/lib/policy/policy";
 import "@/lib/integrations/stripe/adapter"; // registers job handlers
 import "@/lib/domain/pullsheet/service"; // registers the pull sheet send handler (R2-29)
+import "@/lib/domain/collection"; // Round 4: approval executors and invoice hooks
 import { hashPin } from "@/lib/auth/pin";
 import { DEMO_PIN } from "./constants";
 
@@ -267,7 +275,87 @@ export async function seedDemo(db: Db): Promise<SeedResult> {
     marketId: nc.id,
   });
 
-  // Run queued jobs once so the Stripe association shows its TRUTHFUL state (pending: IMPLEMENTED / NOT CONNECTED).
-  await runDueJobs(db, { limit: 10, workerId: "demo-seed" });
+  // --- Round 4: distributor item numbers (the parser reads them off a PO); a known sender's email arrives with a draft ---
+  await upsertSkuAlias(db, admin, "7799101", can12.id, "Martignetti item number (demo)");
+  await upsertSkuAlias(db, admin, "7799102", canSix.id, "Martignetti item number (demo)");
+  await upsertSkuAlias(db, admin, "7799103", canHalf.id, "Martignetti item number (demo)");
+  await recordIntakeRequest(db, admin, {
+    fromEmail: "alex@dogpatchbottles.demo",
+    subject: "Reorder for next week",
+    body: `Hi team,\n\nPO 4471. Please deliver by ${nextWeekday(5).slice(5).replace("-", "/")}:\n5 cases CAN-12C\n2 cases of the 24 oz Cantinesca\n\nThanks,\nAlex (demo email)`,
+  });
+
+  // --- Round 4: an order that ships in two parts (shared reservations; the second draft waits for the rest) ---
+  const twoPart = await submitOrder(db, admin, { source: "phone", locationId: echo.id, lines: [{ skuId: can12.id, qty: 8 }, { skuId: sun12.id, qty: 4 }], notes: "Buyer wants the Cantinesca first; Sunlight can follow (demo)" });
+  const twoPartDraft = (await getShipment(db, twoPart.shipment!.id))!;
+  const sunLine = twoPartDraft.lines.find(({ line }) => line.skuId === sun12.id)!.line;
+  await splitDraftShipment(db, admin, twoPartDraft.shipment.id, [{ shipmentLineId: sunLine.id, qty: 4 }], "Sunlight follows on the next route day (demo)");
+  await confirmShipment(db, admin, twoPartDraft.shipment.id, { scheduledDate: nextWeekday(1) });
+
+  // --- Round 4: collection through Stripe. Only with the in-memory stand-in (scripts/demo.mjs sets FV_STRIPE_FAKE=true);
+  // nothing here reaches a real Stripe account, and the seed is skipped entirely when no gateway is installed. ---
+  if (stripeGatewayMode() === "fake") {
+    currentStripeGateway(); // installs the fake
+    const fake = currentFakeStripe()!;
+    const pump = async () => {
+      for (const e of fake.drainEvents()) await receiveStripeWebhook(db, JSON.stringify(e), "fake");
+    };
+    const connected = await checkStripeConnection(db);
+    if (connected.ok) {
+      await updateCompanySettings(db, owner, { stripeMirrorInvoices: true });
+      // Dogpatch pays through Stripe: Accounting names the payer, the setup email is approved and sent by hand, the payer
+      // connects a bank on Stripe's page (the fake stands in), and the bank becomes the default on file.
+      const dpAp = (await db.select().from(schema.locationContact).where(eq(schema.locationContact.locationId, dogpatch.id))).find((c) => c.contactRole === "ap");
+      if (dpAp) {
+        await setPayerContact(db, accounting, dogpatch.id, dpAp.contactId);
+        const setup = await requestBankSetupLink(db, accounting, dogpatch.id);
+        await setupLinkFor(db, setup.item);
+        await recordManualSend(db, accounting, setup.item.id, { outcome: "sent", sentVia: "Gmail from orders@ (by hand)", evidence: "demo: sent 2026-10-20 09:40" });
+        const session = [...fake.sessions.values()].at(-1);
+        if (session) fake.completeSetup(session.id, { bankName: "Demo Community Bank", last4: "4242", instant: true });
+        await pump();
+        // A delivered order from late September: its Stripe copy was approved, the due date passed, the debit was approved
+        // and settled, so the invoice is paid and the receipt email waits in Approvals.
+        const paidOrder = await submitOrder(db, admin, { source: "phone", locationId: dogpatch.id, lines: [{ skuId: can12.id, qty: 5 }], notes: "September order (demo)" });
+        const paidShipment = await confirmShipment(db, admin, paidOrder.shipment!.id, { scheduledDate: "2026-09-24" });
+        await deliverShipment(db, admin, paidShipment.id, { actualDate: "2026-09-24" });
+        const paidInvoiceId = (await getShipment(db, paidShipment.id))!.invoices[0]?.id;
+        if (paidInvoiceId) {
+          const mirror = (await db.select().from(schema.approvalItem).where(eq(schema.approvalItem.subjectId, paidInvoiceId))).find((i) => i.kind === "stripe_invoice");
+          if (mirror) {
+            await approveItem(db, accounting, mirror.id, "demo");
+            await runDueJobs(db, { limit: 10, workerId: "demo-seed" });
+            await pump();
+            await scheduleDueDateDebits(db, new Date());
+            const debit = (await db.select().from(schema.approvalItem).where(eq(schema.approvalItem.subjectId, paidInvoiceId))).find((i) => i.kind === "stripe_debit");
+            if (debit) {
+              await approveItem(db, accounting, debit.id, "demo");
+              await runDueJobs(db, { limit: 10, workerId: "demo-seed" });
+              await pump();
+              const inv = (await getInvoice(db, paidInvoiceId))?.invoice;
+              if (inv?.paymentIntentId) {
+                const bt = fake.settleDebit(inv.paymentIntentId);
+                fake.addPayout({ arrivalDate: "2026-10-30", btIds: [bt.id] }); // the net lands in the bank two business days later
+              }
+              await pump();
+            }
+          }
+        }
+      }
+      // Silver Lake (will-call, pays through Stripe): a delivered pickup whose Stripe copy is waiting for approval.
+      const slAp = (await db.select().from(schema.locationContact).where(eq(schema.locationContact.locationId, silverlake.id))).find((c) => c.contactRole === "buyer");
+      if (slAp) await setPayerContact(db, accounting, silverlake.id, slAp.contactId);
+      const slOrder = await submitOrder(db, admin, { source: "phone", locationId: silverlake.id, lines: [{ skuId: can12.id, qty: 4 }, { skuId: canSix.id, qty: 1 }], notes: "Picked up Friday (demo)" });
+      const slShipment = await confirmShipment(db, admin, slOrder.shipment!.id, { scheduledDate: "2026-10-30" });
+      await deliverShipment(db, admin, slShipment.id, { actualDate: "2026-10-30" });
+      // Legacy Stripe objects that predate the portal, waiting on the matching screen (C2): a customer with a bank and an open invoice.
+      const legacy = fake.addLegacyCustomer({ name: "Marina Wine and Beer", email: "pat@marinawb.demo", bank: { bankName: "Demo Community Bank", last4: "7781" }, createdDaysAgo: 400 });
+      fake.addLegacyInvoice({ customer: legacy.id, number: "BC-0192", total: 41800, status: "open", dueDate: nextWeekday(6), createdDaysAgo: 12 });
+      fake.addLegacyCustomer({ name: "Golden Gate Grill", email: "ap@gggrill.demo", bank: null, createdDaysAgo: 300 });
+    }
+  }
+
+  // Run queued jobs once so every provider-facing step shows its TRUTHFUL state (with no gateway: pending, NOT CONNECTED).
+  await runDueJobs(db, { limit: 20, workerId: "demo-seed" });
   return { seeded: true, locations: [mission.id, gg1.id, gg2.id, dogpatch.id, marina.id, sunset.id, echo.id, silverlake.id, matagrano.id] };
 }

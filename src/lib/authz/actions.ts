@@ -62,13 +62,16 @@ export const ACTIONS = {
   // --- customer notices (manual single-sender process; D32/IG04 unselected) ---
   "notice.view": ["admin", "accounting", "sales"],
   "notice.record_outcome": ["admin", "accounting"],
+  // --- the approval queue (Round 4): everything that leaves the company waits for a person ---
+  "approval.view": ["admin", "accounting"],
+  "approval.decide": ["admin", "accounting"],
   // --- integrations ---
   "integration.view": ["admin", "accounting"],
   "integration.manage": ["admin"],
   "gate.record": ["admin", "accounting"],
   // --- audit / reporting ---
   "audit.view": ["admin", "accounting"],
-  "report.view": ["admin", "accounting", "sales"],
+  "report.view": ["admin", "accounting"], // Round 4: the Reports pages (CA sales by format, sample write-off) are office and CFO reports
   // --- field (phase 2) ---
   "field.view_assigned": ["driver_service", "admin"],
   // --- shipments, lots, documents, invoices, kegs, counts (docs/SHIPMENTS_SPEC.md §3; "back office" = admin, 9.4) ---

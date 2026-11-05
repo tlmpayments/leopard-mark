@@ -16,6 +16,7 @@ import { primaryWarehouse } from "../markets/service";
 import { originLabel } from "../origins/service";
 import { createNoticeIntent, withdrawPendingNotices } from "../notices/service";
 import { createShipment, voidShipment } from "../shipments/service";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /**
  * Order intake (brief §12–§15, O12–O18; round 2 R2-1 to R2-7, R2-10, R2-11, R2-27).
@@ -133,7 +134,7 @@ export async function previewOrderShortfall(db: DbOrTx, actor: Actor, input: { l
   const named = [];
   for (const [skuId, qty] of merged) {
     const [sku] = await db.select({ name: schema.sku.name, brand: schema.sku.brand }).from(schema.sku).where(eq(schema.sku.id, skuId));
-    named.push({ skuId, qty, skuName: sku ? `${sku.brand} ${sku.name}` : skuId });
+    named.push({ skuId, qty, skuName: sku ? skuLabel(sku) : skuId });
   }
   return { warehouseId, originName: originLabel(origin), lines: await shortfallFor(db, warehouseId, named) };
 }
@@ -389,7 +390,7 @@ export async function submitOrder(db: DbOrTx, actor: Actor, input: SubmitOrderIn
 
     // The draft shipment (R2-1): what was reserved ships from the origin; a held order waits (R2-5).
     let shipment: typeof schema.shipment.$inferSelect | null = null;
-    if (!held && input.createShipment !== false) shipment = await createDraftShipmentForOrder(tx, actor, ord, lines, { warehouseId, noCharge, pickup, poNumbers });
+    if (!held && input.createShipment !== false) shipment = await createDraftShipmentForOrder(tx, actor, ord, lines.map((l) => ({ id: l.id, skuId: l.skuId, shipQty: l.reservedQty })), { warehouseId, noCharge, pickup, poNumbers });
 
     if (shortage) {
       await openException(tx, actor, {
@@ -477,14 +478,14 @@ async function createDraftShipmentForOrder(
   tx: Tx,
   actor: Actor,
   ord: typeof schema.order.$inferSelect,
-  lines: Array<{ id: string; skuId: string; reservedQty: number }>,
+  lines: Array<{ id: string; skuId: string; shipQty: number }>,
   o: { warehouseId: string; noCharge: boolean; pickup: boolean; poNumbers: string[] },
 ) {
   const shipLines = [];
   for (const l of lines) {
-    if (l.reservedQty <= 0) continue;
+    if (l.shipQty <= 0) continue;
     const lot = await suggestLot(tx, o.warehouseId, l.skuId);
-    shipLines.push({ skuId: l.skuId, lotId: lot?.lotId ?? null, qty: l.reservedQty, orderLineId: l.id });
+    shipLines.push({ skuId: l.skuId, lotId: lot?.lotId ?? null, qty: l.shipQty, orderLineId: l.id });
   }
   if (!shipLines.length) return null;
   const header = {
@@ -521,7 +522,7 @@ export async function releaseHeldOrder(db: DbOrTx, actor: Actor, orderId: string
       .set({ demandState: "submitted", shortfallDecision: "ship_available", shortfallReason: reason.trim(), shortfallDecidedByEmployeeId: actor.employeeId, shortfallDecidedAt: new Date(), updatedAt: new Date() })
       .where(eq(schema.order.id, orderId))
       .returning();
-    const shipment = await createDraftShipmentForOrder(tx, actor, row, lines, { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
+    const shipment = await createDraftShipmentForOrder(tx, actor, row, lines.map((l) => ({ id: l.id, skuId: l.skuId, shipQty: l.unshippedQty })), { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
     await recordAudit(tx, actor, {
       action: "order.release_hold",
       subjectType: "order",
@@ -535,9 +536,21 @@ export async function releaseHeldOrder(db: DbOrTx, actor: Actor, orderId: string
   });
 }
 
+/** The order's unconfirmed draft shipment, if one is in play. */
+export async function draftShipmentForOrder(db: DbOrTx, orderId: string) {
+  const rows = await db
+    .select({ s: schema.shipment })
+    .from(schema.shipmentOrder)
+    .innerJoin(schema.shipment, eq(schema.shipment.id, schema.shipmentOrder.shipmentId))
+    .where(and(eq(schema.shipmentOrder.orderId, orderId), eq(schema.shipment.status, "draft")))
+    .orderBy(desc(schema.shipment.createdAt));
+  return rows[0]?.s ?? null;
+}
+
 /**
- * A new draft shipment for an open order whose shipment was voided and the order reopened (R2-7), or a held order
- * since released. Refuses while a shipment is still in play.
+ * A new draft shipment for what an open order still has reserved and not on any shipment: after a void and reopen
+ * (R2-7), after a held order is released, or, Round 4 (split shipments), for the rest of an order whose first shipment
+ * is confirmed or delivered. Refuses while an unconfirmed draft is in play (add to that one instead).
  */
 export async function createShipmentForOrder(db: DbOrTx, actor: Actor, orderId: string) {
   const [pre] = await db.select().from(schema.order).where(eq(schema.order.id, orderId));
@@ -547,13 +560,56 @@ export async function createShipmentForOrder(db: DbOrTx, actor: Actor, orderId: 
     const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId)).for("update");
     if (ord.demandState !== "submitted" && ord.demandState !== "partially_fulfilled") throw new StaleStateError(`${ord.orderNumber} is ${ord.demandState.replace(/_/g, " ")}; only an open order ships`);
     if (!ord.warehouseId) throw new BusinessError("The order has no origin");
-    const active = await activeShipmentForOrder(tx, orderId);
-    if (active) throw new StaleStateError(`${ord.orderNumber} already has shipment ${active.number ?? "(draft)"} in play`);
+    const draft = await draftShipmentForOrder(tx, orderId);
+    if (draft) throw new StaleStateError(`${ord.orderNumber} already has an unconfirmed draft in play; add to it or confirm it first`);
     const lines = await linesWithAllocation(tx, orderId);
-    const shipment = await createDraftShipmentForOrder(tx, actor, ord, lines, { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
-    if (!shipment) throw new BusinessError("Nothing is reserved for this order yet; it ships once stock is on hand at the origin");
-    await recordAudit(tx, actor, { action: "order.shipment_created", subjectType: "order", subjectId: orderId, current: { shipmentId: shipment.id }, marketId: ord.marketId });
+    const shipment = await createDraftShipmentForOrder(tx, actor, ord, lines.map((l) => ({ id: l.id, skuId: l.skuId, shipQty: l.unshippedQty })), { warehouseId: ord.warehouseId, noCharge: ord.noCharge, pickup: ord.pickup, poNumbers: ord.poNumbers ?? [] });
+    if (!shipment) throw new BusinessError("Nothing is reserved and unshipped for this order; the rest ships once stock is on hand at the origin");
+    await recordAudit(tx, actor, { action: "order.shipment_created", subjectType: "order", subjectId: orderId, current: { shipmentId: shipment.id, lines: lines.filter((l) => l.unshippedQty > 0).map((l) => ({ skuId: l.skuId, qty: l.unshippedQty })) }, marketId: ord.marketId });
     return shipment;
+  });
+}
+
+/**
+ * Round 4, split shipments: move part of an unconfirmed draft onto a second draft for the same order (two deliveries,
+ * two BOLs, two invoices). Quantities moved must leave at least one unit on the original; a line moved whole leaves
+ * the original. Both drafts keep the order's reservations; each confirms on its own date.
+ */
+export async function splitDraftShipment(db: DbOrTx, actor: Actor, shipmentId: string, moves: Array<{ shipmentLineId: string; qty: number }>, reason: string) {
+  const [s] = await db.select().from(schema.shipment).where(eq(schema.shipment.id, shipmentId));
+  if (!s) throw new BusinessError("Shipment not found");
+  authorize(actor, "shipment.manage", { marketId: s.marketId });
+  if (s.status !== "draft") throw new StaleStateError(`Only an unconfirmed draft is split (${s.number ?? "this shipment"} is ${s.status})`);
+  if (!reason.trim()) throw new BusinessError("Say why the order ships in two parts", { field: "reason" });
+  const wanted = moves.filter((m) => m.qty > 0);
+  if (!wanted.length) throw new BusinessError("Enter the quantity to move for at least one line", { field: "lines" });
+  return withTx(db, async (tx) => {
+    const lines = await tx.select().from(schema.shipmentLine).where(eq(schema.shipmentLine.shipmentId, shipmentId)).orderBy(schema.shipmentLine.lineNo);
+    const [link] = await tx.select().from(schema.shipmentOrder).where(eq(schema.shipmentOrder.shipmentId, shipmentId));
+    const moved: Array<{ line: typeof lines[number]; qty: number }> = [];
+    for (const m of wanted) {
+      const line = lines.find((l) => l.id === m.shipmentLineId);
+      if (!line) throw new BusinessError("A line on the split is not on this shipment");
+      if (!Number.isInteger(m.qty) || m.qty > line.qty) throw new BusinessError(`Line ${line.lineNo}: only ${line.qty} on this shipment`, { field: `move:${line.id}` });
+      moved.push({ line, qty: m.qty });
+    }
+    const remaining = lines.reduce((sum, l) => sum + l.qty, 0) - moved.reduce((sum, m) => sum + m.qty, 0);
+    if (remaining <= 0) throw new BusinessError("Moving everything leaves the first shipment empty; confirm it as it is or move less");
+    const second = await createShipment(
+      tx,
+      actor,
+      { type: s.type, originWarehouseId: s.originWarehouseId, destinationLocationId: s.destinationLocationId, destinationWarehouseId: s.destinationWarehouseId, pickup: s.pickup, scheduledDate: null, poNumbers: s.poNumbers, notes: s.notes, overrideReason: s.overrideReason, orderIds: link ? [link.orderId] : null },
+      moved.map((m) => ({ skuId: m.line.skuId, posItemId: m.line.posItemId, lotId: m.line.lotId, qty: m.qty, lotReason: m.line.lotReason, orderLineId: m.line.orderLineId })),
+      { authorized: true },
+    );
+    for (const m of moved) {
+      if (m.qty === m.line.qty) await tx.delete(schema.shipmentLine).where(eq(schema.shipmentLine.id, m.line.id));
+      else await tx.update(schema.shipmentLine).set({ qty: m.line.qty - m.qty }).where(eq(schema.shipmentLine.id, m.line.id));
+    }
+    await tx.update(schema.shipment).set({ updatedAt: new Date() }).where(eq(schema.shipment.id, shipmentId));
+    await recordAudit(tx, actor, { action: "shipment.split", subjectType: "shipment", subjectId: shipmentId, current: { secondShipmentId: second.id, moved: moved.map((m) => ({ lineNo: m.line.lineNo, qty: m.qty })) }, reason: reason.trim(), marketId: s.marketId });
+    if (link) await recordAudit(tx, actor, { action: "order.split", subjectType: "order", subjectId: link.orderId, current: { firstShipmentId: shipmentId, secondShipmentId: second.id }, reason: reason.trim(), marketId: s.marketId });
+    return second;
   });
 }
 
@@ -584,14 +640,30 @@ async function orderNoticeRecipient(tx: Tx, locationId: string) {
 
 export async function linesWithAllocation(db: DbOrTx, orderId: string) {
   const lines = await db.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, orderId)).orderBy(schema.orderLine.lineNo);
+  // Round 4 (split shipments): units already on an unconfirmed draft of this order, per order line.
+  const onDrafts = await db
+    .select({ orderLineId: schema.shipmentLine.orderLineId, qty: sql<number>`coalesce(sum(${schema.shipmentLine.qty}), 0)::int` })
+    .from(schema.shipmentLine)
+    .innerJoin(schema.shipment, eq(schema.shipment.id, schema.shipmentLine.shipmentId))
+    .where(and(inArray(schema.shipmentLine.orderLineId, lines.map((l) => l.id)), eq(schema.shipment.status, "draft")))
+    .groupBy(schema.shipmentLine.orderLineId);
+  const draftBy = new Map(onDrafts.map((r) => [r.orderLineId, r.qty]));
   const out = [];
   for (const l of lines) {
     const res = await db.select().from(schema.reservation).where(eq(schema.reservation.orderLineId, l.id));
     const active = res.filter((r) => r.state === "reserved" || r.state === "route_committed");
+    const uncommitted = res.filter((r) => r.state === "reserved").reduce((s, r) => s + r.reservedQty, 0);
+    const onDraftQty = draftBy.get(l.id) ?? 0;
     out.push({
       ...l,
       reservedQty: active.reduce((s, r) => s + r.reservedQty, 0),
       unmetQty: active.reduce((s, r) => s + r.unmetQty, 0),
+      /** Reserved units not yet committed to a confirmed shipment. */
+      uncommittedQty: uncommitted,
+      /** Of those, units already placed on an unconfirmed draft. */
+      onDraftQty,
+      /** What a new draft could still carry (Round 4, split shipments). */
+      unshippedQty: Math.max(0, uncommitted - onDraftQty),
     });
   }
   return out;
@@ -688,10 +760,18 @@ export async function cancelUndeliveredDemand(db: DbOrTx, actor: Actor, orderId:
     const [ord] = await tx.select().from(schema.order).where(eq(schema.order.id, orderId)).for("update");
     if (ord.demandState === "cancelled") throw new StaleStateError(`${ord.orderNumber} was already cancelled${ord.cancelledAt ? ` on ${ord.cancelledAt.toISOString().slice(0, 10)}` : ""}; nothing further to cancel.`);
     if (ord.demandState === "fulfilled") throw new StaleStateError(`${ord.orderNumber} is fulfilled; there is no undelivered demand to cancel.`);
-    const active = await activeShipmentForOrder(tx, orderId);
-    if (active && active.status !== "draft" && active.status !== "delivered") throw new BusinessError(`${ord.orderNumber} is on shipment ${active.number ?? "(draft)"} (${active.status}); void that shipment first and choose to cancel the order (R2-7)`);
-    // An unconfirmed draft shipment goes with the order it was created for.
-    if (active && active.status === "draft") await voidShipment(tx, actor, active.id, `Order ${ord.orderNumber} cancelled: ${reason.trim()}`, { order: "none" });
+    // Every shipment in play (Round 4: an order may have several): one still confirmed or on the road blocks the
+    // cancellation; unconfirmed drafts go with the order they were created for.
+    const inPlay = (
+      await tx
+        .select({ s: schema.shipment })
+        .from(schema.shipmentOrder)
+        .innerJoin(schema.shipment, eq(schema.shipment.id, schema.shipmentOrder.shipmentId))
+        .where(and(eq(schema.shipmentOrder.orderId, orderId), ne(schema.shipment.status, "voided")))
+    ).map((r) => r.s);
+    const blocking = inPlay.find((x) => x.status !== "draft" && x.status !== "delivered");
+    if (blocking) throw new BusinessError(`${ord.orderNumber} is on shipment ${blocking.number ?? "(draft)"} (${blocking.status}); void that shipment first and choose to cancel the order (R2-7)`);
+    for (const d of inPlay.filter((x) => x.status === "draft")) await voidShipment(tx, actor, d.id, `Order ${ord.orderNumber} cancelled: ${reason.trim()}`, { order: "none" });
     const lines = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, orderId)).for("update");
     if (!lines.some((l) => l.currentQty - l.deliveredQty > 0)) throw new StaleStateError(`${ord.orderNumber} has no undelivered demand left.`);
     let routeCommitted = 0;

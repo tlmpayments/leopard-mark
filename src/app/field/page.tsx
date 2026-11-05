@@ -9,6 +9,7 @@ import * as schema from "@/lib/db/schema";
 import { listShipments } from "@/lib/domain/shipments/service";
 import { deliverAction } from "../shipments/[id]/actions";
 import { isDriverOnly, shipmentNumber, todayIso } from "../shipments/labels";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /**
  * The driver's phone page (R2-38): the stops assigned to this person that are not yet delivered, oldest first, each
@@ -80,7 +81,7 @@ export default async function FieldPage({ searchParams }: { searchParams: Search
               {mine.map(({ line, sku, pos }) => (
                 <li key={line.id} className="flex items-center justify-between gap-2 py-1.5">
                   <span>
-                    {sku ? `${sku.brand} ${sku.name}` : pos ? `${pos.name} (POS)` : "—"}
+                    {sku ? skuLabel(sku) : pos ? `${pos.name} (POS)` : "—"}
                     {line.lotCode ? (
                       <span className="ml-2">
                         <Code>{line.lotCode}</Code>

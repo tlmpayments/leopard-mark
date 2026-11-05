@@ -153,7 +153,7 @@ describe("R2-7: void after confirmation", () => {
     const fresh = await createShipmentForOrder(db, f.admin, res.order.id);
     expect(fresh.status).toBe("draft");
     expect((await getShipment(db, fresh.id))!.lines[0].line.qty).toBe(3);
-    await expect(createShipmentForOrder(db, f.admin, res.order.id)).rejects.toThrow(/already has shipment/);
+    await expect(createShipmentForOrder(db, f.admin, res.order.id)).rejects.toThrow(/already has an unconfirmed draft/);
     await voidShipment(db, f.admin, fresh.id, "test cleanup", { order: "cancel" });
     expect((await getOrder(db, res.order.id))!.order.demandState).toBe("cancelled");
   });

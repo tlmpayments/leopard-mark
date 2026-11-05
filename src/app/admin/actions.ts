@@ -192,6 +192,10 @@ export async function convertIntakeAction(form: FormData) {
     const lines: Array<{ skuId: string; qty: number }> = [];
     for (const [k, v] of form.entries()) if (k.startsWith("qty:") && typeof v === "string" && Number(v) > 0) lines.push({ skuId: k.slice(4), qty: Number(v) });
     const decision = str(form, "shortfallDecision");
+    const po = (opt(form, "poNumbers") ?? "")
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const res = await convertIntakeToOrder(db, actor, {
       intakeId: id,
       locationId: str(form, "locationId"),
@@ -199,6 +203,7 @@ export async function convertIntakeAction(form: FormData) {
       requestedDate: opt(form, "requestedDate"),
       shortfallDecision: decision === "ship_available" || decision === "hold" ? decision : null,
       shortfallReason: opt(form, "shortfallReason"),
+      poNumbers: po.length ? po : null,
     });
     return { ok: `Converted to ${res.order.orderNumber}`, redirectTo: `/orders/${res.order.id}` };
   });
@@ -217,5 +222,26 @@ export async function runJobsAction() {
     authorize(actor, "integration.manage");
     const results = await runDueJobs(db, { limit: 50, workerId: `manual-${actor.employeeId}` });
     return `Ran ${results.length} job(s): ${results.map((r) => `${r.kind}=${r.outcome}`).join(", ") || "none due"}`;
+  });
+}
+
+/**
+ * The hourly checks the cron runs (overdue invoices, due-date debits, unfinished bank setups), on demand. Vercel runs
+ * crons on production only, so a preview needs this to see a due-date debit reach Approvals. Each check only opens
+ * cases or queues approval items; nothing is debited or sent by running it.
+ */
+export async function runHourlyChecksAction() {
+  return runAction("/integrations", async ({ db, actor }) => {
+    const { authorize } = await import("@/lib/authz/authorize");
+    authorize(actor, "integration.manage");
+    const { SYSTEM_ACTOR } = await import("@/lib/authz/actor");
+    const { sweepOverdueInvoices } = await import("@/lib/domain/alerts/service");
+    const { chaseUnfinishedSetups, scheduleDueDateDebits } = await import("@/lib/domain/collection");
+    const now = new Date();
+    const overdue = await sweepOverdueInvoices(db, SYSTEM_ACTOR);
+    const debits = await scheduleDueDateDebits(db, now);
+    const setups = await chaseUnfinishedSetups(db, now);
+    const results = await runDueJobs(db, { limit: 50, workerId: `checks-${actor.employeeId}` });
+    return `Checks ran: ${debits.queued} debit(s) now waiting on Approvals, ${debits.blocked} blocked (see Cases); ${overdue.opened} overdue case(s) opened; ${setups.opened} unfinished bank setup(s) flagged; ${results.length} job(s) run.`;
   });
 }

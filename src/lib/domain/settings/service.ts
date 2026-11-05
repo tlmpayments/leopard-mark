@@ -98,6 +98,15 @@ export type SettingsPatch = Partial<
     | "autoSendPullSheets"
     | "fuelSurchargePct"
     | "collectionsThresholdCents"
+    | "stripeMirrorInvoices"
+    | "autoApproveStripeInvoices"
+    | "autoApproveCreditNotes"
+    | "autoApproveEmails"
+    | "sendEmailAutomatically"
+    | "intakeMailboxEnabled"
+    | "intakeMailboxAddress"
+    | "customerSenderAddress"
+    | "operationsSenderAddress"
   >
 >;
 
@@ -123,6 +132,11 @@ export async function updateCompanySettings(db: DbOrTx, actor: Actor, patch: Set
   }
   if (patch.collectionsThresholdCents !== undefined && (!Number.isInteger(patch.collectionsThresholdCents) || patch.collectionsThresholdCents < 0)) {
     throw new BusinessError("The collections threshold must be zero or more dollars", { field: "collectionsThresholdCents" });
+  }
+  for (const k of ["intakeMailboxAddress", "customerSenderAddress", "operationsSenderAddress"] as const) {
+    const v = patch[k];
+    if (v !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())) throw new BusinessError("Enter a full email address", { field: k });
+    if (v !== undefined) patch = { ...patch, [k]: v.trim().toLowerCase() };
   }
   const [row] = await db
     .update(schema.companySettings)

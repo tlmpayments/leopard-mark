@@ -21,6 +21,7 @@ export function navFor(actor: Actor): NavItem[] {
   return [
     { href: "/", label: "Home", show: true, frequent: true },
     { href: "/shipments", label: "Shipments", show: can(actor, "shipment.view"), frequent: !isSalesOnly },
+    { href: "/stock", label: "Stock on hand", show: can(actor, "lot.view") && !isField },
     { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField },
     { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField },
     { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField },
@@ -29,6 +30,7 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/orders", label: "Orders", show: can(actor, "order.view") && !isField, frequent: true },
     { href: "/products", label: "Products", show: can(actor, "catalog.view") },
     { href: "/admin/exceptions", label: "Exceptions", show: can(actor, "exception.view") && !isSalesOnly, frequent: !isSalesOnly },
+    { href: "/approvals", label: "Approvals", show: can(actor, "approval.view") },
     { href: "/admin/notices", label: "Notices", show: can(actor, "notice.view") && !isSalesOnly },
     { href: "/admin/intake", label: "Email intake", show: can(actor, "intake.handle") },
     { href: "/admin/markets", label: "Markets & stock", show: can(actor, "stock.record") },
@@ -40,6 +42,8 @@ export function navFor(actor: Actor): NavItem[] {
     { href: "/finance", label: "Finance", show: can(actor, "finance.view") },
     { href: "/owner/decisions", label: "Decisions", show: can(actor, "decision.view") },
     { href: "/integrations", label: "Integrations", show: can(actor, "integration.view") },
+    { href: "/admin/stripe-matches", label: "Stripe matching", show: can(actor, "integration.manage") },
+    { href: "/reports", label: "Reports", show: can(actor, "report.view") && !isField },
     { href: "/reports/microstar", label: "MicroStar report", show: can(actor, "report.export") },
     { href: "/search", label: "Search", show: true, frequent: isSalesOnly || isField },
   ].filter((n) => n.show);
@@ -55,14 +59,15 @@ const SECTIONS: Array<{ key: string; label: string; pages: Array<{ href: string;
   { key: "accounts", label: "Accounts", pages: [{ href: "/locations" }] },
   { key: "orders", label: "Orders", pages: [{ href: "/orders", also: ["/samples"] }, { href: "/admin/intake" }] },
   { key: "shipments", label: "Shipments", pages: [{ href: "/shipments" }] },
-  { key: "stock", label: "Stock", pages: [{ href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
+  { key: "stock", label: "Stock", pages: [{ href: "/stock" }, { href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
   { key: "invoices", label: "Invoices", pages: [{ href: "/invoices" }, { href: "/finance" }] },
-  { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }, { href: "/reports/microstar", also: ["/reports"] }] },
-  { key: "exceptions", label: "Exceptions", pages: [{ href: "/admin/exceptions", also: ["/admin"] }, { href: "/admin/notices" }] },
+  { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }, { href: "/reports/microstar" }] },
+  { key: "reports", label: "Reports", pages: [{ href: "/reports", also: ["/reports/ca-sales", "/reports/sample-writeoff"] }] },
+  { key: "exceptions", label: "Exceptions", pages: [{ href: "/admin/exceptions", also: ["/admin"] }, { href: "/approvals" }, { href: "/admin/notices" }] },
   {
     key: "admin",
     label: "Admin",
-    pages: [{ href: "/admin/employees" }, { href: "/admin/settings" }, { href: "/admin/catalog" }, { href: "/products" }, { href: "/owner/decisions" }, { href: "/integrations" }, { href: "/admin/import" }],
+    pages: [{ href: "/admin/employees" }, { href: "/admin/settings" }, { href: "/admin/catalog" }, { href: "/products" }, { href: "/owner/decisions" }, { href: "/integrations" }, { href: "/admin/stripe-matches" }, { href: "/admin/import" }],
   },
 ];
 

@@ -5,6 +5,7 @@ import * as schema from "@/lib/db/schema";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { DbOrTx } from "@/lib/db/types";
 import { escapeLike } from "../customers/service";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 /**
  * Search within current permissions (brief §44): trade name, address, email,
@@ -77,7 +78,7 @@ export async function search(db: DbOrTx, actor: Actor, q: string): Promise<Searc
 
   if (can(actor, "catalog.view")) {
     const skus = await db.select().from(schema.sku).where(or(ilike(schema.sku.code, like), ilike(schema.sku.name, like), ilike(schema.sku.brand, like))).limit(10);
-    for (const s of skus) hits.push({ kind: "sku", id: s.id, title: `${s.brand} ${s.name}`, subtitle: `${s.code}${s.archivedAt ? " · archived" : ""}`, href: `/products` });
+    for (const s of skus) hits.push({ kind: "sku", id: s.id, title: skuLabel(s), subtitle: `${s.code}${s.archivedAt ? " · archived" : ""}`, href: `/products` });
   }
   return hits;
 }

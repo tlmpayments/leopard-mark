@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ActionPanel, Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, StatusBadge, Struck, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
+import type React from "react";
+import { ActionPanel, Button, Card, Code, Columns, Empty, Field, Flash, Input, KV, Notice, RecordPage, Select, StatusBadge, Struck, Table, Tabs, fmtDate, fmtDay } from "@/components/ui";
 import { LIST_WIDTHS } from "@/components/widths";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
@@ -9,10 +10,14 @@ import { getDb } from "@/lib/db/client";
 import { formatCents } from "@/lib/domain/catalog/service";
 import { PAY_BY_LABEL } from "@/lib/domain/customers/shipping";
 import { creditMemosForInvoice, getInvoice } from "@/lib/domain/invoices/service";
+import { COLLECTION_STATE_LABEL, PAYMENT_KIND_LABEL, debitEligibility, invoiceRecipients, mirrorable, paymentsForInvoice } from "@/lib/domain/collection";
+import { approvalsForSubject, APPROVAL_KIND_LABEL, APPROVAL_STATE_LABEL } from "@/lib/domain/approvals/service";
+import { getCompanySettings } from "@/lib/domain/settings/service";
+import { stripeConfigured } from "@/lib/integrations/stripe/adapter";
 import { TYPE_LABEL, shipmentNumber, todayIso } from "../../shipments/labels";
-import { issueCreditMemoAction, issueInvoiceAction, markPaidAction, voidCreditMemoAction, voidInvoiceAction } from "../actions";
+import { emailInvoiceAction, issueCreditMemoAction, issueInvoiceAction, mirrorInvoiceAction, rePresentAction, recordPaymentReceivedAction, voidCreditMemoAction, voidInvoiceAction } from "../actions";
 
-const LINE_KIND: Record<string, string> = { beer: "Beer", deposit: "Deposit", pos: "POS", info: "Info" };
+const LINE_KIND: Record<string, string> = { beer: "Beer", deposit: "Deposit", pos: "POS", info: "Info", freight: "Freight" };
 
 export default async function InvoicePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { id } = await params;
@@ -29,6 +34,12 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
   const canCredit = can(actor, "credit.issue", { marketId: inv.marketId }) && !inv.legacy && (inv.status === "issued" || inv.status === "paid");
   const credits = await creditMemosForInvoice(d, inv.id);
   const creditedCents = credits.filter((c) => c.status === "issued").reduce((n, c) => n + c.amountCents, 0);
+  // Round 4: Stripe as the money ledger. Payments, the Stripe copy, what is queued for approval.
+  const [payments, approvals, settings, recipients, eligibility] = await Promise.all([paymentsForInvoice(d, inv.id), approvalsForSubject(d, "invoice", inv.id), getCompanySettings(d), inv.locationId ? invoiceRecipients(d, inv.locationId) : Promise.resolve([] as string[]), debitEligibility(d, inv)]);
+  const paidCents = payments.filter((p) => p.state === "succeeded").reduce((n, p) => n + p.amountCents, 0);
+  const openCents = Math.max(0, inv.totalCents - creditedCents - paidCents);
+  const activeApprovals = approvals.filter((a) => a.state === "pending" || a.state === "approved" || a.state === "executing" || a.state === "failed");
+  const canMirror = canIssue && stripeConfigured() && mirrorable(inv) && !inv.stripeInvoiceId && !activeApprovals.some((a) => a.kind === "stripe_invoice");
 
   const invoiceTab = (
     <>
@@ -114,6 +125,78 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
     </>
   );
 
+  const paymentsTab = (
+    <>
+      <Table
+        caption="Payments"
+        head={["Date", "Kind", "State", "Reference", "Amount"]}
+        widths={[LIST_WIDTHS.date, "11rem", LIST_WIDTHS.status, undefined, LIST_WIDTHS.money]}
+        align={["left", "left", "left", "left", "right"]}
+        empty={inv.status === "paid" ? "Paid before payments were recorded here." : "No payment yet."}
+        rows={payments.map((p) => [fmtDate(p.occurredAt), PAYMENT_KIND_LABEL[p.kind], <StatusBadge key="s" value={p.state} />, [p.reference, p.failureCode ? `${p.failureCode}: ${p.failureMessage ?? ""}` : null, p.note].filter(Boolean).join("; ") || "—", formatCents(p.amountCents)])}
+      />
+      {approvals.length ? (
+        <Table
+          caption="Queued for approval"
+          head={["Requested", "Kind", "Title", "State"]}
+          widths={[LIST_WIDTHS.date, "9rem", undefined, LIST_WIDTHS.status]}
+          rows={approvals.map((a) => [
+            fmtDate(a.createdAt),
+            APPROVAL_KIND_LABEL[a.kind],
+            <Link key="t" href={`/approvals?view=${a.state === "pending" ? "pending" : a.state === "done" ? "done" : a.state === "failed" ? "failed" : a.state === "approved" || a.state === "executing" ? "approved" : "closed"}&focus=${a.id}`} className="text-navy hover:underline">
+              {a.title}
+            </Link>,
+            <StatusBadge key="s" value={a.state} title={APPROVAL_STATE_LABEL[a.state]} />,
+          ])}
+        />
+      ) : null}
+    </>
+  );
+
+  const stripeCard = (
+    <Card title="Collection (Stripe)">
+      {!stripeConfigured() ? (
+        <p className="text-sm text-ink-2">Stripe is not connected on this deployment; collection stays by hand.</p>
+      ) : inv.series === "NC" ? (
+        <p className="text-sm text-ink-2">No charge; nothing to collect.</p>
+      ) : (
+        <>
+          <KV
+            items={[
+              ["Stripe copy", inv.stripeInvoiceId ? <span key="s">{inv.stripeNumber ?? inv.stripeInvoiceId}{inv.stripeNumber && inv.stripeNumber !== inv.number ? <span className="ml-1 text-xs text-ink-3">(Stripe&apos;s own number; the portal number is in its memo)</span> : null} <span className="ml-2 text-xs text-ink-3">{inv.stripeStatus ?? ""}</span></span> : activeApprovals.some((a) => a.kind === "stripe_invoice") ? "queued for approval" : inv.status === "draft" ? "mirrored once issued and delivered" : !settings.stripeMirrorInvoices ? "mirroring is switched off (Company settings)" : inv.payBy !== "stripe" ? `none (pays by ${inv.payBy ?? "an unset channel"}; the portal PDF is the invoice)` : "not mirrored"],
+              ["Collection", <span key="c">{COLLECTION_STATE_LABEL[inv.collectionState] ?? inv.collectionState}{inv.debitScheduledOn && inv.collectionState === "scheduled" ? `, debit on ${fmtDay(inv.debitScheduledOn)}${inv.debitScheduledOn !== inv.dueDate ? " (next business day after the due date)" : ""}` : ""}</span>],
+              ["Pay online", inv.hostedInvoiceUrl ? <a key="h" href={inv.hostedInvoiceUrl} target="_blank" rel="noopener" className="text-navy hover:underline">hosted page</a> : "—"],
+              ["Open balance", formatCents(openCents)],
+              ...(inv.payBy === "stripe" ? [["Debit", eligibility.ok ? `bank on file; ${eligibility.autoDebit ? "runs on the debit date without approval (account switch)" : "each debit waits for approval"}` : eligibility.reason ?? ""] as [string, React.ReactNode]] : []),
+              ...(inv.failureCode ? [["Last return", `${inv.failureCode}: ${inv.failureMessage ?? ""} (${fmtDate(inv.failedAt)})`] as [string, React.ReactNode]] : []),
+            ]}
+          />
+          {inv.mirrorError ? <p className="mt-2 text-xs text-ink-3">Stripe would not take the portal number: {inv.mirrorError}</p> : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {canMirror ? (
+              <form action={mirrorInvoiceAction}>
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Button small variant="secondary">
+                  Mirror into Stripe now
+                </Button>
+              </form>
+            ) : null}
+            {canIssue && inv.collectionState === "failed" ? (
+              <form action={rePresentAction} className="flex items-end gap-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Input name="reason" required placeholder="Why present it again (customer confirmed funds)" aria-label="Reason" />
+                <Button small variant="secondary">
+                  Re-present the debit
+                </Button>
+              </form>
+            ) : null}
+          </div>
+          <p className="mt-3 text-xs text-ink-3">The portal invoice is the official one. Stripe holds a copy under the same number so the due-date debit has something to collect against and the hosted page shows the right amount; Stripe emails nothing (the Owner&apos;s rule).</p>
+        </>
+      )}
+    </Card>
+  );
+
   const documentsTab =
     documents.length === 0 ? (
       <Empty>The invoice document is stored at issue; a draft previews live from the PDF link above.</Empty>
@@ -168,13 +251,46 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
             </ActionPanel>
           ) : null}
           {inv.status === "issued" && canIssue ? (
-            <ActionPanel label="Mark paid" variant="primary">
-              <form action={markPaidAction} className="space-y-2">
+            <ActionPanel label="Record payment" variant="primary">
+              <form action={recordPaymentReceivedAction} className="space-y-2">
                 <input type="hidden" name="invoiceId" value={inv.id} />
-                <Field label="Note" hint="How it was paid, reference (collection stays outside the system, 7.5).">
-                  <Input name="note" placeholder="e.g. ACH 2026-11-20 ref 1234" />
+                <Field label="How it arrived" hint={inv.payBy === "stripe" ? "A Stripe debit records itself when it settles; use this for a check or transfer that arrived instead." : "Fintech remittance, check or EFT, recorded by hand (S4)."}>
+                  <Select name="kind" defaultValue={inv.payBy === "fintech" ? "fintech" : inv.payBy === "check" ? "check" : "eft"}>
+                    <option value="fintech">Fintech</option>
+                    <option value="check">Check</option>
+                    <option value="eft">EFT / wire / MarginEdge ACH</option>
+                    <option value="other">Other</option>
+                  </Select>
                 </Field>
-                <Button small>Mark paid</Button>
+                <Field label="Amount (dollars)" hint={`Open balance ${formatCents(openCents)}; leave blank for the full balance. A short or over payment opens a case.`}>
+                  <Input name="amount" type="number" step="0.01" min="0.01" inputMode="decimal" />
+                </Field>
+                <Field label="Received on">
+                  <Input name="receivedOn" type="date" defaultValue={today} />
+                </Field>
+                <Field label="Reference">
+                  <Input name="reference" placeholder="check number, remittance id" />
+                </Field>
+                <Field label="Note">
+                  <Input name="note" />
+                </Field>
+                <Button small>Record payment</Button>
+              </form>
+            </ActionPanel>
+          ) : null}
+          {(inv.status === "issued" || inv.status === "paid") && canIssue && inv.locationId ? (
+            <ActionPanel label="Email invoice" variant="secondary">
+              <form action={emailInvoiceAction} className="space-y-2">
+                <input type="hidden" name="invoiceId" value={inv.id} />
+                <Field label="To" hint="Queued for approval; sent from orders@ with the PDF attached and the pay-online link when there is one.">
+                  <Input name="to" defaultValue={recipients.join(", ")} placeholder="ap@customer.com" />
+                </Field>
+                <Field label="Note to the customer">
+                  <Input name="note" />
+                </Field>
+                <Button small variant="secondary">
+                  Queue the email
+                </Button>
               </form>
             </ActionPanel>
           ) : null}
@@ -231,7 +347,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
               ["FOB", inv.fobWording ?? "—"],
               ["Pays by", inv.payBy ? PAY_BY_LABEL[inv.payBy] : location?.payBy ? `${PAY_BY_LABEL[location.payBy as keyof typeof PAY_BY_LABEL] ?? location.payBy} (account setting, copied at issue)` : "not set on the account"],
               ["Issued", inv.issuedAt ? fmtDate(inv.issuedAt) : "—"],
-              ["Paid", inv.paidAt ? fmtDate(inv.paidAt) : "—"],
+              ["Paid", inv.paidAt ? `${fmtDate(inv.paidAt)}${inv.paidVia ? ` (${PAYMENT_KIND_LABEL[inv.paidVia as keyof typeof PAYMENT_KIND_LABEL] ?? inv.paidVia}${inv.paidReference ? ` ${inv.paidReference}` : ""})` : ""}` : "—"],
               ["Notes", inv.notes ? <span key="n" className="whitespace-pre-line">{inv.notes}</span> : "—"],
             ]}
           />
@@ -261,9 +377,11 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           <p className="mt-3 text-xs text-ink-3">One invoice per delivery (R2-15).</p>
         </Card>
       </Columns>
+      {stripeCard}
       <Tabs
         tabs={[
           { id: "lines", label: "Lines", count: lines.length, content: invoiceTab },
+          { id: "payments", label: "Payments", count: payments.length + approvals.length, content: paymentsTab },
           { id: "documents", label: "Documents", count: documents.length, content: documentsTab },
           { id: "credits", label: "Credits", count: credits.length, content: creditsTab },
         ]}

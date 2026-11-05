@@ -7,6 +7,7 @@ import { originLabel } from "@/lib/domain/origins/service";
 import { getCountSession } from "@/lib/domain/counts/service";
 import { warehouseAvailability } from "@/lib/domain/allocation/service";
 import { applyCountSessionAction } from "../actions";
+import { skuLabel } from "@/lib/domain/catalog/label";
 
 export default async function CountPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { id } = await params;
@@ -40,7 +41,7 @@ export default async function CountPage({ params, searchParams }: { params: Prom
         <KV items={[["Origin", warehouse ? originLabel(warehouse) : "—"], ["Counted on", fmtDay(session.countedOn)], ["Counted by", session.countedBy], ["Note", session.note], ["Entered", fmtDate(session.createdAt)], ["Applied", session.appliedAt ? fmtDate(session.appliedAt) : "not yet"]]} />
       </Card>
       <Card title="Lines">
-        <Table caption="Count lines" head={["SKU", "Product", "Lot code", "Counted"]} rows={lines.map(({ l, sku }) => [<span key="c" className="font-mono text-xs">{sku.code}</span>, `${sku.brand} ${sku.name}`, l.lotCode ?? "—", String(l.qty)])} />
+        <Table caption="Count lines" head={["SKU", "Product", "Lot code", "Counted"]} rows={lines.map(({ l, sku }) => [<span key="c" className="font-mono text-xs">{sku.code}</span>, skuLabel(sku), l.lotCode ?? "—", String(l.qty)])} />
       </Card>
       <Card title={session.status === "draft" ? "What applying will do" : "Totals applied"}>
         <Table

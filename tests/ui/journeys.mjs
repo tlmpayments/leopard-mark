@@ -63,7 +63,7 @@ async function flash(page) {
 async function selectByLabel(locator, re) {
   const value = await locator.evaluate((el, src) => {
     const r = new RegExp(src);
-    const opt = Array.from(el.options).find((o) => r.test(o.textContent ?? ""));
+    const opt = Array.from(el.options).find((o) => !o.disabled && r.test(o.textContent ?? ""));
     return opt ? opt.value : null;
   }, re.source);
   if (value === null) throw new Error(`no option matching ${re}`);
@@ -195,7 +195,7 @@ async function journey2() {
   await priceForm.locator('input[name="price"]').fill("37.50");
   await priceForm.locator('input[name="reason"]').fill("journey price change");
   await act(admin.page, () => priceForm.getByRole("button", { name: "Set price" }).click());
-  await expectText(admin.page, /Market price set/, `price changed for ${orderedLabels[0]}`);
+  await expectText(admin.page, /price set with effective dating/, `price changed for ${orderedLabels[0]}`);
   const archiveBtn = admin.page.locator("tr").filter({ hasText: orderedLabels[1] }).getByRole("button", { name: /^Archive$/ }).first();
   if (await archiveBtn.count()) {
     await act(admin.page, () => archiveBtn.click());
@@ -344,37 +344,48 @@ async function journey4() {
 
 // ---------------- 5. Accounting: payer separate from AP, setup intent, manual notice outcome ----------------
 async function journey5() {
-  const j = journey("5 Accounting — assign payer separately from AP, setup intent, record manual send");
+  const j = journey("5 Accounting — payer authority, bank setup link through Approvals, link generated when sent by hand (Round 4)");
   const { ctx, page } = await session("Al Accounting");
-  j.step("open the account created in journey 1");
+  j.step("open the account created in journey 1: no payer, so no setup link");
   await page.goto(salesLocationUrl);
-  await expectText(page, /No payer has been assigned/, "setup blocked until payer assigned (not inherited from AP)");
-  const setupBtn = page.getByRole("button", { name: "Request ACH setup" });
-  if (await setupBtn.isDisabled()) ok("Request ACH setup disabled without payer");
-  else fail("Request ACH setup should be disabled without a payer");
+  await expectText(page, /No payer has been assigned/, "payer missing (never inherited from AP)");
+  const setupBtn = page.getByRole("button", { name: "Send bank setup link" });
+  if (await setupBtn.isDisabled()) ok("Send bank setup link disabled without a payer");
+  else fail("Send bank setup link should be disabled without a payer");
   j.step("assign payer authority (explicit act)");
   await openDetails(page.locator("summary", { hasText: "Assign payer authority" }));
   const pf = page.locator("form").filter({ has: page.locator('select[name="contactId"]') }).first();
   await pf.locator('select[name="contactId"]').selectOption({ index: 2 });
   await act(page, () => pf.getByRole("button", { name: "Assign" }).click());
   await expectText(page, /Payer authority recorded/, "payer assigned");
-  j.step("request setup → invitation intent");
-  await act(page, () => page.getByRole("button", { name: "Request ACH setup" }).click());
-  await expectText(page, /Setup requested/, "setup requested");
-  await expectText(page, /Payment setup invitation/, "invitation intent visible");
-  await expectText(page, /To send \(manual\)/, "intent is pending for the manual sender");
-  await shot(page, "j5-01-payer-and-invitation");
-  j.step("record the manual send with evidence");
-  const nf = page.locator("form").filter({ has: page.locator('select[name="outcome"]') }).first();
-  await nf.locator('input[name="sentVia"]').fill("Gmail ops@ (manual)");
-  await nf.locator('input[name="evidence"]').fill(`msg id <j5-${stamp}>`);
-  await act(page, () => nf.getByRole("button", { name: "Record outcome" }).click());
-  await expectText(page, /Recorded as sent to/, "send recorded as staff evidence");
-  await expectText(page, /not provider confirmation/, "explicitly not provider-confirmed");
-  j.step("repeat request reuses the pending state; notices queue reflects it");
-  await page.goto(`${BASE}/admin/notices?view=sent`);
-  await expectText(page, /Payment setup invitation/, "sent notice listed in the notices queue");
-  await shot(page, "j5-02-notices-queue");
+  j.step("queue the bank setup email: an approval item, not a send");
+  await act(page, () => page.getByRole("button", { name: "Send bank setup link" }).click());
+  await expectText(page, /Bank setup email queued for approval/, "queued for approval");
+  await expectText(page, /Setup link queued for approval/, "the account says where setup stands");
+  await expectText(page, /Bank setup link to/, "the item is listed on the account");
+  await shot(page, "j5-01-payer-and-setup-queued");
+  j.step("Approvals: approve it (sent by hand while the switch is off), generate the Stripe link, record the send");
+  await page.getByRole("link", { name: /Bank setup link to/ }).first().click();
+  await page.waitForURL(/\/approvals\?/);
+  let card = page.locator("section").filter({ hasText: /Bank setup link to/ }).first();
+  await expectText(page, /Emails are sent by hand/, "automatic sending is off (Company settings)");
+  await act(page, () => card.getByRole("button", { name: "Approve", exact: true }).click());
+  await expectText(page, /Approved\. Send it by hand and record the outcome/, "approved for a hand send");
+  card = page.locator("section").filter({ hasText: /Bank setup link to/ }).first();
+  await expectNoText(page, /checkout\.stripe\.test/, "no link exists before it is generated");
+  await act(page, () => card.getByRole("button", { name: "Generate the bank setup link" }).click());
+  await expectText(page, /Setup link generated/, "link generated on demand");
+  await expectText(page, /https:\/\/checkout\.stripe\.test\//, "the hosted link is shown in the message text (demo Stripe stand-in)");
+  await shot(page, "j5-02-approval-with-link");
+  card = page.locator("section").filter({ hasText: /Bank setup link to/ }).first();
+  await card.locator('input[name="evidence"]').fill(`msg id <j5-${stamp}>`);
+  await act(page, () => card.getByRole("button", { name: "Record" }).click());
+  await expectText(page, /Recorded as sent by hand/, "send recorded with evidence");
+  j.step("the account now waits on the payer; the item is on record as done");
+  await page.goto(salesLocationUrl);
+  await expectText(page, /Setup link sent, waiting on the payer/, "bank on file: waiting on the payer");
+  await page.goto(`${BASE}/approvals?view=done`);
+  await expectText(page, /Bank setup link to/, "done item listed");
   j.end();
   await ctx.close();
 }
@@ -639,30 +650,21 @@ async function journey12() {
   await expectText(page, /EBB East Brother/, "origin code persisted (re-read), shown as CODE Name (R2-34)");
   await shot(page, "j12-01-origins");
 
-  j.step("packaging report records a Cantinesca lot at facility 01 (next free run digit for today)");
+  j.step("packaging report records a Cantinesca lot at facility 01 (no batch; Run left blank takes the next free digit for today)");
   let lotUrl = "";
   let lotCode = "";
-  for (const run of "123456789") {
-    await page.goto(`${BASE}/lots/new`);
-    await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /EBB East Brother/);
-    await page.selectOption('select[name="brandCode"]', "CNT");
-    await page.fill('input[name="packagingDate"]', today);
-    await page.fill('input[name="runCode"]', run);
-    await page.getByLabel("CAN-12C quantity").fill("20");
-    await page.getByLabel("CAN-HALF quantity").fill("6");
-    await page.fill('textarea[name="notes"]', "journey packaging sheet");
-    await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
-    if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
-      lotUrl = page.url().split("?")[0];
-      lotCode = (await page.locator("h1 .select-all").innerText()).trim();
-      break;
-    }
-    const f = await flash(page);
-    if (!/already exists/.test(f ?? "")) {
-      fail(`packaging report refused: ${f}`);
-      break;
-    }
-  }
+  await page.goto(`${BASE}/lots/new`);
+  await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /EBB East Brother/);
+  await page.selectOption('select[name="brandCode"]', "CNT");
+  await page.fill('input[name="packagingDate"]', today);
+  await page.getByLabel("CAN-12C quantity").fill("20");
+  await page.getByLabel("CAN-HALF quantity").fill("6");
+  await page.fill('textarea[name="notes"]', "journey packaging sheet");
+  await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
+  if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
+    lotUrl = page.url().split("?")[0];
+    lotCode = (await page.locator("h1 .select-all").innerText()).trim();
+  } else fail(`packaging report refused: ${await flash(page)}`);
   if (lotUrl && /^01CNT\d{6}[0-9A-Z]$/.test(lotCode)) ok(`lot recorded with a computed code (${lotCode})`);
   else fail(`lot not recorded or code malformed (${lotCode || "none"})`);
   await expectText(page, /CAN-12C[\s\S]*20/, "quantities packaged shown on the lot");
@@ -783,11 +785,11 @@ async function journey13() {
   const secondOf = (page) => page.locator('header nav:not([aria-label="Main"]) a').allInnerTexts();
   const same = (a, b) => a.length === b.length && a.every((x, i) => x.trim() === b[i]);
 
-  j.step("Owner: eight sections in order (Reports folded under Kegs, R2-35)");
+  j.step("Owner: nine sections in order (Reports is its own section since round 4; MicroStar stays under Kegs, R2-35)");
   const owner = await session("Demo Owner");
   await owner.page.goto(`${BASE}/shipments`);
   const ownerRow = await rowOf(owner.page);
-  const expected = ["Accounts", "Orders", "Shipments", "Stock", "Invoices", "Kegs", "Exceptions", "Admin"];
+  const expected = ["Accounts", "Orders", "Shipments", "Stock", "Invoices", "Kegs", "Reports", "Exceptions", "Admin"];
   if (same(ownerRow, expected)) ok("Owner row: " + expected.join(", "));
   else fail(`Owner row was ${ownerRow.join(", ")}`);
   if (same(await secondOf(owner.page), [])) ok("single-page section has no second row");
@@ -795,13 +797,16 @@ async function journey13() {
 
   j.step("Owner: each page lands in its section (longest path wins: /admin/markets is Stock, /admin is Exceptions)");
   const cases = [
-    ["/admin/markets", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
-    ["/batches", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
+    ["/admin/markets", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
+    ["/batches", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
+    ["/stock", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
     ["/admin/intake", "Orders", ["Orders", "Email intake"]],
     ["/finance", "Invoices", ["Invoices", "Finance"]],
     ["/reports/microstar", "Kegs", ["Kegs", "MicroStar report"]],
-    ["/admin/exceptions", "Exceptions", ["Exceptions", "Notices"]],
-    ["/admin/settings", "Admin", ["Employees & access", "Company settings", "Catalog & prices", "Products", "Decisions", "Integrations", "Import from workbook"]],
+    ["/admin/exceptions", "Exceptions", ["Exceptions", "Approvals", "Notices"]],
+    ["/approvals", "Exceptions", ["Exceptions", "Approvals", "Notices"]],
+    ["/reports/ca-sales", "Reports", []],
+    ["/admin/settings", "Admin", ["Employees & access", "Company settings", "Catalog & prices", "Products", "Decisions", "Integrations", "Stripe matching", "Import from workbook"]],
   ];
   for (const [url, section, pages] of cases) {
     await owner.page.goto(`${BASE}${url}`);
@@ -1065,9 +1070,335 @@ async function journey18() {
 }
 
 
+// ---------------- 19. Accounting: Approvals run Stripe effects; a hand-sent receipt is recorded (Round 4) ----------------
+let paidInvoiceUrl = "";
+async function journey19() {
+  const j = journey("19 Accounting — approve an invoice into Stripe (same number, business-day debit date); record a receipt sent by hand");
+  const { ctx, page } = await session("Al Accounting");
+  j.step("the queue holds the seeded items: Silver Lake's Stripe copy and Dogpatch's receipt");
+  await page.goto(`${BASE}/approvals`);
+  await expectText(page, /Nothing leaves the company on its own/, "approvals screen");
+  await expectText(page, /into Stripe for Silver Lake Wine/, "Stripe copy of the pickup invoice waiting");
+  await expectText(page, /Receipt for INV\d+ to Dogpatch Bottle Shop/, "receipt email waiting");
+  await shot(page, "j19-01-queue");
+  j.step("approve the Stripe copy: it runs now against the gateway");
+  const mirror = page.locator("section").filter({ hasText: /into Stripe for Silver Lake Wine/ }).first();
+  const title = await mirror.innerText();
+  const invNo = (title.match(/(INV\d+) into Stripe/) ?? [])[1];
+  if (invNo) ok(`item for ${invNo}`);
+  else fail("could not read the invoice number off the item");
+  await act(page, () => mirror.getByRole("button", { name: "Approve", exact: true }).click());
+  await expectText(page, /Approved and done/, "approved and executed");
+  j.step("the invoice shows its Stripe copy under the portal number and the debit on the next business day");
+  await page.goto(`${BASE}/approvals?view=done`);
+  await page.locator("section").filter({ hasText: new RegExp(`${invNo} into Stripe`) }).first().getByRole("link", { name: "open invoice" }).click();
+  await page.waitForURL(/\/invoices\/[0-9a-f-]{36}/);
+  await expectText(page, new RegExp(`Stripe copy\\s*${invNo}`, "i"), "Stripe copy carries the portal's number (I2)");
+  await expectText(page, /Debit scheduled, debit on \w+ \d+, \d{4}/i, "collection scheduled with a debit date");
+  await expectText(page, /next business day after the due date/i, "due date on a weekend: debit moved to the next business day");
+  await expectText(page, /hosted page/, "pay-online link");
+  await expectText(page, /no verified bank on file/i, "the debit cannot run until the payer connects a bank (said plainly)");
+  await shot(page, "j19-02-invoice-collection");
+  j.step("the receipt email: approve, then record the hand send");
+  await page.goto(`${BASE}/approvals`);
+  const receipt = page.locator("section").filter({ hasText: /Receipt for INV\d+ to Dogpatch/ }).first();
+  const link = await receipt.getByRole("link", { name: "open invoice" }).getAttribute("href");
+  paidInvoiceUrl = `${BASE}${link}`;
+  await act(page, () => receipt.getByRole("button", { name: "Approve", exact: true }).click());
+  await expectText(page, /Approved\. Send it by hand/, "receipt approved for a hand send");
+  const again = page.locator("section").filter({ hasText: /Receipt for INV\d+ to Dogpatch/ }).first();
+  await expectText(page, /Thank you for your payment|paid in full|Receipt/i, "receipt text shown to copy");
+  await again.locator('input[name="evidence"]').fill(`msg id <j19-${stamp}>`);
+  await act(page, () => again.getByRole("button", { name: "Record" }).click());
+  await expectText(page, /Recorded as sent by hand/, "receipt recorded");
+  j.step("Sales cannot see the queue");
+  const sales = await session("Sam Sales");
+  const res = await sales.page.goto(`${BASE}/approvals`);
+  const text = await sales.page.locator("body").innerText();
+  if (/Nothing leaves the company on its own/.test(text) && !/Not allowed|not permitted|403/i.test(text)) fail("Sales can see the approvals queue");
+  else ok(`Sales kept out of Approvals (${res?.status()})`);
+  await sales.ctx.close();
+  j.end();
+  await ctx.close();
+}
+
+// ---------------- 20. Accounting: bank on file, a settled debit, Finance (Round 4) ----------------
+async function journey20() {
+  const j = journey("20 Accounting — Dogpatch: bank on file and payment history; the paid invoice; Finance ageing, payouts and the CFO export");
+  const { ctx, page } = await session("Al Accounting");
+  j.step("the account shows the verified bank and the debit that paid September's invoice");
+  await page.goto(`${BASE}/locations`);
+  await page.getByRole("link", { name: "Dogpatch Bottle Shop" }).first().click();
+  await page.waitForURL(/\/locations\/[0-9a-f-]{36}/);
+  await expectText(page, /Demo Community Bank ending 4242, verified/, "bank on file, verified, last four only");
+  await expectText(page, /each one waits for approval/, "debits wait for approval");
+  await expectText(page, /not offered \(ACH only\)/, "card not offered by default");
+  await page.getByRole("link", { name: "Payment history" }).click();
+  await expectText(page, /ACH debit \(Stripe\)/i, "payment history lists the debit");
+  await shot(page, "j20-01-account-payments");
+  j.step("the paid invoice: collection state, payment, no 'mark paid' while Stripe holds the money");
+  if (!paidInvoiceUrl) paidInvoiceUrl = `${BASE}${await page.locator("#payments a[href^='/invoices/']").first().getAttribute("href")}`;
+  await page.goto(paidInvoiceUrl);
+  await expectText(page, /Paid/, "invoice paid");
+  await expectText(page, /Stripe copy\s*INV\d+/i, "mirrored under its own number");
+  await expectText(page, /Open balance\s*\$0\.00/i, "nothing open");
+  await expectNoText(page, /Record payment/, "no 'record payment' once Stripe settled it");
+  await page.getByRole("tab", { name: /Payments/ }).click();
+  await expectText(page, /ACH debit \(Stripe\)/i, "the settled debit on the Payments tab");
+  await shot(page, "j20-02-paid-invoice");
+  j.step("Finance: ageing lists Silver Lake's open invoice; the payout arrived; the CFO export downloads");
+  await page.goto(`${BASE}/finance`);
+  await expectText(page, /Receivables ageing as of/i, "ageing table");
+  await expectText(page, /Silver Lake Wine/, "Silver Lake's invoice is open");
+  await expectText(page, /Payments settled\s*\$[\d,.]+ \(1\)/i, "one settled payment this month");
+  await expectText(page, /Last payout\s*\$[\d,.]+ on/i, "a payout pulled from Stripe");
+  await shot(page, "j20-03-finance");
+  for (const [label, href] of [["ageing CSV", `/finance/aging/csv?asOf=${new Date().toISOString().slice(0, 10)}`], ["payouts CSV", "/finance/payouts/csv"], ["CFO export", `/finance/export/csv?month=2026-10`]]) {
+    const res = await page.request.get(`${BASE}${href}`);
+    const body = (await res.text()).slice(0, 2000);
+    if (res.status() === 200 && /,/.test(body)) ok(`${label} downloads (${body.split("\n").length}+ lines)`);
+    else fail(`${label} did not download (status ${res.status()})`);
+  }
+  const cfo = await (await page.request.get(`${BASE}/finance/export/csv?month=2026-10`)).text();
+  if (/^Invoices$/m.test(cfo) && /^Payments$/m.test(cfo) && /^Credit memos$/m.test(cfo) && /^Stripe payouts to the bank$/m.test(cfo)) ok("CFO export has a section per table");
+  else fail("CFO export is missing a section");
+  if (!/[\u2190-\u21FF]/.test(cfo)) ok("no arrow characters in the export");
+  else fail("arrow character in the export");
+  j.end();
+  await ctx.close();
+}
+
+// ---------------- 21. Admin: Stripe matching for objects the ACH app made (C2) ----------------
+async function journey21() {
+  const j = journey("21 Admin — Stripe matching: import legacy customers and invoices, confirm one account, dismiss what is not ours");
+  const { ctx, page } = await session("Ada Admin");
+  j.step("import from Stripe: two customers without portal identifiers and one open invoice the portal did not create");
+  await page.goto(`${BASE}/admin/stripe-matches`);
+  await act(page, () => page.getByRole("button", { name: "Import from Stripe again" }).click());
+  await expectText(page, /\d+ Stripe customer\(s\) without a portal account imported/, "legacy customers imported");
+  await expectText(page, /\d+ open or recent Stripe invoice\(s\) the portal did not create/, "legacy invoices imported");
+  await expectText(page, /Stripe customers \(2\)/i, "two legacy customers listed (the portal's own are not)");
+  await expectText(page, /Marina Wine and Beer/, "the ACH app's Marina customer");
+  await expectText(page, /BC-0192/, "the hand-made Black Cat invoice");
+  await shot(page, "j21-01-matching");
+  j.step("confirm the Marina customer against the Marina account: it takes the portal's identifiers and its bank becomes the default");
+  const customerRow = (name) => page.locator("li").filter({ has: page.locator("div.font-medium", { hasText: name }) }).first();
+  const marina = customerRow("Marina Wine and Beer");
+  const preselected = await marina.locator('select[name="locationId"] option:checked').innerText();
+  if (/Marina Wine & Beer/.test(preselected)) ok("Marina suggested by the billing email (one account only)");
+  else fail(`suggested account: ${preselected}`);
+  const gg = customerRow("Golden Gate Grill");
+  const ggChoice = await gg.locator('select[name="locationId"] option:checked').innerText();
+  if (/Choose the account/.test(ggChoice)) ok("Golden Gate Grill (two accounts of that name) is NOT auto-suggested");
+  else fail(`Golden Gate Grill suggestion: ${ggChoice}`);
+  await selectByLabel(marina.locator('select[name="locationId"]'), /Marina Wine & Beer/);
+  await act(page, () => marina.getByRole("button", { name: "Confirm" }).click());
+  await expectText(page, /Stripe customer cus_fake\w+ linked to the account; its bank \(if any\) is on file/, "customer linked");
+  await page.goto(`${BASE}/locations`);
+  await page.getByRole("link", { name: "Marina Wine & Beer" }).first().click();
+  await page.waitForURL(/\/locations\/[0-9a-f-]{36}/);
+  await expectText(page, /Demo Community Bank ending 7781, verified/, "the legacy bank is on file for Marina");
+  await expectText(page, /cus_fake/, "Stripe customer id shown");
+  j.step("the legacy invoice has no portal twin: dismiss it with a reason, kept on record");
+  await page.goto(`${BASE}/admin/stripe-matches`);
+  const legacyInv = page.locator("tr").filter({ hasText: /BC-0192/ }).first();
+  const dismissForm = legacyInv.locator("form").filter({ has: page.locator('input[placeholder^="Handled in Stripe"]') }).first();
+  await dismissForm.locator('input[name="note"]').fill("Black Cat invoice handled in Stripe before the portal (demo)");
+  await act(page, () => dismissForm.getByRole("button", { name: "Dismiss" }).click());
+  await expectText(page, /Dismissed; kept on record/, "dismissed on record");
+  await page.goto(`${BASE}/admin/stripe-matches?view=all`);
+  await expectText(page, /BC-0192/, "dismissed invoice still visible under All");
+  await shot(page, "j21-02-after");
+  j.end();
+  await ctx.close();
+}
+
+// ---------------- 22. Office: an order ships in two parts (Round 4) ----------------
+async function journey22() {
+  const j = journey("22 Office — split a draft into two deliveries; the seeded two-part order shows both; a delivered part leaves 'Ship the rest'");
+  const { ctx, page } = await session("Ada Admin");
+  j.step("Silver Lake's 3-case draft: move one case to a second draft");
+  await page.goto(`${BASE}/orders`);
+  const row = page.locator("tr").filter({ hasText: /Silver Lake Wine/ }).filter({ hasText: /draft/ }).first();
+  const orderUrl = `${BASE}${await row.locator("a[href^='/orders/']").first().getAttribute("href")}`;
+  await row.locator("a[href^='/shipments/']").first().click();
+  await page.waitForURL(/\/shipments\/[0-9a-f-]{36}/);
+  const split = page.locator("summary", { hasText: "Split" });
+  if (await split.count()) ok("Split is offered on a multi-unit draft");
+  else fail("Split not offered");
+  await openDetails(split.first());
+  const form = page.locator("form").filter({ has: page.locator('input[name^="move:"]') }).first();
+  await form.locator('input[name^="move:"]').first().fill("1");
+  await form.locator('input[name="reason"]').fill("The cooler takes two now, one Thursday (demo)");
+  await act(page, () => form.getByRole("button", { name: "Split into two drafts" }).click());
+  await expectText(page, /Split: 1 unit\(s\) moved to a second draft/, "split recorded; landed on the second draft");
+  await expectText(page, /1\b/, "second draft carries one case");
+  await shot(page, "j22-01-second-draft");
+  j.step("the order lists both drafts and refuses a third while one is unconfirmed");
+  await page.goto(orderUrl);
+  await page.getByRole("tab", { name: /Shipments/ }).click();
+  const drafts = await page.locator("tr").filter({ hasText: /draft/i }).count();
+  if (drafts >= 2) ok(`${drafts} drafts for the order`);
+  else fail(`expected two drafts, saw ${drafts}`);
+  await expectText(page, /ships in 2 parts/, "the card says the order ships in parts");
+  const shipRest = page.getByRole("button", { name: /Ship the rest|Create shipment/ });
+  if ((await shipRest.count()) === 0) ok("no further draft while one is in play");
+  else fail("a further draft is offered while one is in play");
+  j.step("the seeded Echo Park order: one part confirmed, one drafted, two shipment numbers");
+  await page.goto(`${BASE}/orders`);
+  const echoLinks = await page.locator("tr").filter({ hasText: /Echo Park Cantina/ }).locator("a[href^='/orders/']").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
+  let found = false;
+  for (const href of echoLinks) {
+    await page.goto(`${BASE}${href}`);
+    if (/ships in 2 parts/.test(await page.locator("body").innerText())) {
+      found = true;
+      break;
+    }
+  }
+  if (found) ok("the two-part Echo Park order found");
+  else fail("no Echo Park order shipping in two parts");
+  await page.getByRole("tab", { name: /Shipments/ }).click();
+  await expectText(page, /WLA-D-\d{6}-\d{3}/, "the first part is numbered");
+  await expectText(page, /draft/i, "the second part is a draft");
+  await shot(page, "j22-02-two-part-order");
+  j.end();
+  await ctx.close();
+}
+
+// ---------------- 23. Admin: intake email from a known sender arrives with a draft (Round 4) ----------------
+async function journey23() {
+  const j = journey("23 Admin — intake: a known sender's email is pre-filled (account, PO, lines, date); the person checks and converts");
+  const { ctx, page } = await session("Ada Admin");
+  j.step("the Dogpatch email shows what the parser read");
+  await page.goto(`${BASE}/admin/intake`);
+  await expectText(page, /Reorder for next week — alex@dogpatchbottles\.demo/i, "the email is listed");
+  const card = page.locator("section").filter({ hasText: /Reorder for next week/ }).first();
+  const text = await card.innerText();
+  if (/draft: medium confidence/.test(text)) ok("medium confidence: exact contact, but one line matched by name and package");
+  else fail(`confidence badge: ${(text.match(/draft: \w+ confidence/) ?? [])[0]}`);
+  if (/check the quantities/.test(text)) ok("the draft says what to check");
+  else fail("no note about checking quantities");
+  if (/Account:\s*Dogpatch Bottle Shop/.test(text)) ok("account recognised by the sender's address");
+  else fail("account not recognised");
+  if (/PO 4471/.test(text)) ok("PO number read");
+  else fail("PO number missing");
+  if (/5 × Cantinesca 12 oz can case/.test(text) && /2 × Cantinesca 24 oz can case/.test(text)) ok("two lines read (by code and by name)");
+  else fail("lines not read as expected");
+  await shot(page, "j23-01-intake-draft");
+  j.step("the convert form is pre-filled; convert");
+  const form = card.locator("form").filter({ has: page.locator('input[name="poNumbers"]') }).first();
+  const po = await form.locator('input[name="poNumbers"]').inputValue();
+  if (po === "4471") ok("PO pre-filled");
+  else fail(`PO field: ${po}`);
+  const qty = await form.locator('input[name^="qty:"]').evaluateAll((els) => els.map((e) => e.value).filter(Boolean).sort());
+  if (qty.join(",") === "2,5") ok("quantities pre-filled");
+  else fail(`quantities: ${qty.join(",")}`);
+  await act(page, () => form.getByRole("button", { name: "Convert" }).click());
+  await page.waitForURL(/\/orders\/[0-9a-f-]{36}/);
+  await expectText(page, /Converted to /, "converted to an order");
+  await expectText(page, /PO 4471/, "PO carried onto the order");
+  await expectText(page, /Dogpatch Bottle Shop/, "for the recognised account");
+  j.step("a pasted email from an unknown sender gets no account and says so");
+  await page.goto(`${BASE}/admin/intake`);
+  await page.fill('input[name="fromEmail"]', `nobody-${stamp}@unknown-bar.demo`);
+  await page.fill('input[name="subject"]', "Order please");
+  await page.fill('textarea[name="body"]', "3 cases of Sunlight Groove 12oz for Friday");
+  await act(page, () => page.getByRole("button", { name: "Record" }).click());
+  const unknown = page.locator("section").filter({ hasText: /Order please/ }).first();
+  const t2 = await unknown.innerText();
+  if (/not recognised/.test(t2) && /Sender is not a contact on any one active account/.test(t2)) ok("unknown sender: account left for a person to choose");
+  else fail("unknown sender handling");
+  if (/3 × Sunlight Groove 12 oz can case/.test(t2)) ok("line still read by name and package");
+  else fail("line by name not read");
+  await shot(page, "j23-02-unknown-sender");
+  j.end();
+  await ctx.close();
+}
+
+// ---------------- 24. Owner: reports and the Round 4 company switches ----------------
+async function journey24() {
+  const j = journey("24 Owner — CA sales by format and sample write-off with CSVs; the Round 4 switches default off; Gmail and Stripe status on Integrations");
+  const { ctx, page } = await session("Demo Owner");
+  j.step("California sales by format");
+  await page.goto(`${BASE}/reports`);
+  await page.getByRole("link", { name: "California sales by format" }).click();
+  await page.waitForURL(/\/reports\/ca-sales/);
+  await expectText(page, /Charged beer on issued invoices/, "report header");
+  await expectText(page, /Barrels|bbl/i, "barrels column");
+  await expectText(page, /12 oz can case|1\/6 bbl keg/, "formats listed");
+  const csv = await page.getByRole("link", { name: "Download CSV" }).first().getAttribute("href");
+  const r1 = await page.request.get(`${BASE}${csv}`);
+  if (r1.status() === 200 && /,/.test(await r1.text())) ok("CA sales CSV downloads");
+  else fail(`CA sales CSV status ${r1.status()}`);
+  await shot(page, "j24-01-ca-sales");
+  j.step("sample write-off");
+  await page.goto(`${BASE}/reports/sample-writeoff`);
+  await expectText(page, /Sample write-off/, "report header");
+  await expectText(page, /unit cost|cost/i, "cost basis");
+  const csv2 = await page.getByRole("link", { name: "Download CSV" }).first().getAttribute("href");
+  const r2 = await page.request.get(`${BASE}${csv2}`);
+  if (r2.status() === 200) ok("sample write-off CSV downloads");
+  else fail(`sample write-off CSV status ${r2.status()}`);
+  await shot(page, "j24-02-sample-writeoff");
+  j.step("Company settings: approvals and sending switches default off; mirroring on in the demo");
+  await page.goto(`${BASE}/admin/settings`);
+  for (const name of ["autoApproveEmails", "autoApproveStripeInvoices", "autoApproveCreditNotes", "sendEmailAutomatically", "intakeMailboxEnabled"]) {
+    const el = page.locator(`input[name="${name}"]`);
+    if ((await el.count()) && !(await el.isChecked())) ok(`${name} off by default`);
+    else fail(`${name} missing or on`);
+  }
+  if ((await page.locator('input[name="intakeMailboxAddress"]').inputValue()) === "orders@theleopardmark.com") ok("intake mailbox address");
+  else fail("intake mailbox address");
+  if ((await page.locator('input[name="operationsSenderAddress"]').inputValue()) === "operations@theleopardmark.com") ok("operations sender address");
+  else fail("operations sender address");
+  await shot(page, "j24-03-settings");
+  j.step("Integrations: Gmail not connected (truthfully), Stripe shown as the in-memory stand-in");
+  await page.goto(`${BASE}/integrations`);
+  await expectText(page, /Gmail \(orders@ intake and approved sends\)/i, "Gmail listed");
+  await expectText(page, /missing: GOOGLE_CLIENT_ID/i, "Gmail truthfully not connected");
+  await expectText(page, /in-memory stand-in \(FV_STRIPE_FAKE\); no key/i, "the demo says Stripe is a stand-in, never a real account");
+  await shot(page, "j24-04-integrations");
+  j.end();
+  await ctx.close();
+}
+
+/**
+ * Warm-up (WARM_UP=1): serve every page once before the journeys, as the Owner, one request at a time. The first
+ * render of a route in `next dev` is memory-hungry (modules load, chunks are written); on a small machine that
+ * peak plus the browser can exceed what the sandbox allows. Served once, the same routes stay cheap.
+ */
+async function warmUp() {
+  const started = Date.now();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/sign-in?switch=1`);
+  await page.getByRole("button", { name: /Demo Owner/ }).click();
+  await page.waitForURL(`${BASE}/`);
+  const get = async (path) => {
+    const res = await page.request.get(`${BASE}${path}`);
+    if (res.status() >= 500) problems.push(`[warm-up] ${res.status()} ${path}`);
+    await page.waitForTimeout(250);
+    return res.status() === 200 ? await res.text() : "";
+  };
+  const first = (html, prefix) => (html.match(new RegExp(`href="(${prefix}[0-9a-f-]{36})"`)) ?? [])[1] ?? null;
+  const statics = ["/", "/menu", "/search", "/locations", "/locations/new", "/orders", "/orders/new", "/shipments", "/shipments/end-of-day", "/shipments/new", "/stock", "/lots", "/lots/new", "/batches", "/batches/new", "/invoices", "/finance", "/kegs", "/reports", "/reports/ca-sales", "/reports/sample-writeoff", "/reports/microstar", "/approvals", "/approvals?view=done", "/admin", "/admin/exceptions", "/admin/notices", "/admin/intake", "/admin/markets", "/admin/catalog", "/admin/counts", "/admin/settings", "/admin/import", "/admin/employees", "/admin/stripe-matches", "/owner/decisions", "/integrations", "/products", "/samples", "/field", "/setup", "/customer/setup"];
+  const html = {};
+  for (const path of statics) html[path] = await get(path);
+  const loc = first(html["/locations"], "/locations/");
+  const order = first(html["/orders"], "/orders/");
+  const shipment = first(html["/shipments"], "/shipments/");
+  const invoice = first(html["/invoices"], "/invoices/");
+  for (const path of [loc, order, shipment, invoice].filter(Boolean)) await get(path);
+  if (shipment) for (const doc of ["bol", "picking_ticket"]) await get(`${shipment}/documents/${doc}`);
+  if (invoice) await get(`${invoice}/pdf`);
+  await ctx.close();
+  console.log(`warm-up: ${statics.length + 7} routes served in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+}
+if (process.env.WARM_UP === "1") await warmUp();
+
 // Run every journey in order, or only those named in JOURNEYS (comma-separated numbers) when iterating on one.
 const only = (process.env.JOURNEYS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-const all = { "1": journey1, "2": journey2, "3": journey3, "4": journey4, "5": journey5, "6": journey6, "7": journey7, "8": journey8, "9": journey9, "10": journey10, "11": journey11, "12": journey12, "13": journey13, "14": journey14, "15": journey15, "16": journey16, "17": journey17, "18": journey18 };
+const all = { "1": journey1, "2": journey2, "3": journey3, "4": journey4, "5": journey5, "6": journey6, "7": journey7, "8": journey8, "9": journey9, "10": journey10, "11": journey11, "12": journey12, "13": journey13, "14": journey14, "15": journey15, "16": journey16, "17": journey17, "18": journey18, "19": journey19, "20": journey20, "21": journey21, "22": journey22, "23": journey23, "24": journey24 };
 for (const [n, run] of Object.entries(all)) {
   if (only.length && !only.includes(n)) continue;
   await run();

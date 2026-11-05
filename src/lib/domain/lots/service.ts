@@ -137,15 +137,69 @@ export async function listBatches(db: DbOrTx, opts: { facilityWarehouseId?: stri
   return opts.facilityWarehouseId ? q.where(eq(schema.brewBatch.facilityWarehouseId, opts.facilityWarehouseId)) : q;
 }
 
+/** Batches the packaging report offers: in the tank or complete; never scheduled, destroyed or cancelled. */
+export const PACKAGING_BATCH_STATUSES: BatchStatus[] = ["in_progress", "complete"];
+
+export interface PackagingBatchOption {
+  batch: BrewBatch;
+  /** The batch's lot when it already has one: a packaging report on the batch adds a day to it (R2-21). */
+  lot: { id: string; lotCode: string; lastPackagedOn: string } | null;
+}
+
+function addDaysIso(d: string, days: number): string {
+  const t = new Date(`${d}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + days);
+  return t.toISOString().slice(0, 10);
+}
+
+/**
+ * The batch list on the packaging report, newest brew date first. A batch that already has a lot stays listed while
+ * that lot was last packaged within `packagedWithinDays` (default 60), so a later packaging day can still be added;
+ * older packaged batches, batches whose only lots are dotted legacy ones, and complete batches without a lot that
+ * finished that long ago are history and drop off the list.
+ */
+export async function packagingBatchOptions(db: DbOrTx, opts: { today: string; packagedWithinDays?: number }): Promise<PackagingBatchOption[]> {
+  const cutoff = addDaysIso(opts.today, -(opts.packagedWithinDays ?? 60));
+  const batches = await db
+    .select()
+    .from(schema.brewBatch)
+    .where(inArray(schema.brewBatch.status, PACKAGING_BATCH_STATUSES))
+    .orderBy(sql`${schema.brewBatch.brewDate} desc nulls last`, asc(schema.brewBatch.batchNumber));
+  if (batches.length === 0) return [];
+  const lots = await db
+    .select({ id: schema.lot.id, lotCode: schema.lot.lotCode, batchId: schema.lot.batchId, packagingDate: schema.lot.packagingDate, legacyCode: schema.lot.legacyCode, lastEntry: sql<string | null>`max(${schema.lotPackagingEntry.packagedOn})::text` })
+    .from(schema.lot)
+    .leftJoin(schema.lotPackagingEntry, eq(schema.lotPackagingEntry.lotId, schema.lot.id))
+    .where(inArray(schema.lot.batchId, batches.map((b) => b.id)))
+    .groupBy(schema.lot.id);
+  const out: PackagingBatchOption[] = [];
+  for (const b of batches) {
+    const own = lots.filter((l) => l.batchId === b.id);
+    if (own.length === 0) {
+      const finished = b.status === "complete" ? (b.statusChangedOn ?? b.brewDate) : null;
+      if (!finished || finished >= cutoff) out.push({ batch: b, lot: null });
+      continue;
+    }
+    // The lot a report on this batch adds to: the first non-legacy one, as recordPackagingReport picks it.
+    const current = own.filter((l) => !l.legacyCode).sort((x, y) => x.packagingDate.localeCompare(y.packagingDate))[0];
+    const last = own.map((l) => (l.lastEntry && l.lastEntry > l.packagingDate ? l.lastEntry : l.packagingDate)).sort().at(-1)!;
+    if (current && last >= cutoff) out.push({ batch: b, lot: { id: current.id, lotCode: current.lotCode, lastPackagedOn: last } });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Lots (4.1, 4.3, 4.4, 4.5 open, 4.6, 4.9)
 // ---------------------------------------------------------------------------
 
 export interface PackagingReportInput {
-  facilityWarehouseId: string;
-  brandCode: string;
+  /** Required without a batch; with a batch the facility comes from the batch and this is ignored. */
+  facilityWarehouseId?: string | null;
+  /** Required without a batch; with a batch the brand comes from the batch and this is ignored. */
+  brandCode?: string | null;
   packagingDate: string; // YYYY-MM-DD
-  runCode: string; // one digit; letters only for experimental variants
+  /** One digit; letters only for experimental variants. Blank (or "auto") takes the next free digit 1 to 9 for facility, brand and date. */
+  runCode?: string | null;
   batchId?: string | null;
   quantities: Array<{ skuId: string; qty: number }>;
   notes?: string | null;
@@ -206,31 +260,65 @@ async function addLotQuantities(tx: Tx, actor: Actor, l: Lot, packagedOn: string
   }
 }
 
+const RUN_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+/** The first run digit 1 to 9 not yet taken by a lot of this facility code, brand and packaging date; null when all nine are. */
+export async function nextFreeRunDigit(db: DbOrTx, facilityCode: string, brandCode: string, packagingDate: string): Promise<string | null> {
+  const codes = RUN_DIGITS.map((d) => composeLotCode(facilityCode, brandCode, packagingDate, d));
+  const taken = new Set((await db.select({ lotCode: schema.lot.lotCode }).from(schema.lot).where(inArray(schema.lot.lotCode, codes))).map((r) => r.lotCode));
+  return RUN_DIGITS.find((_, i) => !taken.has(codes[i])) ?? null;
+}
+
+function allRunsTaken(facilityName: string, brandCode: string, packagingDate: string) {
+  return new BusinessError(`Runs 1 to 9 are all taken for ${facilityName} ${brandCode} on ${packagingDate}; check the packaging date`, { field: "runCode" });
+}
+
+/** A typed run digit that is already a lot: the message names the lot and the next free digit. */
+async function runTaken(db: DbOrTx, lotCode: string, runCode: string, facilityCode: string, brandCode: string, packagingDate: string) {
+  const next = await nextFreeRunDigit(db, facilityCode, brandCode, packagingDate);
+  return new BusinessError(
+    next ? `Run ${runCode} is taken: lot ${lotCode} already exists. Use run ${next}, or leave Run blank for the next free digit` : `Run ${runCode} is taken: lot ${lotCode} already exists, and runs 1 to 9 are all taken that day; check the packaging date`,
+    { field: "runCode" },
+  );
+}
+
 /**
  * The one-page packaging report (4.4): the office enters what the host reports; the lot code is computed, never typed.
  * A lot almost always holds several SKUs (4.3). One lot per batch (R2-21): when the chosen batch already has a lot,
  * the quantities are added to that lot as a later packaging day and the lot keeps its first day's code; the run digit
  * changes only for a different brew. Packaged units go on hand at the brewery (R2-21).
+ *
+ * A chosen batch decides the facility and brand (it was brewed at one brewery for one brand); whatever the facility
+ * and brand fields still say is ignored, never refused. A blank run takes the next free digit for the day.
  */
-export async function recordPackagingReport(db: DbOrTx, actor: Actor, input: PackagingReportInput) {
+export async function recordPackagingReport(db: DbOrTx, actor: Actor, input: PackagingReportInput): Promise<Lot> {
+  return (await recordPackagingReportOutcome(db, actor, input)).lot;
+}
+
+/** recordPackagingReport, also saying whether the report added a packaging day to the batch's existing lot (R2-21). */
+export async function recordPackagingReportOutcome(db: DbOrTx, actor: Actor, input: PackagingReportInput): Promise<{ lot: Lot; addedDay: boolean }> {
   authorize(actor, "lot.manage");
-  const [facility] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, input.facilityWarehouseId));
+  let batch: BrewBatch | null = null;
+  if (input.batchId) {
+    const [b] = await db.select().from(schema.brewBatch).where(eq(schema.brewBatch.id, input.batchId));
+    if (!b) throw new BusinessError("Batch not found", { field: "batchId" });
+    batch = b;
+  }
+  const facilityWarehouseId = batch?.facilityWarehouseId ?? input.facilityWarehouseId?.trim() ?? "";
+  if (!facilityWarehouseId) throw new BusinessError("Choose the batch, or the facility (brewery) that packaged the run", { field: "facilityWarehouseId" });
+  const [facility] = await db.select().from(schema.warehouse).where(eq(schema.warehouse.id, facilityWarehouseId));
   if (!facility) throw new BusinessError("Facility not found");
   if (!facility.lotFacilityCode) throw new BusinessError(`${facility.name} has no lot facility code; set it on the origin before recording a packaging run`, { field: "facilityWarehouseId" });
-  const brandCode = input.brandCode.trim().toUpperCase();
-  const runCode = input.runCode.trim().toUpperCase();
+  const facilityCode = facility.lotFacilityCode;
+  const brandCode = (batch?.brandCode ?? input.brandCode ?? "").trim().toUpperCase();
+  if (!brandCode) throw new BusinessError("Choose the brand", { field: "brandCode" });
+  const typedRun = (input.runCode ?? "").trim().toUpperCase();
+  const autoRun = typedRun === "" || typedRun === "AUTO";
   isoPackagingDate(input.packagingDate);
   const quantitiesKnown = input.quantitiesKnown ?? true;
   if (quantitiesKnown && input.quantities.length === 0) throw new BusinessError("Enter the quantities packaged per SKU (or mark quantities as not yet known)", { field: "quantities" });
   for (const q of input.quantities) {
     if (!Number.isInteger(q.qty) || q.qty < 0) throw new BusinessError("Quantities must be whole numbers of zero or more", { field: "quantities" });
-  }
-  let batch: BrewBatch | null = null;
-  if (input.batchId) {
-    const [b] = await db.select().from(schema.brewBatch).where(eq(schema.brewBatch.id, input.batchId));
-    if (!b) throw new BusinessError("Batch not found", { field: "batchId" });
-    if (b.facilityWarehouseId !== input.facilityWarehouseId) throw new BusinessError("The batch was brewed at a different facility", { field: "batchId" });
-    batch = b;
   }
   const source = input.source ?? "packaging_report";
   const postStock = source === "packaging_report" && quantitiesKnown;
@@ -242,28 +330,41 @@ export async function recordPackagingReport(db: DbOrTx, actor: Actor, input: Pac
         await addLotQuantities(tx, actor, existingForBatch, input.packagingDate, input.quantities, input.notes ?? null, postStock);
         if (input.notes) await tx.update(schema.lot).set({ notes: `${existingForBatch.notes ? existingForBatch.notes + "\n" : ""}${input.notes}` }).where(eq(schema.lot.id, existingForBatch.id));
         await recordAudit(tx, actor, { action: "lot.packaging_day", subjectType: "lot", subjectId: existingForBatch.id, current: { lotCode: existingForBatch.lotCode, packagedOn: input.packagingDate, quantities: input.quantities, batch: batch.batchNumber }, marketId: facility.marketId });
-        return mustLoadLot(tx, existingForBatch.id);
+        return { lot: await mustLoadLot(tx, existingForBatch.id), addedDay: true };
       }
     }
-    const lotCode = composeLotCode(facility.lotFacilityCode!, brandCode, input.packagingDate, runCode);
-    const [existing] = await tx.select().from(schema.lot).where(eq(schema.lot.lotCode, lotCode));
-    if (existing) throw new BusinessError(`Lot ${lotCode} already exists; use the next run digit for a different brew on the same day`, { field: "runCode" });
-    const [row] = await tx
-      .insert(schema.lot)
-      .values({
-        lotCode,
-        facilityWarehouseId: input.facilityWarehouseId,
-        brandCode,
-        packagingDate: input.packagingDate,
-        runCode,
-        batchId: batch?.id ?? null,
-        quantitiesKnown,
-        source,
-        legacyCode: input.legacyCode ?? null,
-        notes: input.notes ?? null,
-        createdByEmployeeId: actor.employeeId,
-      })
-      .returning();
+    // The insert skips a taken code instead of failing, so two reports saved at once cannot both claim a digit: a
+    // typed digit that is taken is refused with the next free one named; a blank run moves on to the next free digit.
+    let row: Lot | undefined;
+    let runCode = typedRun;
+    let lotCode = "";
+    for (let attempt = 0; !row && attempt < RUN_DIGITS.length; attempt++) {
+      if (autoRun) {
+        const free = await nextFreeRunDigit(tx, facilityCode, brandCode, input.packagingDate);
+        if (!free) throw allRunsTaken(facility.name, brandCode, input.packagingDate);
+        runCode = free;
+      }
+      lotCode = composeLotCode(facilityCode, brandCode, input.packagingDate, runCode);
+      [row] = await tx
+        .insert(schema.lot)
+        .values({
+          lotCode,
+          facilityWarehouseId,
+          brandCode,
+          packagingDate: input.packagingDate,
+          runCode,
+          batchId: batch?.id ?? null,
+          quantitiesKnown,
+          source,
+          legacyCode: input.legacyCode ?? null,
+          notes: input.notes ?? null,
+          createdByEmployeeId: actor.employeeId,
+        })
+        .onConflictDoNothing({ target: schema.lot.lotCode })
+        .returning();
+      if (!row && !autoRun) throw await runTaken(tx, lotCode, runCode, facilityCode, brandCode, input.packagingDate);
+    }
+    if (!row) throw allRunsTaken(facility.name, brandCode, input.packagingDate);
     await addLotQuantities(tx, actor, row, input.packagingDate, input.quantities, null, postStock);
     if (batch) {
       await tx.update(schema.brewBatch).set({ status: "complete", statusChangedOn: input.packagingDate }).where(and(eq(schema.brewBatch.id, batch.id), inArray(schema.brewBatch.status, ["scheduled", "in_progress"])));
@@ -287,7 +388,7 @@ export async function recordPackagingReport(db: DbOrTx, actor: Actor, input: Pac
         links: [{ subjectType: "lot", subjectId: row.id }],
       });
     }
-    return row;
+    return { lot: row, addedDay: false };
   });
 }
 
@@ -443,6 +544,25 @@ export async function listLots(db: DbOrTx, opts: LotListOptions = {}) {
     .limit(opts.limit ?? 500);
 }
 
+/** The latest lots (no dotted legacy ones), newest packaging date first, each with its packaged quantities per SKU. */
+export async function recentLots(db: DbOrTx, opts: { facilityWarehouseIds?: string[]; limit?: number } = {}) {
+  if (opts.facilityWarehouseIds && opts.facilityWarehouseIds.length === 0) return [];
+  const lots = await db
+    .select()
+    .from(schema.lot)
+    .where(and(isNull(schema.lot.legacyCode), opts.facilityWarehouseIds ? inArray(schema.lot.facilityWarehouseId, opts.facilityWarehouseIds) : undefined))
+    .orderBy(desc(schema.lot.packagingDate), desc(schema.lot.createdAt))
+    .limit(opts.limit ?? 10);
+  if (lots.length === 0) return [];
+  const qty = await db
+    .select({ lotId: schema.lotSkuQty.lotId, skuId: schema.lotSkuQty.skuId, qty: schema.lotSkuQty.qtyPackaged, code: schema.sku.code })
+    .from(schema.lotSkuQty)
+    .innerJoin(schema.sku, eq(schema.sku.id, schema.lotSkuQty.skuId))
+    .where(inArray(schema.lotSkuQty.lotId, lots.map((l) => l.id)))
+    .orderBy(asc(schema.sku.code));
+  return lots.map((l) => ({ lot: l, quantities: qty.filter((q) => q.lotId === l.id) }));
+}
+
 export interface LotPickerOption {
   lotId: string;
   lotCode: string;
@@ -484,6 +604,13 @@ export function brandCodeForSku(skuCode: string): string {
   const brand = code.slice(0, 3);
   if (brand === "SGB" || brand === "SGS") return "SLG";
   return brand;
+}
+
+/** Does this SKU belong to the brand? By the brand code in the SKU code (brandCodeForSku), or by the brand's name when the code carries another prefix. */
+export function skuInBrand(sku: { code: string; brand: string }, brandCode: string): boolean {
+  if (brandCodeForSku(sku.code) === brandCode) return true;
+  const name = BRAND_CODES.find((b) => b.code === brandCode)?.name.toLowerCase();
+  return !!name && sku.brand.trim().toLowerCase() === name;
 }
 
 /** Does this SKU belong to a brand in production (R2-33)? By brand code in the SKU code, or by the brand's name. */
