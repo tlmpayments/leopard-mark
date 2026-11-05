@@ -240,6 +240,8 @@ export class FakeStripe implements StripeGateway {
     if (existing) return existing;
     if (!this.customers.has(params.customer)) throw new Error(`No such customer: ${params.customer}`);
     if (params.number && this.usedNumbers.has(params.number)) throw new Error(`Invoice number ${params.number} is already in use in this account.`);
+    // As Stripe: an invoice it does not charge itself must be due in the future.
+    if (params.dueDate != null && params.dueDate <= this.now()) throw new Error(`The parameter \`due_date\` expects a unix timestamp representing a date and time in the future. You specified the value \`${params.dueDate}\` which is in the past.`);
     const inv: FakeInvoice = {
       id: this.id("in"),
       number: params.number ?? null,

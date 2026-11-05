@@ -19,6 +19,7 @@ import { ProviderUnavailableError, enqueueJob, registerJobHandler } from "@/lib/
 import { formatCents } from "@/lib/domain/catalog/service";
 import { getCompanySettings } from "@/lib/domain/settings/service";
 import { registerApprovalExecutor, requestApproval, withdrawItemsForSubject, type ApprovalItem, type EmailPayload } from "@/lib/domain/approvals/service";
+import { addDays, localParts } from "@/lib/domain/cutoff/service";
 import { nextBusinessDayOnOrAfter } from "./calendar";
 import { ensureStripeCustomer } from "./customers";
 import { skuLabel } from "@/lib/domain/catalog/label";
@@ -104,8 +105,28 @@ function lineInputs(lines: Array<typeof schema.invoiceLine.$inferSelect>, skus: 
   return out;
 }
 
-function unixNoon(isoDate: string): number {
-  return Math.floor(Date.parse(`${isoDate}T12:00:00Z`) / 1000);
+const COPY_TZ = "America/Los_Angeles";
+
+function endOfPacificDay(isoDate: string): number {
+  for (const hours of [7, 8]) {
+    const t = Date.parse(`${isoDate}T23:59:00Z`) + hours * 3_600_000;
+    const p = localParts(new Date(t), COPY_TZ);
+    if (p.date === isoDate && p.hhmm === "23:59") return Math.floor(t / 1000);
+  }
+  return Math.floor((Date.parse(`${isoDate}T23:59:00Z`) + 8 * 3_600_000) / 1000);
+}
+
+/**
+ * The due date on the Stripe copy. Stripe refuses a due date in the past on an invoice it does not charge itself, so the
+ * copy is due at the end of its due day in Pacific time, or at the end of today when that day has passed (a Net 0
+ * invoice, or one approved late). The portal's own due date and debit date are unchanged and ride in the metadata
+ * (fv_due_date). The same value all day, so a retry on the same day repeats the request exactly.
+ */
+export function stripeDueTimestamp(dueIso: string, now: Date = new Date()): number {
+  const today = localParts(now, COPY_TZ).date;
+  const day = dueIso > today ? dueIso : today;
+  const ts = endOfPacificDay(day);
+  return ts * 1000 > now.getTime() + 60_000 ? ts : endOfPacificDay(addDays(day, 1));
 }
 
 /** The effect of an approved `stripe_invoice` item: create, add the lines, finalise, record what Stripe handed back. */
@@ -133,9 +154,9 @@ registerApprovalExecutor("stripe_invoice", async (db: Db, item: ApprovalItem) =>
   if (loc?.legacyAccountId) customFields.push({ name: "Account", value: loc.legacyAccountId });
   customFields.push({ name: "Terms", value: `Net ${inv.termsDays ?? 30}` });
   const dueIso = inv.dueDate ?? inv.invoiceDate ?? new Date().toISOString().slice(0, 10);
-  const metadata: Record<string, string> = { fv_invoice_id: inv.id, fv_invoice_number: inv.number ?? "", fv_location_id: inv.locationId!, fv_market_id: inv.marketId ?? "", fv_pay_by: inv.payBy ?? "", fv_shipments: bols.join(",").slice(0, 400), fv_env: binding.environment };
+  const metadata: Record<string, string> = { fv_invoice_id: inv.id, fv_invoice_number: inv.number ?? "", fv_location_id: inv.locationId!, fv_market_id: inv.marketId ?? "", fv_pay_by: inv.payBy ?? "", fv_due_date: dueIso, fv_shipments: bols.join(",").slice(0, 400), fv_env: binding.environment };
   const settings = await getCompanySettings(db);
-  const base = { customer: customerId, dueDate: unixNoon(dueIso), metadata, customFields, description: inv.fobWording ? `${inv.fobWording}.` : null, footer: `${settings.dba}. Billing questions and remittances: ${settings.arEmail}.${settings.ordersEmail ? ` To reorder: ${settings.ordersEmail}.` : ""}` };
+  const base = { customer: customerId, dueDate: stripeDueTimestamp(dueIso), metadata, customFields, description: inv.fobWording ? `${inv.fobWording}.` : null, footer: `${settings.dba}. Billing questions and remittances: ${settings.arEmail}.${settings.ordersEmail ? ` To reorder: ${settings.ordersEmail}.` : ""}` };
   let created;
   let numberNote: string | null = null;
   try {
