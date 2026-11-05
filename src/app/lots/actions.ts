@@ -1,7 +1,7 @@
 "use server";
 
-import { opt, runAction, str } from "@/lib/actions/helpers";
-import { addPackagingDay, confirmLotQuantities, recordPackagingReport } from "@/lib/domain/lots/service";
+import { type FormState, opt, runAction, runFormAction, str } from "@/lib/actions/helpers";
+import { addPackagingDay, confirmLotQuantities, recordPackagingReportOutcome } from "@/lib/domain/lots/service";
 
 /** qty:<skuId> inputs; blank means the SKU was not packaged in this run and is left off the report. */
 function quantitiesFrom(form: FormData): Array<{ skuId: string; qty: number }> {
@@ -12,20 +12,25 @@ function quantitiesFrom(form: FormData): Array<{ skuId: string; qty: number }> {
   return out;
 }
 
-export async function recordPackagingReportAction(form: FormData) {
-  return runAction("/lots/new", async ({ db, actor }) => {
+/**
+ * The packaging report form (client, useActionState): a refusal comes back with everything typed kept; success opens
+ * the lot. With a batch, the facility and brand come from the batch; a blank run takes the next free digit.
+ */
+export async function recordPackagingReportAction(_prev: FormState, form: FormData): Promise<FormState> {
+  return runFormAction(form, async ({ db, actor }) => {
     const unknown = str(form, "quantitiesUnknown") === "on";
-    const lot = await recordPackagingReport(db, actor, {
-      facilityWarehouseId: str(form, "facilityWarehouseId"),
-      brandCode: str(form, "brandCode"),
+    const { lot, addedDay } = await recordPackagingReportOutcome(db, actor, {
+      facilityWarehouseId: opt(form, "facilityWarehouseId"),
+      brandCode: opt(form, "brandCode"),
       packagingDate: str(form, "packagingDate"),
-      runCode: str(form, "runCode"),
+      runCode: opt(form, "runCode"),
       batchId: opt(form, "batchId"),
       quantities: unknown ? [] : quantitiesFrom(form),
       notes: opt(form, "notes"),
       quantitiesKnown: !unknown,
     });
-    return { ok: `Lot ${lot.lotCode} recorded${unknown ? "; quantities to confirm with the host" : ""}`, redirectTo: `/lots/${lot.id}` };
+    const ok = addedDay ? `Packaging day added to lot ${lot.lotCode}; totals and stock updated` : `Lot ${lot.lotCode} recorded${unknown ? "; quantities to confirm with the host" : ""}`;
+    return { ok, redirectTo: `/lots/${lot.id}` };
   });
 }
 

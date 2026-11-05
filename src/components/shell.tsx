@@ -21,6 +21,7 @@ export function navFor(actor: Actor): NavItem[] {
   return [
     { href: "/", label: "Home", show: true, frequent: true },
     { href: "/shipments", label: "Shipments", show: can(actor, "shipment.view"), frequent: !isSalesOnly },
+    { href: "/stock", label: "Stock on hand", show: can(actor, "lot.view") && !isField },
     { href: "/lots", label: "Lots", show: can(actor, "lot.view") && !isField },
     { href: "/invoices", label: "Invoices", show: can(actor, "invoice.view") && !isField },
     { href: "/kegs", label: "Kegs", show: can(actor, "keg.view") && !isField },
@@ -58,7 +59,7 @@ const SECTIONS: Array<{ key: string; label: string; pages: Array<{ href: string;
   { key: "accounts", label: "Accounts", pages: [{ href: "/locations" }] },
   { key: "orders", label: "Orders", pages: [{ href: "/orders", also: ["/samples"] }, { href: "/admin/intake" }] },
   { key: "shipments", label: "Shipments", pages: [{ href: "/shipments" }] },
-  { key: "stock", label: "Stock", pages: [{ href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
+  { key: "stock", label: "Stock", pages: [{ href: "/stock" }, { href: "/lots", also: ["/batches"] }, { href: "/admin/counts" }, { href: "/admin/markets" }] },
   { key: "invoices", label: "Invoices", pages: [{ href: "/invoices" }, { href: "/finance" }] },
   { key: "kegs", label: "Kegs", pages: [{ href: "/kegs" }, { href: "/reports/microstar" }] },
   { key: "reports", label: "Reports", pages: [{ href: "/reports", also: ["/reports/ca-sales", "/reports/sample-writeoff"] }] },

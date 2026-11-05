@@ -1,4 +1,5 @@
-import { Badge, Button, Card, Field, Flash, Input, Notice, Page, Select, StatusBadge, Table, Textarea, fmtDate } from "@/components/ui";
+import { WarehouseStockTable } from "@/components/stock";
+import { Badge, Button, Card, Field, Flash, Input, Notice, Page, Select, StatusBadge, Table, Textarea } from "@/components/ui";
 import { flashFrom, type SearchParams } from "@/lib/actions/helpers";
 import { requireAction } from "@/lib/auth/current";
 import { can } from "@/lib/authz/authorize";
@@ -353,20 +354,8 @@ export default async function MarketsPage({ searchParams }: { searchParams: Sear
       </Card>
 
       {stock.map(({ w, rows }) => (
-        <Card key={w.id} title={`Stock: ${originLabel(w)} (${markets.find((m) => m.id === w.marketId)?.code})`}>
-          <Table
-            head={["SKU", "On hand", "Reserved", "Available", "Shortfall", "Unavailable", "In transit", "Evidence"]}
-            rows={rows.map((r) => [
-              skuName(r.skuId),
-              String(r.onHandQty),
-              String(r.reservedQty),
-              <strong key="a">{r.availableQty}</strong>,
-              r.deficitQty > 0 ? <Badge key="d" tone="danger">{r.deficitQty} reserved but not on hand</Badge> : "—",
-              String(r.unavailableQty),
-              String(r.inTransitQty),
-              <span key="e" className="text-xs text-muted">{r.evidenceSource ?? "—"} {r.evidenceAt ? `· ${fmtDate(r.evidenceAt)}` : ""}</span>,
-            ])}
-          />
+        <Card key={w.id} id={`stock-${w.id}`} title={`Stock: ${originLabel(w)} (${markets.find((m) => m.id === w.marketId)?.code})`}>
+          <WarehouseStockTable rows={rows} skuName={skuName} />
           <details className="mt-2">
             <summary className="cursor-pointer text-sm text-accent">Record stock evidence</summary>
             <form action={stockMovementAction} className="mt-2 grid gap-2 sm:grid-cols-5">

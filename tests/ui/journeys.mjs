@@ -650,30 +650,21 @@ async function journey12() {
   await expectText(page, /EBB East Brother/, "origin code persisted (re-read), shown as CODE Name (R2-34)");
   await shot(page, "j12-01-origins");
 
-  j.step("packaging report records a Cantinesca lot at facility 01 (next free run digit for today)");
+  j.step("packaging report records a Cantinesca lot at facility 01 (no batch; Run left blank takes the next free digit for today)");
   let lotUrl = "";
   let lotCode = "";
-  for (const run of "123456789") {
-    await page.goto(`${BASE}/lots/new`);
-    await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /EBB East Brother/);
-    await page.selectOption('select[name="brandCode"]', "CNT");
-    await page.fill('input[name="packagingDate"]', today);
-    await page.fill('input[name="runCode"]', run);
-    await page.getByLabel("CAN-12C quantity").fill("20");
-    await page.getByLabel("CAN-HALF quantity").fill("6");
-    await page.fill('textarea[name="notes"]', "journey packaging sheet");
-    await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
-    if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
-      lotUrl = page.url().split("?")[0];
-      lotCode = (await page.locator("h1 .select-all").innerText()).trim();
-      break;
-    }
-    const f = await flash(page);
-    if (!/already exists/.test(f ?? "")) {
-      fail(`packaging report refused: ${f}`);
-      break;
-    }
-  }
+  await page.goto(`${BASE}/lots/new`);
+  await selectByLabel(page.locator('select[name="facilityWarehouseId"]'), /EBB East Brother/);
+  await page.selectOption('select[name="brandCode"]', "CNT");
+  await page.fill('input[name="packagingDate"]', today);
+  await page.getByLabel("CAN-12C quantity").fill("20");
+  await page.getByLabel("CAN-HALF quantity").fill("6");
+  await page.fill('textarea[name="notes"]', "journey packaging sheet");
+  await act(page, () => page.getByRole("button", { name: "Record lot" }).click());
+  if (/\/lots\/[0-9a-f-]{36}/.test(page.url())) {
+    lotUrl = page.url().split("?")[0];
+    lotCode = (await page.locator("h1 .select-all").innerText()).trim();
+  } else fail(`packaging report refused: ${await flash(page)}`);
   if (lotUrl && /^01CNT\d{6}[0-9A-Z]$/.test(lotCode)) ok(`lot recorded with a computed code (${lotCode})`);
   else fail(`lot not recorded or code malformed (${lotCode || "none"})`);
   await expectText(page, /CAN-12C[\s\S]*20/, "quantities packaged shown on the lot");
@@ -806,8 +797,9 @@ async function journey13() {
 
   j.step("Owner: each page lands in its section (longest path wins: /admin/markets is Stock, /admin is Exceptions)");
   const cases = [
-    ["/admin/markets", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
-    ["/batches", "Stock", ["Lots", "Stock counts", "Markets & stock"]],
+    ["/admin/markets", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
+    ["/batches", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
+    ["/stock", "Stock", ["Stock on hand", "Lots", "Stock counts", "Markets & stock"]],
     ["/admin/intake", "Orders", ["Orders", "Email intake"]],
     ["/finance", "Invoices", ["Invoices", "Finance"]],
     ["/reports/microstar", "Kegs", ["Kegs", "MicroStar report"]],
@@ -1389,7 +1381,7 @@ async function warmUp() {
     return res.status() === 200 ? await res.text() : "";
   };
   const first = (html, prefix) => (html.match(new RegExp(`href="(${prefix}[0-9a-f-]{36})"`)) ?? [])[1] ?? null;
-  const statics = ["/", "/menu", "/search", "/locations", "/locations/new", "/orders", "/orders/new", "/shipments", "/shipments/end-of-day", "/shipments/new", "/lots", "/lots/new", "/batches", "/batches/new", "/invoices", "/finance", "/kegs", "/reports", "/reports/ca-sales", "/reports/sample-writeoff", "/reports/microstar", "/approvals", "/approvals?view=done", "/admin", "/admin/exceptions", "/admin/notices", "/admin/intake", "/admin/markets", "/admin/catalog", "/admin/counts", "/admin/settings", "/admin/import", "/admin/employees", "/admin/stripe-matches", "/owner/decisions", "/integrations", "/products", "/samples", "/field", "/setup", "/customer/setup"];
+  const statics = ["/", "/menu", "/search", "/locations", "/locations/new", "/orders", "/orders/new", "/shipments", "/shipments/end-of-day", "/shipments/new", "/stock", "/lots", "/lots/new", "/batches", "/batches/new", "/invoices", "/finance", "/kegs", "/reports", "/reports/ca-sales", "/reports/sample-writeoff", "/reports/microstar", "/approvals", "/approvals?view=done", "/admin", "/admin/exceptions", "/admin/notices", "/admin/intake", "/admin/markets", "/admin/catalog", "/admin/counts", "/admin/settings", "/admin/import", "/admin/employees", "/admin/stripe-matches", "/owner/decisions", "/integrations", "/products", "/samples", "/field", "/setup", "/customer/setup"];
   const html = {};
   for (const path of statics) html[path] = await get(path);
   const loc = first(html["/locations"], "/locations/");

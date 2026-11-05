@@ -19,7 +19,7 @@ section's pages while you are in it:
 | Accounts | Accounts |
 | Orders | Orders, Email intake (samples are orders now; the old Samples page is history, by URL) |
 | Shipments | Shipments (with End of day and New transfer) |
-| Stock | Lots (and Batches), Stock counts, Markets & stock |
+| Stock | Stock on hand, Lots (and Batches), Stock counts, Markets & stock |
 | Invoices | Invoices, Finance |
 | Kegs | Kegs, MicroStar report |
 | Reports | Reports (California sales by format, Sample write-off; round 4) |
@@ -46,6 +46,10 @@ the stops assigned to them. Every URL works as before; only the grouping changed
   invoice*, the *Collection (Stripe)* card (round 4) and void.
 * **Kegs** (Admin, Accounting, Sales view) — keg balance per account by size, with the event history and the
   form for opening balances and adjustments.
+* **Stock: Stock on hand** (Admin, Accounting, Sales; as Lots) — one table, SKUs down the side and every location
+  with a stock position across the top, plus a total: available in bold, with on hand, reserved and in transit
+  underneath when they differ. Filter by market; hide or show SKUs with no stock anywhere. A location's name
+  opens its full stock table (the same one as on Markets & stock); recent lots and their quantities are below.
 * **Stock: Markets & stock** — stock positions as before, plus the **origins editor** (origin code, lot facility
   code, kind, address, hours, dock / liftgate / appointment, shipping contact) and the market billing rules
   (terms, keg deposits, COD, region list).
@@ -176,11 +180,15 @@ Every brewery, warehouse and cold store that ships is an **origin** (the `wareho
   vessel, status (scheduled, in progress, complete, destroyed, cancelled). Destroyed or cancelled needs a reason
   and a date; the record is kept. A batch usually yields one lot; recording a packaging run against an
   in-progress batch marks it complete.
-* **Packaging report** (4.4) — the one-page entry per run: facility, brand (SLG Sunlight Groove, CNT
-  Cantinesca; retired and experimental codes are listed inactive), packaging date, run digit, optional batch,
-  quantities packaged per SKU, notes. The **lot code is computed, never typed**: facility code (2 digits) +
-  brand (3 letters) + packaging date as yymmdd + run (1 character), for example `01CNT2610071`. A second run
-  on the same day takes the next run digit; the same code twice is refused. A lot holds several SKUs (4.3).
+* **Packaging report** (4.4) — the one-page entry per run, **batch first**: choosing the batch fills in its
+  brewery and brand (shown, not asked again). The list holds batches in progress or complete, newest brew first;
+  batches already packaged sit in their own group and add a packaging day to their lot (R2-21), and drop off
+  60 days after their last packaging day. Without a batch, choose the facility (it narrows the batch list) and
+  the brand (SLG Sunlight Groove, CNT Cantinesca). Then the packaging date, the run digit, quantities per SKU
+  (only the brand's SKUs are listed) and notes. The **lot code is computed, never typed**: facility code
+  (2 digits) + brand (3 letters) + packaging date as yymmdd + run (1 character), for example `01CNT2610071`.
+  Leave Run blank and the next free digit for the facility, brand and day is used; a typed digit that is
+  already a lot is refused with the next free digit named. A lot holds several SKUs (4.3).
   Packaging that spans two dates (4.5) is an open question: enter the run under the date the host reports and
   say so in the notes.
 * **Unknown quantities** (4.6): a lot can be recorded with *quantities not yet known* (the import does this
